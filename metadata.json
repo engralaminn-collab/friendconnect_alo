@@ -1,0 +1,6 @@
+{
+  "name": "FriendConnect",
+  "description": "A secure communication app featuring chat, calls, and friends.",
+  "requestFramePermissions": ["camera", "microphone"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

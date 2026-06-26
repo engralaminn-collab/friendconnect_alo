@@ -1,38 +1,20 @@
-# FriendConnect
+<div align="center">
+<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
+</div>
 
-A private friend communication app built with Flutter and Firebase.
+# Run and deploy your AI Studio app
 
-## Setup Instructions
+This contains everything you need to run your app locally.
 
-1. Ensure you have the Flutter SDK installed on your machine.
-2. Ensure you have the Firebase CLI installed and configured.
-3. Replace the placeholder values in `lib/firebase_options.dart` with your actual Firebase project configuration, or simply run:
-   ```bash
-   flutterfire configure --project=friendconnect-2ca91
-   ```
-4. Place your `google-services.json` in the `android/app/` directory (you will need to generate the Android scaffolding first using `flutter create .` if not present, though this directory acts as your dart source code core).
+View your app in AI Studio: https://ai.studio/apps/c76c31ab-6f96-4016-bd8a-d07626b4fc62
 
-## Build Instructions
+## Run Locally
 
-To fetch dependencies:
-```bash
-flutter pub get
-```
+**Prerequisites:**  Node.js
 
-To run the application on an emulator or connected device:
-```bash
-flutter run
-```
 
-To build the release APK for Android:
-```bash
-flutter build apk --release
-```
-
-The output will be located at `build/app/outputs/flutter-apk/app-release.apk` which you can rename to `friendconnect.apk`.
-
-## Features
-- User Authentication (Login, Register)
-- Real-time Firestore Database Integration
-- Clean Architecture implementation
-- Riverpod State Management
+1. Install dependencies:
+   `npm install`
+2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
+3. Run the app:
+   `npm run dev`
