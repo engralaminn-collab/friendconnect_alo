@@ -1,5 +1,5 @@
 export type Role = "user" | "admin";
-export type ProfileVisibility = "public" | "hidden";
+export type ProfileVisibility = "private" | "hidden";
 
 export interface User {
   uid: string;
@@ -13,6 +13,7 @@ export interface User {
   lastSeen: number;
   createdAt: number;
   isActive: boolean;
+  approved?: boolean;
   role: Role;
   profileVisibility: ProfileVisibility;
 }
