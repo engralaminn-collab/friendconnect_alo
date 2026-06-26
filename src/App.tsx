@@ -3,7 +3,6 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './core/store/authStore';
 
 import Login from './features/auth/Login';
-import Register from './features/auth/Register';
 import Layout from './components/ui/Layout';
 import ChatList from './features/chat/ChatList';
 import ChatScreen from './features/chat/ChatScreen';
@@ -26,6 +25,10 @@ function ProtectedRoute({ children, adminOnly = false }: { children: React.React
     return <Navigate to="/login" replace />;
   }
 
+  if (!userProfile?.isActive || userProfile?.approved === false) {
+    return <Navigate to="/login?blocked=1" replace />;
+  }
+
   if (adminOnly && userProfile?.role !== 'admin') {
     return <Navigate to="/" replace />;
   }
@@ -44,7 +47,7 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
+        <Route path="/register" element={<Navigate to="/login" replace />} />
         
         <Route path="/" element={
           <ProtectedRoute>
