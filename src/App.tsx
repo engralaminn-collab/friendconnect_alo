@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { useAuthStore } from './core/store/authStore';
 
 import Login from './features/auth/Login';
+import ForgotPassword from './features/auth/ForgotPassword';
 import Layout from './components/ui/Layout';
 import ChatList from './features/chat/ChatList';
 import ChatScreen from './features/chat/ChatScreen';
@@ -47,7 +48,9 @@ export default function App() {
     <BrowserRouter>
       <Routes>
         <Route path="/login" element={<Login />} />
+        <Route path="/forgot-password" element={<ForgotPassword />} />
         <Route path="/register" element={<Navigate to="/login" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
         
         <Route path="/" element={
           <ProtectedRoute>

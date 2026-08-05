@@ -1,8 +1,40 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isChatParticipant(chatId) {
+      return signedIn()
+        && firestore.exists(/databases/(default)/documents/chats/$(chatId))
+        && request.auth.uid in firestore.get(/databases/(default)/documents/chats/$(chatId)).data.participants;
+    }
+
+    function validChatUpload() {
+      return request.resource.size > 0
+        && request.resource.size <= 20 * 1024 * 1024
+        && request.resource.contentType.matches('^(image|video|audio)/.*')
+          || request.resource.size > 0
+            && request.resource.size <= 20 * 1024 * 1024
+            && request.resource.contentType == 'application/pdf';
+    }
+
+    // Private user assets: users can manage only their own files.
+    match /users/{userId}/{allPaths=**} {
+      allow read, write: if signedIn() && request.auth.uid == userId;
+    }
+
+    // Chat attachments are private to chat participants. Uploads are size/type constrained.
+    match /chat/{chatId}/{mediaType}/{fileName} {
+      allow read: if isChatParticipant(chatId);
+      allow create: if isChatParticipant(chatId) && validChatUpload();
+      allow update, delete: if false;
+    }
+
+    // Deny every unrecognised bucket path by default.
     match /{allPaths=**} {
-      allow read, write: if request.auth != null;
+      allow read, write: if false;
     }
   }
 }

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useLocation, useNavigate } from 'react-router-dom';
+import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { signInWithEmailAndPassword, signOut } from 'firebase/auth';
 import { doc, getDoc } from 'firebase/firestore';
 import { auth, db } from '../../firebase/config';
@@ -89,6 +89,12 @@ export default function Login() {
               {loading ? 'Signing in...' : 'Sign in'}
             </Button>
           </div>
+
+          <p className="text-center text-sm">
+            <Link to="/forgot-password" className="font-medium text-blue-600 hover:text-blue-500">
+              Forgot your password?
+            </Link>
+          </p>
 
           <p className="text-center text-xs text-gray-500">
             This is a private app. New accounts are created only by the admin.

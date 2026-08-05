@@ -38,34 +38,9 @@ Enable these in Firebase Console:
 3. Storage
 4. Hosting
 
-## Important manual fix
+## Firebase deployment configuration
 
-The repository still needs `firebase.json` hosting settings. Use this exact content:
-
-```json
-{
-  "hosting": {
-    "public": "dist",
-    "ignore": [
-      "firebase.json",
-      "**/.*",
-      "**/node_modules/**"
-    ],
-    "rewrites": [
-      {
-        "source": "**",
-        "destination": "/index.html"
-      }
-    ]
-  },
-  "firestore": {
-    "rules": "firestore.rules"
-  },
-  "storage": {
-    "rules": "storage.rules"
-  }
-}
-```
+`firebase.json` is configured for Firebase Hosting (including SPA rewrites), Firestore rules, Storage rules, and the notification Cloud Functions in `friendconnect/functions`. Before deploying, review the rules carefully and make sure an administrator account has been provisioned as described below.
 
 ## Deploy
 
@@ -74,7 +49,7 @@ npm install
 npm run build
 npx firebase-tools login
 npx firebase-tools use friendconnect-2ca91
-npx firebase-tools deploy --only hosting,firestore,storage
+npx firebase-tools deploy --only hosting,firestore,storage,functions
 ```
 
 ## First admin setup
