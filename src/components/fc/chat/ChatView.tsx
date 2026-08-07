@@ -8,7 +8,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { useSocket } from '@/hooks/use-socket'
 import { RT } from '@/lib/constants'
 import { api, uploadFile, clockTime, timeAgo, lastSeenText } from '@/lib/api'
-import { UserAvatar, EmptyState } from '@/components/fc/ui'
+import { UserAvatar, EmptyState, SectionTitle } from '@/components/fc/ui'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
@@ -25,6 +25,9 @@ import {
   AlertDialogCancel,
 } from '@/components/ui/alert-dialog'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
@@ -54,6 +57,9 @@ import {
   Forward,
   Copy,
   Reply,
+  Star,
+  MoreVertical,
+  Timer,
 } from 'lucide-react'
 
 // ---------------- types ----------------
@@ -112,6 +118,8 @@ interface Message {
   reactions?: Reaction[]
   deletedFor?: string
   forwardedFrom?: string | null
+  starred?: boolean
+  expiresAt?: string | null
 }
 
 interface Friend {
@@ -212,6 +220,8 @@ function normalizeMessage(raw: any): Message {
     reactions: Array.isArray(raw.reactions) ? raw.reactions.map((r: any) => ({ emoji: r.emoji, userId: r.userId, userName: r.userName })) : [],
     deletedFor: raw.deletedFor ?? '',
     forwardedFrom: raw.forwardedFrom ?? null,
+    starred: !!raw.starred,
+    expiresAt: raw.expiresAt ?? null,
   }
 }
 
@@ -630,6 +640,10 @@ function ChatRoom({
   const [recordSecs, setRecordSecs] = useState(0)
   const [deleteTarget, setDeleteTarget] = useState<Message | null>(null)
   const [forwardTarget, setForwardTarget] = useState<Message | null>(null)
+  const [settingsOpen, setSettingsOpen] = useState(false)
+  const [starredDialogOpen, setStarredDialogOpen] = useState(false)
+  const [disappearing, setDisappearing] = useState<'OFF' | '24H' | '7D'>('OFF')
+  const [wallpaper, setWallpaper] = useState<string | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -713,6 +727,28 @@ function ChatRoom({
       cancelled = true
     }
   }, [mode, peerId])
+
+  // ---- load chat preferences (disappearing + wallpaper) for this peer ----
+  useEffect(() => {
+    setDisappearing('OFF')
+    setWallpaper(null)
+    let cancelled = false
+    api<{ preferences: Array<{ peerId: string; disappearing: string; wallpaper: string | null }> }>(
+      '/api/messages/preferences'
+    )
+      .then((d) => {
+        if (cancelled) return
+        const p = d.preferences?.find((x) => x.peerId === peerId)
+        if (p) {
+          setDisappearing(p.disappearing === '24H' || p.disappearing === '7D' ? p.disappearing : 'OFF')
+          setWallpaper(p.wallpaper ?? null)
+        }
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [peerId])
 
   // ---- jump to bottom after first load ----
   useEffect(() => {
@@ -911,6 +947,67 @@ function ChatRoom({
       }
     },
     [socket]
+  )
+
+  // ---- toggle star on a message (optimistic + API) ----
+  const toggleStar = useCallback(async (msg: Message) => {
+    const next = !msg.starred
+    setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, starred: next } : m)))
+    try {
+      if (next) {
+        await api(`/api/messages/${msg.id}/star`, { method: 'POST' })
+        toast.success('Starred')
+      } else {
+        await api(`/api/messages/${msg.id}/star`, { method: 'DELETE' })
+        toast.success('Unstarred')
+      }
+    } catch (e: any) {
+      // revert on failure
+      setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, starred: !next } : m)))
+      toast.error(e?.message || 'Failed to update star')
+    }
+  }, [])
+
+  // ---- update disappearing messages preference ----
+  const handleDisappearingChange = useCallback(
+    async (value: 'OFF' | '24H' | '7D') => {
+      const prev = disappearing
+      setDisappearing(value)
+      try {
+        await api('/api/messages/preferences', {
+          method: 'POST',
+          body: JSON.stringify({ peerId, disappearing: value }),
+        })
+        toast.success(
+          value === 'OFF'
+            ? 'Disappearing messages off'
+            : `Messages disappear after ${value === '24H' ? '24 hours' : '7 days'}`
+        )
+      } catch (e: any) {
+        setDisappearing(prev)
+        toast.error(e?.message || 'Failed to update')
+      }
+    },
+    [peerId, disappearing]
+  )
+
+  // ---- update wallpaper preference ----
+  const handleWallpaperChange = useCallback(
+    async (value: string) => {
+      const prev = wallpaper
+      setWallpaper(value || null)
+      try {
+        await api('/api/messages/preferences', {
+          method: 'POST',
+          body: JSON.stringify({ peerId, wallpaper: value || null }),
+        })
+        toast.success(value ? 'Wallpaper updated' : 'Wallpaper cleared')
+      } catch (e: any) {
+        setWallpaper(prev)
+        toast.error(e?.message || 'Failed to update wallpaper')
+      }
+    },
+    [peerId, wallpaper]
   )
 
   // ---- scroll handling + infinite scroll up ----
@@ -1190,39 +1287,57 @@ function ChatRoom({
             </div>
             <div
               className={cn(
-                'truncate text-xs leading-tight',
+                'flex items-center gap-1 truncate text-xs leading-tight',
                 peerTyping ? 'text-primary' : 'text-muted-foreground'
               )}
             >
-              {headerStatus}
+              {disappearing !== 'OFF' && (
+                <span
+                  className="inline-flex shrink-0 items-center gap-0.5 rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-semibold text-primary"
+                  title={`Disappearing in ${disappearing === '24H' ? '24h' : '7d'}`}
+                >
+                  <Timer size={9} />
+                  {disappearing === '24H' ? '24h' : '7d'}
+                </span>
+              )}
+              <span className="truncate">{headerStatus}</span>
             </div>
           </div>
         </div>
-        {mode === 'direct' && (
-          <div className="flex shrink-0 items-center gap-1">
-            <button
-              onClick={() => setSearchOpen((s) => !s)}
-              className={cn('grid h-9 w-9 place-items-center rounded-full transition hover:bg-accent', searchOpen ? 'text-primary' : 'text-muted-foreground hover:text-primary')}
-              aria-label="Search messages"
-            >
-              <Search size={18} />
-            </button>
-            <button
-              onClick={() => startCall('audio')}
-              className="grid h-9 w-9 place-items-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-primary"
-              aria-label="Start audio call"
-            >
-              <Phone size={18} />
-            </button>
-            <button
-              onClick={() => startCall('video')}
-              className="grid h-9 w-9 place-items-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-primary"
-              aria-label="Start video call"
-            >
-              <Video size={18} />
-            </button>
-          </div>
-        )}
+        <div className="flex shrink-0 items-center gap-1">
+          {mode === 'direct' && (
+            <>
+              <button
+                onClick={() => setSearchOpen((s) => !s)}
+                className={cn('grid h-9 w-9 place-items-center rounded-full transition hover:bg-accent', searchOpen ? 'text-primary' : 'text-muted-foreground hover:text-primary')}
+                aria-label="Search messages"
+              >
+                <Search size={18} />
+              </button>
+              <button
+                onClick={() => startCall('audio')}
+                className="grid h-9 w-9 place-items-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-primary"
+                aria-label="Start audio call"
+              >
+                <Phone size={18} />
+              </button>
+              <button
+                onClick={() => startCall('video')}
+                className="grid h-9 w-9 place-items-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-primary"
+                aria-label="Start video call"
+              >
+                <Video size={18} />
+              </button>
+            </>
+          )}
+          <button
+            onClick={() => setSettingsOpen(true)}
+            className="grid h-9 w-9 place-items-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-primary"
+            aria-label="Chat settings"
+          >
+            <MoreVertical size={18} />
+          </button>
+        </div>
       </header>
 
       {/* search bar */}
@@ -1252,6 +1367,7 @@ function ChatRoom({
       <div
         ref={scrollRef}
         onScroll={handleScroll}
+        style={wallpaper ? { background: wallpaper } : undefined}
         className="fc-scroll flex-1 overflow-y-auto px-3 py-3"
       >
         {loading ? (
@@ -1304,6 +1420,7 @@ function ChatRoom({
                     onReply={handleReply}
                     onForward={(msg) => setForwardTarget(msg)}
                     onDelete={(msg) => setDeleteTarget(msg)}
+                    onStar={toggleStar}
                   />
                 )
               })}
@@ -1441,6 +1558,23 @@ function ChatRoom({
         onClose={() => setDeleteTarget(null)}
         onConfirm={confirmDelete}
       />
+
+      {/* chat settings sheet (disappearing + wallpaper + starred) */}
+      <ChatSettingsSheet
+        open={settingsOpen}
+        onOpenChange={setSettingsOpen}
+        disappearing={disappearing}
+        wallpaper={wallpaper}
+        onDisappearingChange={handleDisappearingChange}
+        onWallpaperChange={handleWallpaperChange}
+        onOpenStarred={() => setStarredDialogOpen(true)}
+      />
+
+      {/* starred messages viewer */}
+      <StarredMessagesDialog
+        open={starredDialogOpen}
+        onOpenChange={setStarredDialogOpen}
+      />
     </div>
   )
 }
@@ -1517,6 +1651,7 @@ function MessageBubble({
   onReply,
   onForward,
   onDelete,
+  onStar,
 }: {
   msg: Message
   mine: boolean
@@ -1529,6 +1664,7 @@ function MessageBubble({
   onReply: (msg: Message) => void
   onForward: (msg: Message) => void
   onDelete: (msg: Message) => void
+  onStar: (msg: Message) => void
 }) {
   const bubbleClass = mine ? 'fc-bubble-me' : 'fc-bubble-them'
   const isMedia = msg.type === 'image' || msg.type === 'video'
@@ -1634,6 +1770,14 @@ function MessageBubble({
           onDoubleClick={() => onReact(msg.id, '❤️')}
           className={cn('relative text-sm shadow-sm', bubbleClass, isMedia ? 'p-1' : 'px-2.5 py-1.5')}
         >
+          {msg.starred && (
+            <span
+              className="absolute -top-1.5 -right-1.5 z-10 grid h-4 w-4 place-items-center rounded-full bg-card shadow-sm ring-1 ring-border"
+              aria-label="Starred message"
+            >
+              <Star size={11} className="fill-primary text-primary" />
+            </span>
+          )}
           {msg.type === 'text' && (
             <>
               <p className="whitespace-pre-wrap break-words">{highlight(msg.content, searchQuery || '')}</p>
@@ -1727,6 +1871,16 @@ function MessageBubble({
                   className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition hover:bg-accent"
                 >
                   <Forward size={14} className="text-muted-foreground" /> Forward
+                </button>
+                <button
+                  onClick={() => { onStar(msg); setMenuOpen(false) }}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition hover:bg-accent"
+                >
+                  <Star
+                    size={14}
+                    className={cn('text-muted-foreground', msg.starred && 'fill-primary text-primary')}
+                  />{' '}
+                  {msg.starred ? 'Unstar' : 'Star'}
                 </button>
                 {msg.content && (
                   <button
@@ -1950,6 +2104,266 @@ function ForwardDialog({
             </Button>
           </div>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------------- chat settings sheet ----------------
+const WALLPAPER_PRESETS: { id: string; label: string; value: string }[] = [
+  { id: 'none', label: 'None', value: '' },
+  { id: 'emerald', label: 'Emerald', value: '#f0fdf4' },
+  { id: 'teal', label: 'Teal', value: 'linear-gradient(135deg, #ccfbf1, #f0fdfa)' },
+  { id: 'sand', label: 'Sand', value: 'linear-gradient(135deg, #fef3c7, #fde68a)' },
+  { id: 'rose', label: 'Rose', value: 'linear-gradient(135deg, #ffe4e6, #fecdd3)' },
+  { id: 'amber', label: 'Amber', value: 'linear-gradient(135deg, #fef9c3, #fde68a)' },
+  { id: 'slate', label: 'Slate', value: 'linear-gradient(135deg, #f1f5f9, #e2e8f0)' },
+  { id: 'charcoal', label: 'Charcoal', value: '#1f2937' },
+]
+
+function ChatSettingsSheet({
+  open,
+  onOpenChange,
+  disappearing,
+  wallpaper,
+  onDisappearingChange,
+  onWallpaperChange,
+  onOpenStarred,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  disappearing: 'OFF' | '24H' | '7D'
+  wallpaper: string | null
+  onDisappearingChange: (v: 'OFF' | '24H' | '7D') => void
+  onWallpaperChange: (v: string) => void
+  onOpenStarred: () => void
+}) {
+  const disappearingOptions: { value: 'OFF' | '24H' | '7D'; label: string; description: string }[] = [
+    { value: 'OFF', label: 'Off', description: 'Messages stay in the chat' },
+    { value: '24H', label: '24 hours', description: 'Messages vanish after a day' },
+    { value: '7D', label: '7 days', description: 'Messages vanish after a week' },
+  ]
+
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent side="bottom" className="mx-auto max-w-2xl rounded-t-2xl p-0">
+        <SheetHeader className="border-b border-border px-4 py-3">
+          <SheetTitle className="text-base">Chat settings</SheetTitle>
+        </SheetHeader>
+        <div className="fc-scroll max-h-[80vh] overflow-y-auto px-4 py-4">
+          {/* Starred messages */}
+          <section className="mb-6">
+            <SectionTitle>Starred</SectionTitle>
+            <button
+              type="button"
+              onClick={() => {
+                onOpenStarred()
+                onOpenChange(false)
+              }}
+              className="mt-2 flex w-full items-center gap-3 rounded-xl border border-border bg-card p-3 text-left transition hover:bg-accent"
+            >
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
+                <Star size={16} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium">Starred messages</div>
+                <div className="text-[11px] text-muted-foreground">
+                  View all messages you&rsquo;ve starred across chats
+                </div>
+              </div>
+            </button>
+          </section>
+
+          {/* Disappearing messages */}
+          <section className="mb-6">
+            <SectionTitle>Disappearing messages</SectionTitle>
+            <RadioGroup
+              value={disappearing}
+              onValueChange={(v) => onDisappearingChange(v as 'OFF' | '24H' | '7D')}
+              className="mt-2 gap-1.5"
+            >
+              {disappearingOptions.map((opt) => (
+                <Label
+                  key={opt.value}
+                  htmlFor={`dis-${opt.value}`}
+                  className={cn(
+                    'flex cursor-pointer items-center gap-3 rounded-xl border p-3 transition',
+                    disappearing === opt.value
+                      ? 'border-primary bg-primary/5'
+                      : 'border-border hover:bg-accent'
+                  )}
+                >
+                  <RadioGroupItem id={`dis-${opt.value}`} value={opt.value} />
+                  <div className="flex min-w-0 flex-1 items-center gap-2">
+                    {opt.value !== 'OFF' && (
+                      <Timer size={14} className="shrink-0 text-primary" />
+                    )}
+                    <div className="min-w-0">
+                      <div className="text-sm font-medium leading-tight">{opt.label}</div>
+                      <div className="text-[11px] leading-tight text-muted-foreground">
+                        {opt.description}
+                      </div>
+                    </div>
+                  </div>
+                </Label>
+              ))}
+            </RadioGroup>
+          </section>
+
+          {/* Wallpaper */}
+          <section>
+            <SectionTitle>Wallpaper</SectionTitle>
+            <div className="mt-2 grid grid-cols-4 gap-2.5">
+              {WALLPAPER_PRESETS.map((wp) => {
+                const selected = (wallpaper || '') === wp.value
+                return (
+                  <button
+                    key={wp.id}
+                    type="button"
+                    onClick={() => onWallpaperChange(wp.value)}
+                    aria-label={wp.label}
+                    aria-pressed={selected}
+                    title={wp.label}
+                    className={cn(
+                      'relative aspect-[2/5] rounded-xl ring-2 transition',
+                      selected ? 'ring-primary' : 'ring-transparent hover:ring-border'
+                    )}
+                    style={wp.value === '' ? undefined : { background: wp.value }}
+                  >
+                    {wp.value === '' && (
+                      <div className="absolute inset-0 grid place-items-center rounded-xl bg-card">
+                        <X size={14} className="text-muted-foreground" />
+                      </div>
+                    )}
+                    {selected && (
+                      <span className="absolute right-1 top-1 grid h-4 w-4 place-items-center rounded-full bg-primary text-primary-foreground shadow-sm">
+                        <Check size={10} />
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          </section>
+        </div>
+      </SheetContent>
+    </Sheet>
+  )
+}
+
+// ---------------- starred messages dialog ----------------
+interface StarredMessage {
+  id: string
+  senderId: string
+  senderName: string
+  senderUsername?: string
+  senderPhoto?: string | null
+  content: string
+  type: string
+  fileUrl?: string | null
+  fileName?: string | null
+  createdAt: string
+  starredAt: string
+  receiverId?: string | null
+  groupId?: string | null
+  deletedFor?: string
+}
+
+function StarredMessagesDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+}) {
+  const { user: me } = useAuth()
+  const meId = me?.id
+  const [loading, setLoading] = useState(false)
+  const [starred, setStarred] = useState<StarredMessage[]>([])
+
+  useEffect(() => {
+    if (!open) return
+    setLoading(true)
+    api<{ starred: StarredMessage[] }>('/api/messages/starred')
+      .then((d) => setStarred(d.starred || []))
+      .catch((e: any) => toast.error(e?.message || 'Failed to load starred'))
+      .finally(() => setLoading(false))
+  }, [open])
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md gap-0 p-0">
+        <DialogHeader className="border-b border-border px-4 py-3">
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <Star size={16} className="fill-primary text-primary" />
+            Starred messages
+          </DialogTitle>
+        </DialogHeader>
+        <div className="fc-scroll max-h-[70vh] overflow-y-auto p-2">
+          {loading ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="animate-spin text-muted-foreground" size={20} />
+            </div>
+          ) : starred.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">
+              No starred messages
+            </div>
+          ) : (
+            <div className="space-y-0.5">
+              {starred.map((m) => {
+                const deletedAll = m.deletedFor === 'everyone'
+                const deletedForMe = (() => {
+                  if (!meId || !m.deletedFor) return false
+                  if (m.deletedFor === 'everyone') return true
+                  return String(m.deletedFor)
+                    .split(',')
+                    .map((s) => s.trim())
+                    .filter(Boolean)
+                    .includes(meId)
+                })()
+                const isDeleted = deletedAll || deletedForMe
+                let icon: React.ReactNode = null
+                if (!isDeleted) {
+                  if (m.type === 'image') icon = <span className="text-base">📷</span>
+                  else if (m.type === 'video') icon = <span className="text-base">🎥</span>
+                  else if (m.type === 'audio') icon = <span className="text-base">🎤</span>
+                  else if (m.type === 'document') icon = <span className="text-base">📄</span>
+                }
+                const preview = isDeleted
+                  ? '🚫 This message was deleted'
+                  : m.content || m.fileName || (icon ? 'Media message' : '')
+                return (
+                  <button
+                    key={m.id}
+                    type="button"
+                    onClick={() => onOpenChange(false)}
+                    className="flex w-full items-start gap-3 rounded-xl p-2.5 text-left transition hover:bg-accent"
+                  >
+                    <UserAvatar
+                      name={m.senderName || 'User'}
+                      src={m.senderPhoto || undefined}
+                      size={36}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="truncate text-sm font-medium">
+                          {m.senderName || 'Unknown'}
+                        </span>
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          {timeAgo(m.starredAt)}
+                        </span>
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-1.5 text-xs text-muted-foreground">
+                        {icon}
+                        <span className={cn('truncate', isDeleted && 'italic')}>{preview}</span>
+                      </div>
+                    </div>
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   )

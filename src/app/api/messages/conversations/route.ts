@@ -41,10 +41,10 @@ export async function GET() {
       }
     }
 
-    // chat preferences (pin/mute)
+    // chat preferences (pin/mute/disappearing/wallpaper)
     const prefs = await db.chatPreference.findMany({ where: { userId: me.id } })
-    const prefMap = new Map<string, { pinned: boolean; muted: boolean }>()
-    for (const p of prefs) prefMap.set(p.peerId, { pinned: p.pinned, muted: p.muted })
+    const prefMap = new Map<string, { pinned: boolean; muted: boolean; disappearing: string; wallpaper: string | null }>()
+    for (const p of prefs) prefMap.set(p.peerId, { pinned: p.pinned, muted: p.muted, disappearing: p.disappearing, wallpaper: p.wallpaper })
 
     const conversations = Array.from(new Set([...friendMap.keys(), ...lastByPeer.keys()])).map((peerId) => {
       const friend = friendMap.get(peerId)
@@ -67,6 +67,8 @@ export async function GET() {
         unread: unreadByPeer.get(peerId) || 0,
         pinned: pref?.pinned ?? false,
         muted: pref?.muted ?? false,
+        disappearing: pref?.disappearing ?? 'OFF',
+        wallpaper: pref?.wallpaper ?? null,
       }
     })
     conversations.sort((a, b) => {

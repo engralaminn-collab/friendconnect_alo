@@ -9,6 +9,7 @@ import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Search, Users, MessageCircle, Phone, Video, UserPlus, Sparkles, ChevronRight, Clock } from 'lucide-react'
 import { StoriesBar } from '@/components/fc/stories/StoriesBar'
+import { cn } from '@/lib/utils'
 
 interface Friend {
   id: string
@@ -30,7 +31,9 @@ interface Suggestion {
   username: string
   name: string
   photoUrl: string | null
-  relation: string
+  bio: string | null
+  location: string | null
+  mutualFriends: number
 }
 
 export function HomeView() {
@@ -39,17 +42,18 @@ export function HomeView() {
   const [friends, setFriends] = useState<Friend[]>([])
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
+  const [sendingId, setSendingId] = useState<string | null>(null)
 
   const load = async () => {
     try {
       const [fr, cv, sg] = await Promise.all([
         api<{ friends: Friend[] }>('/api/friends'),
         api<{ conversations: Conversation[] }>('/api/messages/conversations'),
-        api<{ users: Suggestion[] }>('/api/users/search?q='),
+        api<{ suggestions: Suggestion[] }>('/api/friends/suggestions'),
       ])
       setFriends(fr.friends)
       setConversations(cv.conversations)
-      setSuggestions(sg.users.filter((u) => u.relation === 'NONE').slice(0, 5))
+      setSuggestions(sg.suggestions)
     } catch {}
   }
 
@@ -165,20 +169,49 @@ export function HomeView() {
             <SectionTitle className="flex items-center gap-1"><Sparkles size={12} /> People you may know</SectionTitle>
           </div>
           <div className="mt-2 space-y-1 px-2">
-            {suggestions.map((s) => (
-              <Card key={s.id} className="flex items-center gap-3 border-0 bg-card p-2 shadow-none">
-                <button onClick={() => openProfile(s.id)} className="flex flex-1 items-center gap-3 text-left">
-                  <UserAvatar name={s.name} src={s.photoUrl} size={42} />
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-semibold">{s.name}</div>
-                    <div className="truncate text-xs text-muted-foreground">@{s.username}</div>
-                  </div>
-                </button>
-                <Button size="sm" variant="secondary" className="rounded-full" onClick={() => sendRequest(s.id)}>
-                  <UserPlus size={14} className="mr-1" /> Add
-                </Button>
-              </Card>
-            ))}
+            {suggestions.map((s) => {
+              const high = s.mutualFriends >= 3
+              return (
+                <Card
+                  key={s.id}
+                  className={cn(
+                    'flex items-center gap-3 border-0 bg-card p-2 shadow-none transition hover:bg-accent/40',
+                    high && 'bg-primary/5 ring-1 ring-primary/20'
+                  )}
+                >
+                  <button onClick={() => openProfile(s.id)} className="flex flex-1 items-center gap-3 text-left">
+                    <UserAvatar name={s.name} src={s.photoUrl} size={42} />
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate text-sm font-semibold">{s.name}</span>
+                        {high && (
+                          <span className="flex shrink-0 items-center gap-0.5 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                            <Sparkles size={10} /> Top
+                          </span>
+                        )}
+                      </div>
+                      {s.mutualFriends > 0 ? (
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                          <Users size={11} />
+                          {s.mutualFriends} mutual friend{s.mutualFriends === 1 ? '' : 's'}
+                        </div>
+                      ) : (
+                        <div className="truncate text-xs text-muted-foreground">Suggested for you</div>
+                      )}
+                    </div>
+                  </button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="rounded-full"
+                    disabled={sendingId === s.id}
+                    onClick={() => sendRequest(s.id)}
+                  >
+                    <UserPlus size={14} className="mr-1" /> Add
+                  </Button>
+                </Card>
+              )
+            })}
           </div>
         </section>
       )}
@@ -194,15 +227,17 @@ export function HomeView() {
   )
 
   async function sendRequest(id: string) {
+    setSendingId(id)
     try {
       await api('/api/friends', { method: 'POST', body: JSON.stringify({ action: 'request', targetId: id }) })
       setSuggestions((prev) => prev.filter((s) => s.id !== id))
       const { toast } = await import('sonner')
       toast.success('Friend request sent')
-      load()
     } catch (e: any) {
       const { toast } = await import('sonner')
       toast.error(e.message || 'Failed')
+    } finally {
+      setSendingId(null)
     }
   }
 }

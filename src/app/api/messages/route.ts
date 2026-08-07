@@ -17,9 +17,12 @@ export async function GET(req: NextRequest) {
       })
       if (!membership) return errorJson('Not a member', 403)
       const q = req.nextUrl.searchParams.get('q')
+      const now = new Date()
       const messages = await db.message.findMany({
         where: {
           groupId,
+          // hide expired disappearing messages
+          OR: [{ expiresAt: null }, { expiresAt: { gt: now } }],
           ...(before ? { createdAt: { lt: new Date(before) } } : {}),
           ...(q ? { content: { contains: q } } : {}),
         },
@@ -28,6 +31,7 @@ export async function GET(req: NextRequest) {
         include: {
           sender: { include: { profile: true } },
           reactions: { include: { user: { select: { id: true, name: true } } } },
+          starredBy: { where: { userId: me.id }, select: { userId: true } },
         },
       })
       return json({
@@ -45,6 +49,8 @@ export async function GET(req: NextRequest) {
           createdAt: m.createdAt.toISOString(),
           deletedFor: m.deletedFor,
           forwardedFrom: m.forwardedFrom,
+          expiresAt: m.expiresAt?.toISOString() ?? null,
+          starred: m.starredBy.length > 0,
           reactions: m.reactions.map((r) => ({ emoji: r.emoji, userId: r.user.id, userName: r.user.name })),
         })),
       })
@@ -64,6 +70,7 @@ export async function GET(req: NextRequest) {
     if (blocked) return errorJson('Cannot view messages', 403)
 
     const q = req.nextUrl.searchParams.get('q')
+    const now = new Date()
     const messages = await db.message.findMany({
       where: {
         groupId: null,
@@ -78,8 +85,11 @@ export async function GET(req: NextRequest) {
       take: q ? 100 : 50,
       include: {
         reactions: { include: { user: { select: { id: true, name: true } } } },
+        starredBy: { where: { userId: me.id }, select: { userId: true } },
       },
     })
+    // filter out expired disappearing messages in JS (can't combine OR clauses in Prisma where)
+    const filtered = messages.filter((m) => !m.expiresAt || m.expiresAt > now)
     // mark incoming as seen (only when not searching)
     if (!q) {
       await db.message.updateMany({
@@ -88,7 +98,7 @@ export async function GET(req: NextRequest) {
       })
     }
     return json({
-      messages: messages.reverse().map((m) => ({
+      messages: filtered.reverse().map((m) => ({
         id: m.id,
         senderId: m.senderId,
         receiverId: m.receiverId,
@@ -102,6 +112,8 @@ export async function GET(req: NextRequest) {
         createdAt: m.createdAt.toISOString(),
         deletedFor: m.deletedFor,
         forwardedFrom: m.forwardedFrom,
+        expiresAt: m.expiresAt?.toISOString() ?? null,
+        starred: m.starredBy.length > 0,
         reactions: m.reactions.map((r) => ({ emoji: r.emoji, userId: r.user.id, userName: r.user.name })),
       })),
     })

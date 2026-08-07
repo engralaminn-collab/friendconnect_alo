@@ -35,6 +35,7 @@ model User {
   chatPrefs     ChatPreference[]
   stories       Story[]
   storyViews    StoryView[]
+  starredMessages MessageStar[]
 }
 
 model Profile {
@@ -100,11 +101,14 @@ model Message {
   // "everyone" = deleted for all participants (content cleared).
   deletedFor String   @default("")
   forwardedFrom String? // userId of original sender if forwarded
+  // Additive (round 3): disappearing messages — when set, message auto-deletes after expiresAt
+  expiresAt DateTime?
 
   sender   User   @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
   receiver User?  @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
   group    Group? @relation(fields: [groupId], references: [id], onDelete: Cascade)
   reactions MessageReaction[]
+  starredBy MessageStar[]
 }
 
 model Group {
@@ -194,6 +198,10 @@ model ChatPreference {
   peerId    String   // the other participant's userId (1:1 chats)
   pinned    Boolean  @default(false)
   muted     Boolean  @default(false)
+  // Additive (round 3): disappearing messages timer. OFF | 24H | 7D
+  disappearing String @default("OFF")
+  // Additive (round 3): chat wallpaper (CSS background value or preset id)
+  wallpaper String?  
   updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -227,4 +235,17 @@ model StoryView {
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([storyId, userId])
+}
+
+// ---- Additive (round 3): starred / favorited messages ----
+model MessageStar {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
 }

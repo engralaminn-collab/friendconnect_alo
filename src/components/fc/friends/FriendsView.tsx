@@ -8,7 +8,7 @@ import { UserAvatar, EmptyState, SectionTitle } from '@/components/fc/ui'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { Search, UserPlus, Check, X, MessageCircle, Phone, Video, Ban, UserMinus, Clock, Users, ShieldOff } from 'lucide-react'
+import { Search, UserPlus, Check, X, MessageCircle, Phone, Video, Ban, UserMinus, Clock, Users, ShieldOff, MapPin, Sparkles, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
@@ -16,6 +16,7 @@ interface UserLite { id: string; username: string; name: string; photoUrl: strin
 interface Friend { id: string; username: string; name: string; photoUrl: string | null; since: string; lastSeen: string | null }
 interface Req { id: string; username: string; name: string; photoUrl: string | null; createdAt: string }
 interface Blocked { id: string; username: string; name: string; photoUrl: string | null; blockedAt: string }
+interface Suggestion { id: string; username: string; name: string; photoUrl: string | null; bio: string | null; location: string | null; mutualFriends: number }
 
 export function FriendsView() {
   const [tab, setTab] = useState('friends')
@@ -25,6 +26,8 @@ export function FriendsView() {
   const [incoming, setIncoming] = useState<Req[]>([])
   const [outgoing, setOutgoing] = useState<Req[]>([])
   const [blocked, setBlocked] = useState<Blocked[]>([])
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([])
+  const [suggestionsLoading, setSuggestionsLoading] = useState(false)
   const { openChat, openProfile } = useApp()
   const { isOnline } = useSocket()
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({})
@@ -48,10 +51,45 @@ export function FriendsView() {
     } catch {}
   }, [])
 
+  const loadSuggestions = useCallback(async () => {
+    setSuggestionsLoading(true)
+    try {
+      const data = await api<{ suggestions: Suggestion[] }>('/api/friends/suggestions')
+      setSuggestions(data.suggestions)
+    } catch {
+      // ignore
+    } finally {
+      setSuggestionsLoading(false)
+    }
+  }, [])
+
+  const addSuggestion = useCallback(async (id: string) => {
+    setActionLoading((s) => ({ ...s, [id + 'request']: true }))
+    try {
+      await api('/api/friends', { method: 'POST', body: JSON.stringify({ action: 'request', targetId: id }) })
+      setSuggestions((prev) => prev.filter((s) => s.id !== id))
+      toast.success('Friend request sent')
+    } catch (e: any) {
+      toast.error(e.message || 'Failed')
+    } finally {
+      setActionLoading((s) => ({ ...s, [id + 'request']: false }))
+    }
+  }, [])
+
   useEffect(() => {
     loadFriends()
     runSearch(query)
   }, [loadFriends, runSearch, query])
+
+  useEffect(() => {
+    loadSuggestions()
+  }, [loadSuggestions])
+
+  useEffect(() => {
+    if (tab === 'suggested') {
+      loadSuggestions()
+    }
+  }, [tab, loadSuggestions])
 
   const doAction = async (targetId: string, action: string, msg?: string) => {
     setActionLoading((s) => ({ ...s, [targetId + action]: true }))
@@ -78,10 +116,11 @@ export function FriendsView() {
       </div>
 
       <Tabs value={tab} onValueChange={setTab} className="flex flex-1 flex-col overflow-hidden">
-        <TabsList className="mx-4 mt-3 grid grid-cols-4 rounded-xl">
+        <TabsList className="mx-4 mt-3 grid grid-cols-5 rounded-xl">
           <TabsTrigger value="friends" className="text-xs">Friends</TabsTrigger>
           <TabsTrigger value="requests" className="text-xs">Requests{incoming.length > 0 && <span className="ml-1 grid h-4 min-w-4 place-items-center rounded-full bg-primary px-1 text-[9px] font-bold text-primary-foreground">{incoming.length}</span>}</TabsTrigger>
           <TabsTrigger value="search" className="text-xs">Search</TabsTrigger>
+          <TabsTrigger value="suggested" className="text-xs">Suggested</TabsTrigger>
           <TabsTrigger value="blocked" className="text-xs">Blocked</TabsTrigger>
         </TabsList>
 
@@ -190,6 +229,24 @@ export function FriendsView() {
             </div>
           )}
         </TabsContent>
+
+        <TabsContent value="suggested" className="fc-scroll m-0 flex-1 overflow-y-auto p-4">
+          {suggestionsLoading ? (
+            <div className="space-y-1">
+              {Array.from({ length: 5 }).map((_, i) => (
+                <SuggestionSkeleton key={i} />
+              ))}
+            </div>
+          ) : suggestions.length === 0 ? (
+            <EmptyState icon={<Users size={36} />} title="No suggestions yet" description="Connect with more friends to get better suggestions." />
+          ) : (
+            <div className="space-y-1">
+              {suggestions.map((s) => (
+                <SuggestionRow key={s.id} suggestion={s} onAdd={() => addSuggestion(s.id)} loading={!!actionLoading[s.id + 'request']} />
+              ))}
+            </div>
+          )}
+        </TabsContent>
       </Tabs>
     </div>
   )
@@ -222,6 +279,69 @@ function FriendRow({ friend, online, onChat, onProfile, onRemove, onBlock, loadi
           </div>
         </>
       )}
+    </div>
+  )
+}
+
+function SuggestionRow({ suggestion, onAdd, loading }: { suggestion: Suggestion; onAdd: () => void; loading: boolean }) {
+  const { openProfile } = useApp()
+  const high = suggestion.mutualFriends >= 3
+  return (
+    <div
+      className={cn(
+        'flex items-start gap-3 rounded-xl p-2 transition hover:bg-accent/40',
+        high && 'bg-primary/5 ring-1 ring-primary/20'
+      )}
+    >
+      <button onClick={() => openProfile(suggestion.id)} className="flex flex-1 items-start gap-3 text-left">
+        <UserAvatar name={suggestion.name} src={suggestion.photoUrl} size={44} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-sm font-semibold">{suggestion.name}</span>
+            {high && (
+              <span className="flex shrink-0 items-center gap-0.5 rounded-full bg-primary/15 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                <Sparkles size={10} /> Top
+              </span>
+            )}
+          </div>
+          <div className="truncate text-xs text-muted-foreground">@{suggestion.username}</div>
+          {suggestion.mutualFriends > 0 ? (
+            <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+              <Users size={11} />
+              {suggestion.mutualFriends} mutual friend{suggestion.mutualFriends === 1 ? '' : 's'}
+            </div>
+          ) : (
+            <div className="mt-0.5 text-xs text-muted-foreground">Suggested for you</div>
+          )}
+          {suggestion.bio && (
+            <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{suggestion.bio}</p>
+          )}
+          {suggestion.location && (
+            <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+              <MapPin size={11} />
+              {suggestion.location}
+            </div>
+          )}
+        </div>
+      </button>
+      <Button size="sm" variant="secondary" className="shrink-0 rounded-full" disabled={loading} onClick={onAdd}>
+        {loading ? <Loader2 size={14} className="mr-1 animate-spin" /> : <UserPlus size={14} className="mr-1" />}
+        Add friend
+      </Button>
+    </div>
+  )
+}
+
+function SuggestionSkeleton() {
+  return (
+    <div className="flex items-start gap-3 rounded-xl p-2">
+      <div className="h-11 w-11 shrink-0 animate-pulse rounded-full bg-muted" />
+      <div className="flex-1 space-y-1.5 pt-1">
+        <div className="h-3.5 w-32 animate-pulse rounded bg-muted" />
+        <div className="h-3 w-24 animate-pulse rounded bg-muted" />
+        <div className="h-3 w-40 animate-pulse rounded bg-muted" />
+      </div>
+      <div className="h-8 w-24 shrink-0 animate-pulse rounded-full bg-muted" />
     </div>
   )
 }

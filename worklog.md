@@ -425,3 +425,137 @@ Stage Summary:
 - Lint clean, dev 200, realtime 200, all features QA'd.
 - Cumulative feature set now: auth (register/login/logout/forgot+OTP), profiles (view/edit/privacy), friends (search/request/accept/reject/remove/block), 1:1+group chat (realtime, typing, presence, status ticks, file sharing, voice notes, emoji), message reactions, pin/mute chats, message search, message delete (me/everyone), message forward, stories (create/view/auto-advance), WebRTC calls (audio/video/mute/camera-switch), groups CRUD, notifications, settings (theme/notifications/privacy/read-receipts), dark mode.
 - Recommended next-phase features: group calls, message star/favorite, chat wallpaper customization, friend suggestions algorithm, profile photo cropping/filters, call duration stats dashboard, message scheduling, disappearing messages, chat export, last-seen granularity, message pin within chat, typing in group chats (sender-aware), file previews (PDF thumbnail), story replies.
+
+---
+Task ID: 13-backend
+Agent: orchestrator (Z.ai Code) — scheduled 15-min review (round 3, backend)
+Task: Backend for round 3 features: message star/favorite, disappearing messages, friend suggestions (mutual-friends algorithm), chat wallpaper customization.
+
+Work Log:
+- DB (additive): added `MessageStar` model (id, messageId, userId, createdAt; @@unique [messageId,userId]). Added `starredMessages MessageStar[]` relation to User, `starredBy MessageStar[]` to Message. Added `expiresAt DateTime?` to Message (for disappearing messages). Added `disappearing String @default("OFF")` + `wallpaper String?` to ChatPreference. Ran `bun run db:push` + `bun run db:generate` — success.
+- API (new routes, no existing endpoints renamed):
+  - `POST/DELETE /api/messages/[id]/star` — star/unstar a message (validates participation).
+  - `GET /api/messages/starred` — returns all messages the current user starred (across all conversations), with sender info.
+  - `GET /api/friends/suggestions` — friend suggestions ranked by mutual-friends count. Algorithm: get my friends → get their friends (friends-of-friends) → count mutuals per candidate → exclude self + existing relationships (pending/blocked/accepted) → if <5 candidates, add random non-friends → sort by mutualFriends desc → top 10.
+- API (modified, backward-compatible):
+  - `GET /api/messages` (both 1:1 + group): now includes `starred` boolean (whether current user starred it), `expiresAt` (ISO or null). Filters out expired disappearing messages (group branch via Prisma OR clause; 1:1 branch via JS filter since Prisma can't combine two OR clauses). Includes `starredBy` relation filtered to current user.
+  - `GET/POST /api/messages/preferences`: now accepts/returns `disappearing` (OFF|24H|7D) + `wallpaper` (CSS background value or null).
+  - `GET /api/messages/conversations`: now includes `disappearing` + `wallpaper` per conversation.
+- Realtime: updated `message:send` handler in mini-services/realtime/index.ts to check the sender's ChatPreference for the peer; if `disappearing` is 24H or 7D, sets `expiresAt` = now + TTL on the created message. Messages auto-expire (hidden from GET /api/messages when expiresAt < now).
+- Restarted realtime mini-service + Next dev server to load new Prisma client + handler. Verified: gateway 200, realtime 200, /api/friends/suggestions + /api/messages/starred respond (401 without auth = correct).
+- `bun run lint` clean (0 errors).
+
+Stage Summary:
+- Backend for message star, disappearing messages, friend suggestions, chat wallpaper is complete. Frontend not yet wired.
+- New files: src/app/api/messages/[id]/star/route.ts, src/app/api/messages/starred/route.ts, src/app/api/friends/suggestions/route.ts.
+- Modified: prisma/schema.prisma (+MessageStar, +Message.expiresAt, +ChatPreference.disappearing/wallpaper), mini-services/realtime/index.ts (+disappearing expiry on send), src/app/api/messages/route.ts (+starred/expiresAt/expiry-filter), src/app/api/messages/preferences/route.ts (+disappearing/wallpaper), src/app/api/messages/conversations/route.ts (+disappearing/wallpaper).
+- Next: frontend subagents will build the UI for these features in ChatView (star in action menu + starred indicator + disappearing/wallpaper in chat settings sheet) + Home/Friends (friend suggestions section).
+
+---
+Task ID: 13-suggestions
+Agent: full-stack-developer (Friend suggestions)
+Task: Added a "People you may know" friend-suggestions section powered by `GET /api/friends/suggestions` (mutual-friends-ranked) to BOTH HomeView and FriendsView. Surgical edits — no existing code/features removed.
+
+Work Log:
+- Read /home/z/my-project/worklog.md (full architecture + Task 13-backend entry) to understand the API contract (`GET /api/friends/suggestions` → `{ suggestions: [{ id, username, name, photoUrl, bio, location, mutualFriends }] }`) and existing UI conventions.
+- Inspected the backend route handler (src/app/api/friends/suggestions/route.ts) to confirm the exact response shape (mutualFriends is a number; bio/location are nullable strings; ranked desc by mutualFriends, top 10).
+- Inspected HomeView.tsx + FriendsView.tsx to plan surgical edits that preserve all existing functionality.
+
+HomeView.tsx (surgical edits):
+- Updated `Suggestion` interface: removed `relation: string`, added `bio: string | null`, `location: string | null`, `mutualFriends: number`.
+- Added `cn` import from `@/lib/utils` (needed for conditional className on high-mutual rows).
+- Added `sendingId` state (`useState<string | null>(null)`) to track which suggestion's "Add" button is in-flight (disables button + shows loading state).
+- Updated `load()`: replaced `api<{ users: Suggestion[] }>('/api/users/search?q=')` + `sg.users.filter((u) => u.relation === 'NONE').slice(0, 5)` with `api<{ suggestions: Suggestion[] }>('/api/friends/suggestions')` + `setSuggestions(sg.suggestions)`. Kept the existing `Promise.all` pattern with friends + conversations fetches.
+- Enhanced the "People you may know" section JSX (kept existing Card structure): added a `high = s.mutualFriends >= 3` flag; conditional `bg-primary/5 ring-1 ring-primary/20` background on the Card for high-mutual rows; added a small "Top" badge (`bg-primary/15 text-primary` with Sparkles icon) next to the name when high; replaced the `@username` subtitle with either "X mutual friend(s)" (with Users icon size 11, `flex items-center gap-1 text-xs text-muted-foreground`) or "Suggested for you" when mutualFriends === 0; added `disabled={sendingId === s.id}` to the "Add" button; added `transition hover:bg-accent/40` to the Card.
+- Updated `sendRequest()`: wrapped with `setSendingId(id)` / `finally setSendingId(null)`; removed the redundant `load()` call after success (the optimistic `setSuggestions(filter)` already removes the user, and the 15s interval refreshes anyway — removing `load()` avoids an unnecessary triple-fetch). Kept the dynamic `import('sonner')` toast pattern (existing convention in this file).
+- Preserved: stories bar, hero greeting, quick actions, online friends strip, recent chats, call-history button — all untouched.
+
+FriendsView.tsx (surgical edits):
+- Added lucide imports: `MapPin`, `Sparkles`, `Loader2` (appended to the existing import line).
+- Added `Suggestion` interface (`{ id, username, name, photoUrl, bio, location, mutualFriends }`).
+- Added `suggestions` + `suggestionsLoading` state.
+- Added `loadSuggestions` useCallback: sets loading true, fetches `GET /api/friends/suggestions`, sets suggestions, sets loading false in finally. Silent catch (ignore errors).
+- Added `addSuggestion` useCallback: reuses existing `actionLoading` state pattern (`[id + 'request']`), POSTs `POST /api/friends { action:'request', targetId }`, optimistically removes the user from suggestions via `setSuggestions(prev => prev.filter(...))`, toasts success/error.
+- Added two useEffects: one fetches suggestions on mount (`[loadSuggestions]`), one refetches when `tab === 'suggested'` becomes active (`[tab, loadSuggestions]`).
+- Updated TabsList: `grid-cols-4` → `grid-cols-5`; added 5th `<TabsTrigger value="suggested">Suggested</TabsTrigger>`.
+- Added new `<TabsContent value="suggested">`: shows 5 `SuggestionSkeleton` rows while loading, `EmptyState` (Users icon, "No suggestions yet", "Connect with more friends to get better suggestions.") when empty, or a vertical list of `SuggestionRow` components.
+- Added `SuggestionRow` component (inline, takes `{ suggestion, onAdd, loading }`): uses `useApp().openProfile` for row tap; `items-start` layout with 44px avatar; name + optional "Top" badge (Sparkles + "Top", `bg-primary/15 text-primary`) for 3+ mutuals; @username; "X mutual friend(s)" with Users icon (size 11) OR "Suggested for you" when 0; bio (line-clamp-2, if present); location with MapPin icon (size 11, if present); "Add friend" button (rounded-full secondary, shows Loader2 spinner when loading). High-mutual rows get `bg-primary/5 ring-1 ring-primary/20` background.
+- Added `SuggestionSkeleton` component: 44px circle + 3 pulsing bars + 24px-wide pill button placeholder.
+- Preserved: existing 4 tabs (Friends/Requests/Search/Blocked), all existing row components (FriendRow with menu, requests accept/reject, blocked unblock), search behavior, header — all untouched.
+
+Verification:
+- `bun run lint` → 0 errors, 0 warnings (exit 0).
+- Dev server returns 200 on `/` (curl confirmed). Dev log shows `GET /api/friends/suggestions 200` being hit by the HomeView load cycle. Clean compile (5.2s initial, then ~500ms incremental).
+- No eslint-disable directives needed — the `react-hooks/set-state-in-effect` rule does not flag calls to useCallback-wrapped functions inside useEffect (only direct setState calls in effect bodies).
+
+Stage Summary:
+- Files edited (2, surgical — no rewrites):
+  - `src/components/fc/home/HomeView.tsx`: suggestions data source switched from `/api/users/search?q=` to `/api/friends/suggestions`; Suggestion interface updated; mutual-friends subtitle + "Top" gradient badge for 3+ mutuals; sendingId loading state on Add button.
+  - `src/components/fc/friends/FriendsView.tsx`: 5th "Suggested" tab added (grid-cols-5); Suggestion interface + state + loadSuggestions/addSuggestion callbacks; fetch on mount + on tab activation; richer SuggestionRow (avatar/name/@username/mutual-friends/bio/location/Add-friend) with skeleton loading + empty state; high-mutual premium highlight.
+- All contracts honored: `api` from `@/lib/api`; `UserAvatar`, `EmptyState`, `SectionTitle` from `@/components/fc/ui`; `useApp().openProfile` for row tap; `toast` from `sonner` (static import in FriendsView, dynamic import preserved in HomeView); shadcn `Button`, `Tabs/TabsList/TabsTrigger/TabsContent`, `Card`; lucide `Users`, `UserPlus`, `MapPin`, `Sparkles`, `Loader2`.
+- Styling: emerald/teal brand throughout (NO indigo/blue). Mutual-friends count uses `text-xs text-muted-foreground flex items-center gap-1` with Users icon size 11. Suggestion rows use `rounded-xl p-2 hover:bg-accent/40`. Add buttons use `rounded-full` variant secondary. High-mutual (3+) rows get subtle `bg-primary/5 ring-1 ring-primary/20` + "Top" badge. Mobile-first, fills max-w-2xl shell.
+- Decisions:
+  - Inline SuggestionRow in each file (not a shared helper) to keep edits surgical and avoid creating new files. The two SuggestionRow variants differ intentionally: HomeView's is compact (horizontal card with avatar + name + add button), FriendsView's is richer (vertical info with bio + location).
+  - "Top" badge threshold: 3+ mutual friends (matches the task's "e.g. 3+ mutuals" example).
+  - HomeView: removed the redundant `load()` call after `sendRequest` success — the optimistic filter already removes the user and the 15s interval handles refresh. This avoids an unnecessary triple-fetch (friends + conversations + suggestions) after every add.
+  - FriendsView: fetch suggestions both on mount AND when the Suggested tab becomes active (per task spec). The on-mount fetch ensures data is ready before the user switches tabs; the tab-activation fetch ensures freshness.
+  - `addSuggestion` reuses the existing `actionLoading` state pattern (keyed by `[id + 'request']`) for consistency with the rest of FriendsView.
+- Lint clean (0 errors / 0 warnings). Dev server 200 on `/`. `GET /api/friends/suggestions` 200 confirmed in dev.log. Emerald/teal brand preserved. No backend/realtime/API changes.
+
+---
+Task ID: 13-chat-features
+Agent: full-stack-developer (Chat star/disappearing/wallpaper)
+Task: Surgically extended ChatView.tsx with message star/favorite, disappearing messages, and chat wallpaper customization — plus a starred-messages viewer. All additive; preserved reactions/pin-mute/search/voice-notes/delete-forward/deleted-placeholder/forwarded-indicator from rounds 1-2.
+
+Work Log:
+- Read worklog.md (esp. Task 13-backend entry) + the full ChatView.tsx (~2005 lines) to map existing Message interface, normalizeMessage, MessageBubble action menu, ChatRoom header + scrollRef div, and existing patterns (optimistic state, useCallback handlers, dialog/sheet shadcn usage).
+- Verified backend contracts by reading the actual route files: `POST/DELETE /api/messages/[id]/star`, `GET /api/messages/starred`, `GET/POST /api/messages/preferences` (accepts `disappearing: OFF|24H|7D` + `wallpaper: string|null`). Confirmed shadcn `Sheet`, `RadioGroup`, `Label` components exist.
+- Imports: added `Sheet, SheetContent, SheetHeader, SheetTitle` from `@/components/ui/sheet`; `RadioGroup, RadioGroupItem` from `@/components/ui/radio-group`; `Label` from `@/components/ui/label`; added `SectionTitle` to the existing `@/components/fc/ui` import; added `Star, MoreVertical, Timer` to the lucide-react import block.
+- Message interface + normalizeMessage: added `starred?: boolean` and `expiresAt?: string | null`; mapped as `starred: !!raw.starred`, `expiresAt: raw.expiresAt ?? null`.
+- Star in message action menu: added `onStar: (msg: Message) => void` prop to MessageBubble; inserted a new "Star"/"Unstar" button between Forward and Copy (with Star icon that fills primary when already starred). When tapped → calls onStar(msg) which triggers `toggleStar` in ChatRoom (optimistic local flip + POST/DELETE `/api/messages/[id]/star` + toast + revert-on-error).
+- Starred bubble indicator: when `msg.starred` is true, renders a small badge at top-right of the bubble (`absolute -top-1.5 -right-1.5`, `bg-card` chip with `ring-1 ring-border`, containing `Star size={11} className="fill-primary text-primary"`).
+- ChatRoom state: added `settingsOpen`, `starredDialogOpen`, `disappearing` ('OFF'|'24H'|'7D'), `wallpaper` (string|null). New effect loads preferences from `GET /api/messages/preferences` (filtered by peerId) on peerId change.
+- Header: restructured so the MoreVertical button is always visible (for both direct + group modes); direct-mode Search/Phone/Video buttons remain. Added a small primary-tinted "24h"/"7d" pill with Timer icon + `title="Disappearing in 24h"` tooltip in the header status row when disappearing is active.
+- Wallpaper: applied to the messages scroll area (`div ref={scrollRef}`) via inline `style={{ background: wallpaper }}` when set; default Tailwind background otherwise. Bubble text remains readable because `fc-bubble-me`/`fc-bubble-them` have their own background colors.
+- ChatSettingsSheet component: bottom Sheet (`side="bottom"`, `rounded-t-2xl`, `mx-auto max-w-2xl`) with three sections — Starred (button → opens StarredMessagesDialog), Disappearing messages (RadioGroup with Off/24h/7d options as styled Label cards with Timer icon + description), Wallpaper (4-col grid of 8 preset swatches with `aspect-[2/5]`, `ring-2 ring-primary` when selected, Check badge on selected). 8 presets: None/Emerald/Teal/Sand/Rose/Amber/Slate/Charcoal (NO indigo/blue, all warm/green/neutral palette).
+- StarredMessagesDialog component: Dialog with header (Star icon + "Starred messages" title); fetches `GET /api/messages/starred` on open; renders each row with UserAvatar, sender name, media emoji (📷/🎥/🎤/📄) or content text, and `timeAgo(starredAt)`; deleted messages render as italic "🚫 This message was deleted" (uses useAuth meId to check isDeletedForMe logic). Empty state: "No starred messages". Tapping a row closes the dialog.
+- `handleDisappearingChange` + `handleWallpaperChange` callbacks: optimistic state update + POST `/api/messages/preferences { peerId, disappearing | wallpaper }` + toast + revert-on-error.
+- Lint: `bun run lint` → 0 errors, 0 warnings. Dev server returns HTTP 200 on `/`. New API endpoints respond 401 without auth (correct).
+
+Stage Summary:
+- File produced: `/home/z/my-project/src/components/fc/chat/ChatView.tsx` — surgically edited (+~414 lines; 2005 → 2419 lines). Work notes: `/home/z/my-project/agent-ctx/13-chat-features-full-stack-developer.md`.
+- End-to-end browser QA (agent-browser, mobile 390×844, gateway :81, logged in as aria):
+  - Opened Bilal chat → header shows new MoreVertical button → bottom Sheet renders with "Chat settings" title + Starred/Disappearing/Wallpaper sections.
+  - Tapped "24 hours" radio → toast → header now shows primary `24h` pill with tooltip.
+  - Tapped "Emerald" wallpaper swatch → toast "Wallpaper updated" → verified messages area `background-color: rgb(240, 253, 244)` = `#f0fdf4` via getComputedStyle.
+  - Long-pressed a message bubble → action menu shows Reply/Forward/Star/Copy/Delete → tapped Star → `POST /api/messages/[id]/star 200` in dev.log.
+  - Reloaded → starred bubble shows filled-primary Star badge at top-right (verified aria-label="Starred message" count = 1).
+  - Opened Sheet → tapped "Starred messages" → Dialog opens, shows "Aria Ahmed · just now · Hey Bilal! Long time no see 🎉".
+- All pre-existing features (reactions, pin/mute, search, voice notes, delete/forward, deleted-placeholder, forwarded-indicator, call buttons) preserved — only additive changes; no existing code rewritten.
+- Lint clean (0 errors / 0 warnings). Dev server 200 on `/`. No backend/realtime/API changes.
+
+---
+Task ID: 13-frontend
+Agent: orchestrator (Z.ai Code) — scheduled 15-min review (round 3, frontend + integration)
+Task: Wire round 3 features frontend (message star, disappearing messages, chat wallpaper, friend suggestions) + integration QA.
+
+Work Log:
+- Dispatched 2 parallel subagents:
+  - Task 13-chat-features: surgically edited ChatView.tsx (+414 lines). Added `starred`+`expiresAt` to Message interface + normalizeMessage. Star/Unstar in the long-press action menu (POST/DELETE /api/messages/[id]/star) with filled-primary star badge on starred bubbles. Chat settings Sheet (MoreVertical button in header) with: Disappearing messages radio (Off/24h/7d → POST preferences), Wallpaper grid (8 presets: None/Emerald/Teal/Sand/Rose/Amber/Slate/Charcoal — no indigo/blue), Starred messages viewer dialog (GET /api/messages/starred). Timer pill in header when disappearing active. Wallpaper applied to messages scroll area via inline style.
+  - Task 13-suggestions: edited HomeView.tsx (switched "People you may know" data source from /api/users/search to /api/friends/suggestions; shows "X mutual friends" with Users icon or "Suggested for you"; "Top" badge for 3+ mutuals) + FriendsView.tsx (added 5th "Suggested" tab with richer SuggestionRow: avatar, name, @username, mutual friends, bio, location, Add button).
+- Integration QA via agent-browser (gateway 81, mobile 390x844, nextjs-portal hidden):
+  - Login as aria → Home shows "People you may know" with "Suggested for you" subtitle ✓
+  - Friends → Suggested tab renders suggestions ✓
+  - Chats → Bilal chat → Chat settings button → Sheet opens with Starred/Disappearing/Wallpaper sections ✓
+  - Set disappearing to "24 hours" → API confirms disappearing:"24H" → header shows "24h" timer pill ✓
+  - Picked Emerald wallpaper → API confirms wallpaper:"#f0fdf4" → messages area background = rgb(240,253,244) ✓
+  - Long-press message → action menu shows Star → clicked → API confirms 2 starred messages, filled-primary star badge on bubble ✓
+  - No errors. `bun run lint` clean (0 errors). Gateway 200. Realtime 200.
+
+Stage Summary:
+- Round 3 complete: 4 new features (message star/favorite, disappearing messages, friend suggestions with mutual-friends algorithm, chat wallpaper customization) all shipped + browser-verified. All additive — zero existing code/features removed.
+- New files: src/app/api/messages/[id]/star/route.ts, src/app/api/messages/starred/route.ts, src/app/api/friends/suggestions/route.ts.
+- Modified (surgical): prisma/schema.prisma (+MessageStar, +Message.expiresAt, +ChatPreference.disappearing/wallpaper), mini-services/realtime/index.ts (+disappearing expiry on send), src/app/api/messages/route.ts (+starred/expiresAt/expiry-filter), src/app/api/messages/preferences/route.ts (+disappearing/wallpaper), src/app/api/messages/conversations/route.ts (+disappearing/wallpaper), src/components/fc/chat/ChatView.tsx (+star/disappearing/wallpaper/starred-viewer/chat-settings-sheet), src/components/fc/home/HomeView.tsx (suggestions data source), src/components/fc/friends/FriendsView.tsx (+Suggested tab).
+- Lint clean, dev 200, realtime 200, all features QA'd.
+- Cumulative feature set now: auth, profiles, friends (search/request/accept/reject/remove/block/suggestions), 1:1+group chat (realtime/typing/presence/status/file-sharing/voice-notes/emoji/reactions/delete/forward/star/disappearing/wallpaper/search/pin/mute), stories, WebRTC calls, groups CRUD, notifications, settings (theme/notifications/privacy/read-receipts), dark mode.
+- Recommended next-phase features: group calls, message scheduling, chat export, last-seen granularity, message pin within chat, typing in group chats (sender-aware), file previews (PDF thumbnail), story replies, profile photo cropping/filters, call duration stats dashboard, online friends widget, message drafts, chat archive.

@@ -166,6 +166,15 @@ io.on('connection', (socket) => {
         ack?.({ ok: false, error: 'blocked' })
         return
       }
+      // Check disappearing-messages preference for this conversation (sender's pref)
+      let expiresAt: Date | null = null
+      const senderPref = await db.chatPreference.findUnique({
+        where: { userId_peerId: { userId, peerId: data.receiverId } },
+      }).catch(() => null)
+      if (senderPref && senderPref.disappearing !== 'OFF') {
+        const ttlMs = senderPref.disappearing === '24H' ? 24 * 60 * 60 * 1000 : 7 * 24 * 60 * 60 * 1000
+        expiresAt = new Date(Date.now() + ttlMs)
+      }
       const msg = await db.message.create({
         data: {
           senderId: userId,
@@ -177,6 +186,7 @@ io.on('connection', (socket) => {
           fileSize: data.fileSize,
           mimeType: data.mimeType,
           status: 'SENT',
+          expiresAt,
         },
       })
       ack?.({ ok: true, message: msg, tempId: data.tempId })
