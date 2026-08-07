@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Eye, ChevronLeft, ChevronRight, Send, MessageCircle, Loader2 } from 'lucide-react'
+import { X, Eye, ChevronLeft, ChevronRight, Send, MessageCircle, Loader2, Bookmark } from 'lucide-react'
 import { api, timeAgo } from '@/lib/api'
 import { UserAvatar } from '@/components/fc/ui'
 import { toast } from 'sonner'
@@ -17,6 +17,7 @@ export interface StoryItem {
   expiresAt: string
   viewedByMe: boolean
   viewCount: number
+  isHighlight: boolean
 }
 
 export interface StoryViewerUser {
@@ -40,6 +41,10 @@ interface StoryViewerProps {
   user: StoryViewerUser
   onClose: () => void
   onNavigate?: (userId: string) => void
+  /** Optional starting index (used when opening the viewer on a specific highlight). */
+  startIndex?: number
+  /** Notifies the parent when a story's highlight flag is toggled (so it can refresh). */
+  onHighlightChange?: (storyId: string, isHighlight: boolean) => void
 }
 
 const STORY_DURATION_MS = 5000
@@ -55,8 +60,13 @@ const STORY_DURATION_MS = 5000
  * - On viewing each story for the first time: POST /api/stories/[id]/view
  * - Keyboard: Escape to close, ArrowLeft/ArrowRight to navigate
  */
-export function StoryViewer({ stories, user, onClose }: StoryViewerProps) {
-  const [index, setIndex] = useState(0)
+export function StoryViewer({ stories, user, onClose, startIndex, onHighlightChange }: StoryViewerProps) {
+  const [index, setIndex] = useState(() => {
+    if (typeof startIndex === 'number' && startIndex >= 0 && startIndex < stories.length) {
+      return startIndex
+    }
+    return 0
+  })
   const [imgError, setImgError] = useState(false)
   const [replyText, setReplyText] = useState('')
   const [sending, setSending] = useState(false)
@@ -64,6 +74,10 @@ export function StoryViewer({ stories, user, onClose }: StoryViewerProps) {
   const [repliesOpen, setRepliesOpen] = useState(false)
   const [loadingReplies, setLoadingReplies] = useState(false)
   const [paused, setPaused] = useState(false)
+  // Local override map for the highlight flag — keeps the icon in sync immediately
+  // after a toggle, before the parent refetches the stories list.
+  const [highlightOverrides, setHighlightOverrides] = useState<Record<string, boolean>>({})
+  const [highlightBusy, setHighlightBusy] = useState(false)
   const viewedRef = useRef<Set<string>>(new Set())
   const touchStartX = useRef<number | null>(null)
   const progressBarRef = useRef<HTMLDivElement | null>(null)
@@ -247,6 +261,32 @@ export function StoryViewer({ stories, user, onClose }: StoryViewerProps) {
     }
   }, [stories, index, replyText, sending, user.isMe])
 
+  // Toggle highlight on the current story (owner only). Optimistic local update
+  // so the bookmark icon flips immediately; the parent is notified so it can
+  // refresh its stories list (the highlighted story moves between the
+  // "stories" and "highlights" buckets on the next fetch).
+  const handleToggleHighlight = useCallback(async () => {
+    const story = stories[index]
+    if (!story || highlightBusy) return
+    const next = !(highlightOverrides[story.id] ?? story.isHighlight)
+    setHighlightOverrides((prev) => ({ ...prev, [story.id]: next }))
+    setHighlightBusy(true)
+    try {
+      await api(`/api/stories/${story.id}/highlight`, {
+        method: 'POST',
+        body: JSON.stringify({ highlight: next }),
+      })
+      toast.success(next ? 'Added to highlights' : 'Removed from highlights')
+      onHighlightChange?.(story.id, next)
+    } catch (e: any) {
+      // Revert the optimistic update.
+      setHighlightOverrides((prev) => ({ ...prev, [story.id]: !next }))
+      toast.error(e?.message || 'Failed to toggle highlight')
+    } finally {
+      setHighlightBusy(false)
+    }
+  }, [stories, index, highlightOverrides, highlightBusy, onHighlightChange])
+
   if (!stories.length) {
     return null
   }
@@ -255,6 +295,7 @@ export function StoryViewer({ stories, user, onClose }: StoryViewerProps) {
   if (!current) return null
 
   const bgStyle = current.bg || 'linear-gradient(135deg, var(--color-primary), var(--color-accent))'
+  const isHighlighted = highlightOverrides[current.id] ?? current.isHighlight
 
   return (
     <motion.div
@@ -376,6 +417,28 @@ export function StoryViewer({ stories, user, onClose }: StoryViewerProps) {
           <X size={22} />
         </button>
       </div>
+
+      {/* Highlight toggle (own stories only) — sits to the left of the close button */}
+      {user.isMe && (
+        <button
+          type="button"
+          onClick={handleToggleHighlight}
+          disabled={highlightBusy}
+          aria-label={isHighlighted ? 'Remove from highlights' : 'Add to highlights'}
+          aria-pressed={isHighlighted}
+          title={isHighlighted ? 'Remove from highlights' : 'Add to highlights'}
+          className="absolute right-16 top-4 z-20 grid h-9 w-9 place-items-center rounded-full bg-black/40 text-white backdrop-blur transition hover:bg-black/60 active:scale-95 disabled:opacity-60"
+        >
+          {highlightBusy ? (
+            <Loader2 size={16} className="animate-spin" />
+          ) : (
+            <Bookmark
+              size={16}
+              className={cn(isHighlighted && 'fill-current text-primary')}
+            />
+          )}
+        </button>
+      )}
 
       {/* Side nav arrows (desktop / large screens) */}
       <button

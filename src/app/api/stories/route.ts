@@ -17,7 +17,10 @@ export async function GET() {
     friendIds.add(me.id)
 
     const stories = await db.story.findMany({
-      where: { userId: { in: Array.from(friendIds) }, expiresAt: { gt: now } },
+      where: {
+        userId: { in: Array.from(friendIds) },
+        OR: [{ expiresAt: { gt: now } }, { isHighlight: true }],
+      },
       orderBy: { createdAt: 'desc' },
       include: {
         user: { include: { profile: true } },
@@ -36,19 +39,26 @@ export async function GET() {
           photoUrl: u.profile?.photoUrl ?? null,
           isMe: u.id === me.id,
           stories: [],
+          highlights: [],
         })
       }
       const entry = byUser.get(u.id)
-      entry.stories.push({
+      const storyData = {
         id: s.id,
         type: s.type,
         content: s.content,
         bg: s.bg,
         createdAt: s.createdAt.toISOString(),
         expiresAt: s.expiresAt.toISOString(),
+        isHighlight: s.isHighlight,
         viewedByMe: s.views.some((v) => v.userId === me.id),
         viewCount: s.views.length,
-      })
+      }
+      if (s.isHighlight) {
+        entry.highlights.push(storyData)
+      } else {
+        entry.stories.push(storyData)
+      }
     }
     return json({ stories: Array.from(byUser.values()) })
   } catch (e: any) {

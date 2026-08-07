@@ -68,6 +68,9 @@ import {
   ChevronRight,
   PinOff,
   MessageSquare,
+  Camera,
+  Image as ImageIcon,
+  CornerUpLeft,
 } from 'lucide-react'
 
 // ---------------- types ----------------
@@ -135,6 +138,10 @@ interface Message {
   // pinned this message (me.id when pinned by me, otherwise null). Only one
   // pinned message per 1:1 conversation is allowed by the backend.
   pinnedBy?: string | null
+  // Round 7: id of the message this message is replying to (null when not a
+  // reply). Returned by GET /api/messages + the message:new / group:message:new
+  // socket events + sent in the message:send / group:message:send payloads.
+  replyToId?: string | null
 }
 
 interface Friend {
@@ -268,6 +275,7 @@ function normalizeMessage(raw: any): Message {
     edited: !!raw.edited,
     editedAt: raw.editedAt ?? null,
     pinnedBy: raw.pinnedBy ?? null,
+    replyToId: raw.replyToId ?? null,
   }
 }
 
@@ -329,6 +337,12 @@ function ConversationList() {
   const [globalResults, setGlobalResults] = useState<GlobalSearchResult[]>([])
   const [globalLoading, setGlobalLoading] = useState(false)
   const globalSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  // Round 7: typing-status in conversation list. Tracks which conversations
+  // currently have someone typing (peerId for 1:1, `group:${groupId}` for
+  // groups). Each entry has a 3s auto-expiry timer so a missed isTyping:false
+  // doesn't leave a stale "typing…" indicator forever.
+  const [typingConvs, setTypingConvs] = useState<Set<string>>(new Set())
+  const typingTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
   const { openChat, openGroupChat } = useApp()
   const { socket, isOnline } = useSocket()
   const { user: me } = useAuth()
@@ -418,6 +432,96 @@ function ConversationList() {
       socket.off(RT.GROUP_MESSAGE_NEW, onGroupNew as any)
     }
   }, [socket, meId, load])
+
+  // Round 7: typing-status in conversation list. Subscribe to both
+  // typing:indicator (1:1 — keyed by userId) and group:typing:indicator
+  // (keyed by `group:${groupId}`). Each "isTyping:true" event schedules a
+  // 3s auto-expiry timer so a missed isTyping:false (e.g. the peer's socket
+  // disconnected mid-typing) doesn't leave a stale "typing…" forever.
+  // Filters out the user's own id (the server already excludes the typer
+  // for group events; for 1:1 the typing:indicator is emitted to the
+  // receiver only, but the check is harmless + defensive).
+  useEffect(() => {
+    if (!socket || !meId) return
+
+    const clearTyping = (key: string) => {
+      setTypingConvs((prev) => {
+        if (!prev.has(key)) return prev
+        const next = new Set(prev)
+        next.delete(key)
+        return next
+      })
+    }
+
+    const scheduleExpiry = (key: string) => {
+      const timers = typingTimersRef.current
+      const existing = timers.get(key)
+      if (existing) clearTimeout(existing)
+      const t = setTimeout(() => {
+        timers.delete(key)
+        clearTyping(key)
+      }, 3000)
+      timers.set(key, t)
+    }
+
+    const onTyping = ({ userId, isTyping }: { userId: string; isTyping: boolean }) => {
+      if (!userId || userId === meId) return
+      if (isTyping) {
+        setTypingConvs((prev) => {
+          if (prev.has(userId)) return prev
+          const next = new Set(prev)
+          next.add(userId)
+          return next
+        })
+        scheduleExpiry(userId)
+      } else {
+        const t = typingTimersRef.current.get(userId)
+        if (t) {
+          clearTimeout(t)
+          typingTimersRef.current.delete(userId)
+        }
+        clearTyping(userId)
+      }
+    }
+
+    const onGroupTyping = ({
+      groupId,
+      userId,
+      isTyping,
+    }: {
+      groupId: string
+      userId: string
+      isTyping: boolean
+    }) => {
+      if (!groupId || userId === meId) return
+      const key = `group:${groupId}`
+      if (isTyping) {
+        setTypingConvs((prev) => {
+          if (prev.has(key)) return prev
+          const next = new Set(prev)
+          next.add(key)
+          return next
+        })
+        scheduleExpiry(key)
+      } else {
+        const t = typingTimersRef.current.get(key)
+        if (t) {
+          clearTimeout(t)
+          typingTimersRef.current.delete(key)
+        }
+        clearTyping(key)
+      }
+    }
+
+    socket.on(RT.TYPING_INDICATOR, onTyping)
+    socket.on(RT.GROUP_TYPING_INDICATOR, onGroupTyping)
+    return () => {
+      socket.off(RT.TYPING_INDICATOR, onTyping)
+      socket.off(RT.GROUP_TYPING_INDICATOR, onGroupTyping)
+      typingTimersRef.current.forEach((t) => clearTimeout(t))
+      typingTimersRef.current.clear()
+    }
+  }, [socket, meId])
 
   // Round 6: global message search — debounced 400ms after the user stops
   // typing. Fires GET /api/messages/search?q=QUERY and renders the results in
@@ -692,6 +796,7 @@ function ConversationList() {
                   online={isOnline(c.id)}
                   meId={meId}
                   draftPreview={drafts.get(c.id)}
+                  isTyping={typingConvs.has(c.id)}
                   onOpen={() => openChat(c.id)}
                   onTogglePin={async () => {
                     try {
@@ -731,6 +836,7 @@ function ConversationList() {
                           online={isOnline(c.id)}
                           meId={meId}
                           draftPreview={drafts.get(c.id)}
+                          isTyping={typingConvs.has(c.id)}
                           archived
                           onOpen={() => openChat(c.id)}
                           onTogglePin={async () => {
@@ -772,7 +878,12 @@ function ConversationList() {
           ) : (
             <div className="space-y-0.5">
               {filteredGroups.map((g) => (
-                <GroupRow key={g.id} group={g} onOpen={() => openGroupChat(g.id)} />
+                <GroupRow
+                  key={g.id}
+                  group={g}
+                  isTyping={typingConvs.has(`group:${g.id}`)}
+                  onOpen={() => openGroupChat(g.id)}
+                />
               ))}
             </div>
           )}
@@ -788,6 +899,7 @@ function ConversationRow({
   online,
   meId,
   draftPreview,
+  isTyping,
   archived,
   onOpen,
   onTogglePin,
@@ -798,6 +910,7 @@ function ConversationRow({
   online: boolean
   meId?: string
   draftPreview?: string
+  isTyping?: boolean
   archived?: boolean
   onOpen: () => void
   onTogglePin: () => void
@@ -849,7 +962,25 @@ function ConversationRow({
               </span>
             )}
           </div>
-          {draftPreview ? (
+          {isTyping ? (
+            // Round 7: typing-status takes priority over both draft +
+            // last-message preview — it's the most time-sensitive info
+            // ("the peer is about to send a message"). Unread badge still
+            // shows alongside.
+            <div className="mt-0.5 flex items-center justify-between gap-2">
+              <span className="truncate text-xs italic text-primary">typing…</span>
+              {conversation.unread > 0 && (
+                <span
+                  className={cn(
+                    'grid h-5 min-w-5 shrink-0 place-items-center rounded-full px-1.5 text-[10px] font-bold',
+                    muted ? 'bg-muted text-muted-foreground' : 'bg-primary text-primary-foreground'
+                  )}
+                >
+                  {conversation.unread > 9 ? '9+' : conversation.unread}
+                </span>
+              )}
+            </div>
+          ) : draftPreview ? (
             // Draft indicator takes priority over the last-message preview so
             // the user sees their unsaved text at a glance.
             <div className="mt-0.5 flex items-center justify-between gap-2">
@@ -922,7 +1053,15 @@ function ConversationRow({
   )
 }
 
-function GroupRow({ group, onOpen }: { group: GroupLite; onOpen: () => void }) {
+function GroupRow({
+  group,
+  isTyping,
+  onOpen,
+}: {
+  group: GroupLite
+  isTyping?: boolean
+  onOpen: () => void
+}) {
   return (
     <button
       onClick={onOpen}
@@ -942,10 +1081,16 @@ function GroupRow({ group, onOpen }: { group: GroupLite; onOpen: () => void }) {
           <span className="truncate text-sm font-semibold">{group.name}</span>
           <span className="shrink-0 text-[10px] text-muted-foreground">{timeAgo(group.createdAt)}</span>
         </div>
-        <div className="truncate text-xs text-muted-foreground">
-          {group.memberCount} {group.memberCount === 1 ? 'member' : 'members'}
-          {group.description ? ` · ${group.description}` : ''}
-        </div>
+        {isTyping ? (
+          // Round 7: someone in this group is typing — show "Someone is
+          // typing…" in place of the member-count subtitle.
+          <div className="truncate text-xs italic text-primary">Someone is typing…</div>
+        ) : (
+          <div className="truncate text-xs text-muted-foreground">
+            {group.memberCount} {group.memberCount === 1 ? 'member' : 'members'}
+            {group.description ? ` · ${group.description}` : ''}
+          </div>
+        )}
       </div>
     </button>
   )
@@ -991,6 +1136,12 @@ function ChatRoom({
   const [deleteTarget, setDeleteTarget] = useState<Message | null>(null)
   const [forwardTarget, setForwardTarget] = useState<Message | null>(null)
   const [editTarget, setEditTarget] = useState<Message | null>(null)
+  // Round 7: reply-with-quote. When set, a reply preview bar renders above
+  // the input bar (sender name + truncated content + X to cancel) and the
+  // next sent message includes `replyToId: replyTo.id`. Cleared on send,
+  // on X-tap, and on peerId-change (so a stale reply target from a previous
+  // chat doesn't bleed across).
+  const [replyTo, setReplyTo] = useState<Message | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [starredDialogOpen, setStarredDialogOpen] = useState(false)
   const [disappearing, setDisappearing] = useState<'OFF' | '24H' | '7D'>('OFF')
@@ -1055,6 +1206,8 @@ function ChatRoom({
     // Reset group typing state for the new conversation (so a stale "X is
     // typing…" indicator doesn't bleed across chats when switching rooms).
     setGroupTypingUsers(new Set())
+    // Round 7: clear any in-progress reply target when switching rooms.
+    setReplyTo(null)
     // Reset the input for the new conversation; the draft (if any) is restored
     // below.
     setText('')
@@ -1417,9 +1570,10 @@ function ChatRoom({
     [socket, meId, me]
   )
 
-  // ---- reply (inserts a simple @reply prefix into the input) ----
+  // ---- reply (set the message being replied to — shows a preview bar above
+  // the input + the next send includes replyToId in the socket payload) ----
   const handleReply = useCallback((msg: Message) => {
-    setText((t) => (t.startsWith('@reply') ? t : `@reply ${t}`))
+    setReplyTo(msg)
   }, [])
 
   // ---- delete message (for me / for everyone) ----
@@ -1639,6 +1793,34 @@ function ChatRoom({
     [peerId, wallpaper]
   )
 
+  // ---- upload a custom wallpaper image and apply it ----
+  const handleCustomWallpaperUpload = useCallback(
+    async (file: File) => {
+      if (!file.type.startsWith('image/')) {
+        toast.error('Please choose an image file')
+        return
+      }
+      // Optimistic: leave current wallpaper untouched until upload + POST succeed.
+      const prev = wallpaper
+      try {
+        const { file: uploaded } = await uploadFile(file)
+        // Single-quote the url so special chars in the URL don't break the CSS value.
+        const value = `url('${uploaded.url}')`
+        setWallpaper(value)
+        await api('/api/messages/preferences', {
+          method: 'POST',
+          body: JSON.stringify({ peerId, wallpaper: value }),
+        })
+        toast.success('Custom wallpaper set')
+      } catch (e: any) {
+        setWallpaper(prev)
+        toast.error(e?.message || 'Failed to upload wallpaper')
+        throw e
+      }
+    },
+    [peerId, wallpaper]
+  )
+
   // ---- scroll handling + infinite scroll up ----
   const loadOlder = useCallback(async () => {
     if (!oldestTsRef.current) return
@@ -1702,6 +1884,9 @@ function ChatRoom({
         mimeType: partial.mimeType ?? null,
         status: 'SENDING',
         createdAt: new Date().toISOString(),
+        // Round 7: mirror the reply target on the optimistic bubble so the
+        // reply quote card renders immediately (before the server ack).
+        replyToId: replyTo?.id ?? null,
       }
       setMessages((prev) => [...prev, optimistic])
       atBottomRef.current = true
@@ -1716,6 +1901,8 @@ function ChatRoom({
         mimeType: partial.mimeType ?? undefined,
         ...(mode === 'direct' ? { receiverId: peerId } : { groupId: peerId }),
       }
+      // Round 7: include replyToId when the user is replying to a message.
+      if (replyTo) payload.replyToId = replyTo.id
       const event = mode === 'direct' ? RT.MESSAGE_SEND : RT.GROUP_MESSAGE_SEND
       socket.emit(event, payload, (ack: any) => {
         if (ack?.ok && ack.message) {
@@ -1734,8 +1921,12 @@ function ChatRoom({
           toast.error(ack?.error || 'Failed to send message')
         }
       })
+      // Round 7: clear the reply target after the send has been initiated
+      // (the optimistic bubble already carries replyToId so the quote card
+      // stays visible; we don't need to wait for the server ack).
+      setReplyTo(null)
     },
-    [socket, meId, me, mode, peerId]
+    [socket, meId, me, mode, peerId, replyTo]
   )
 
   const sendText = useCallback(() => {
@@ -2139,6 +2330,14 @@ function ChatRoom({
                 const prev = messages[idx - 1]
                 const showSender =
                   mode === 'group' && !mine && (idx === 0 || prev?.senderId !== m.senderId)
+                // Round 7: resolve the replied-to message (if any) from the
+                // local messages array so the bubble can render a quote card.
+                // Falls back to null when the original isn't loaded (e.g.
+                // older than the current page) — the bubble shows "Original
+                // message" placeholder in that case.
+                const replyToMessage = m.replyToId
+                  ? messages.find((rm) => rm.id === m.replyToId) || null
+                  : null
                 return (
                   <div key={m.id} data-msg-id={m.id}>
                     <MessageBubble
@@ -2156,6 +2355,9 @@ function ChatRoom({
                       onStar={toggleStar}
                       onEdit={(msg) => setEditTarget(msg)}
                       onPin={togglePin}
+                      replyToMessage={replyToMessage}
+                      replyPeerName={mode === 'direct' ? peerInfo?.name : undefined}
+                      onJumpToMessage={scrollToMessage}
                     />
                   </div>
                 )
@@ -2194,6 +2396,49 @@ function ChatRoom({
           </>
         )}
       </div>
+
+      {/* Round 7: reply preview bar — shown above the input bar when the user
+          is composing a reply. Shows the sender name + truncated content of
+          the message being replied to + an X to cancel. Tapping the bar
+          (minus the X) scrolls the messages list to the replied-to bubble
+          (matches WhatsApp's UX). */}
+      {replyTo && (
+        <div className="mx-2 mb-1 flex items-center gap-2 rounded-lg border-l-2 border-primary bg-muted/60 px-3 py-2">
+          <CornerUpLeft size={16} className="shrink-0 text-primary" />
+          <button
+            type="button"
+            onClick={() => scrollToMessage(replyTo.id)}
+            className="flex min-w-0 flex-1 flex-col text-left"
+            aria-label="Jump to message being replied to"
+          >
+            <span className="truncate text-xs font-semibold text-primary">
+              {replyTo.senderId === meId
+                ? 'You'
+                : replyTo.senderName ||
+                  (mode === 'direct' ? peerInfo?.name : null) ||
+                  'Unknown'}
+            </span>
+            <span className="truncate text-xs text-muted-foreground">
+              {replyTo.content ||
+                (replyTo.type === 'image'
+                  ? '📷 Photo'
+                  : replyTo.type === 'video'
+                    ? '🎥 Video'
+                    : replyTo.type === 'audio'
+                      ? '🎤 Audio'
+                      : replyTo.fileName || '📄 Document')}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setReplyTo(null)}
+            className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-foreground"
+            aria-label="Cancel reply"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
 
       {/* input bar */}
       <div className="border-t border-border bg-background p-2 fc-safe-bottom">
@@ -2320,6 +2565,7 @@ function ChatRoom({
         wallpaper={wallpaper}
         onDisappearingChange={handleDisappearingChange}
         onWallpaperChange={handleWallpaperChange}
+        onCustomWallpaperUpload={handleCustomWallpaperUpload}
         onOpenStarred={() => setStarredDialogOpen(true)}
       />
 
@@ -2407,6 +2653,9 @@ function MessageBubble({
   onStar,
   onEdit,
   onPin,
+  replyToMessage,
+  replyPeerName,
+  onJumpToMessage,
 }: {
   msg: Message
   mine: boolean
@@ -2422,6 +2671,12 @@ function MessageBubble({
   onStar: (msg: Message) => void
   onEdit: (msg: Message) => void
   onPin?: (msg: Message) => void
+  // Round 7: replied-to message (resolved from the local messages array by
+  // the parent). null when the message has no replyToId OR the original
+  // isn't loaded — in the latter case the quote card shows a placeholder.
+  replyToMessage?: Message | null
+  replyPeerName?: string
+  onJumpToMessage?: (msgId: string) => void
 }) {
   const bubbleClass = mine ? 'fc-bubble-me' : 'fc-bubble-them'
   const [menuOpen, setMenuOpen] = useState(false)
@@ -2556,6 +2811,50 @@ function MessageBubble({
             >
               <Star size={11} className="fill-primary text-primary" />
             </span>
+          )}
+          {/* Round 7: reply-with-quote card at the top of the bubble. Shows
+              the replied-to message's sender + truncated content. Tappable
+              to scroll to the original (uses the parent's scrollToMessage
+              helper, exposed via onJumpToMessage). Falls back to "Original
+              message" when the original isn't in the local messages array
+              (e.g. older than the loaded page) — tap is a no-op in that
+              case. If the original was deleted-for-everyone, we mirror the
+              "🚫 This message was deleted" placeholder. */}
+          {msg.replyToId && (
+            <button
+              type="button"
+              onClick={() => {
+                if (replyToMessage && onJumpToMessage) onJumpToMessage(replyToMessage.id)
+              }}
+              className="mb-1 w-full rounded-r-md border-l-2 border-primary/50 bg-black/5 px-2 py-1 text-left transition hover:bg-black/10 dark:bg-white/5 dark:hover:bg-white/10"
+              aria-label={
+                replyToMessage ? 'Jump to original message' : 'Original message not loaded'
+              }
+            >
+              <div className="text-[11px] font-semibold text-primary">
+                {replyToMessage
+                  ? replyToMessage.senderId === meId
+                    ? 'You'
+                    : replyToMessage.senderName ||
+                      (!isGroup ? replyPeerName : null) ||
+                      'Unknown'
+                  : 'Unknown'}
+              </div>
+              <div className="truncate text-[11px] opacity-70">
+                {replyToMessage
+                  ? isDeletedForMe(replyToMessage, meId)
+                    ? '🚫 This message was deleted'
+                    : replyToMessage.content ||
+                      (replyToMessage.type === 'image'
+                        ? '📷 Photo'
+                        : replyToMessage.type === 'video'
+                          ? '🎥 Video'
+                          : replyToMessage.type === 'audio'
+                            ? '🎤 Audio'
+                            : replyToMessage.fileName || '📄 Document')
+                  : 'Original message'}
+              </div>
+            </button>
           )}
           {msg.type === 'text' && (
             <>
@@ -2978,6 +3277,7 @@ function ChatSettingsSheet({
   wallpaper,
   onDisappearingChange,
   onWallpaperChange,
+  onCustomWallpaperUpload,
   onOpenStarred,
 }: {
   open: boolean
@@ -2986,6 +3286,7 @@ function ChatSettingsSheet({
   wallpaper: string | null
   onDisappearingChange: (v: 'OFF' | '24H' | '7D') => void
   onWallpaperChange: (v: string) => void
+  onCustomWallpaperUpload?: (file: File) => Promise<void>
   onOpenStarred: () => void
 }) {
   const disappearingOptions: { value: 'OFF' | '24H' | '7D'; label: string; description: string }[] = [
@@ -2993,6 +3294,29 @@ function ChatSettingsSheet({
     { value: '24H', label: '24 hours', description: 'Messages vanish after a day' },
     { value: '7D', label: '7 days', description: 'Messages vanish after a week' },
   ]
+
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  // True when the active wallpaper is a custom-uploaded image (url('...') value).
+  const isCustomWallpaper = !!wallpaper && /^url\(/i.test(wallpaper)
+
+  const handleCustomPick = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    // Always clear the input value so the same file can be re-selected later.
+    if (fileInputRef.current) fileInputRef.current.value = ''
+    if (!file) return
+    if (!onCustomWallpaperUpload) return
+    setUploading(true)
+    onCustomWallpaperUpload(file)
+      .then(() => {
+        // Close the sheet on success — wallpaper is already applied to the chat.
+        onOpenChange(false)
+      })
+      .catch(() => {
+        /* error toast already shown by the parent handler */
+      })
+      .finally(() => setUploading(false))
+  }
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -3093,6 +3417,47 @@ function ChatSettingsSheet({
                   </button>
                 )
               })}
+
+              {/* Custom wallpaper upload tile */}
+              <button
+                type="button"
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading || !onCustomWallpaperUpload}
+                aria-label="Upload custom wallpaper"
+                aria-pressed={isCustomWallpaper}
+                title="Upload custom wallpaper"
+                className={cn(
+                  'relative aspect-[2/5] rounded-xl bg-muted ring-2 transition',
+                  isCustomWallpaper
+                    ? 'ring-primary'
+                    : 'ring-transparent hover:ring-border',
+                  (uploading || !onCustomWallpaperUpload) && 'cursor-not-allowed opacity-70'
+                )}
+              >
+                <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 px-1 text-center">
+                  {uploading ? (
+                    <Loader2 size={16} className="animate-spin text-primary" />
+                  ) : (
+                    <ImageIcon size={16} className="text-muted-foreground" />
+                  )}
+                  <span className="text-[9px] font-medium leading-tight text-muted-foreground">
+                    {uploading ? 'Uploading…' : 'Custom'}
+                  </span>
+                </div>
+                {isCustomWallpaper && (
+                  <span className="absolute right-1 top-1 grid h-4 w-4 place-items-center rounded-full bg-primary text-primary-foreground shadow-sm">
+                    <Check size={10} />
+                  </span>
+                )}
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleCustomPick}
+                disabled={uploading}
+              />
             </div>
           </section>
         </div>

@@ -25,6 +25,7 @@ interface SendMsgPayload {
   fileName?: string
   fileSize?: number
   mimeType?: string
+  replyToId?: string
 }
 interface GroupSendPayload {
   tempId?: string
@@ -35,6 +36,7 @@ interface GroupSendPayload {
   fileName?: string
   fileSize?: number
   mimeType?: string
+  replyToId?: string
 }
 
 const online = new Map<string, Set<string>>() // userId -> set(socketIds)
@@ -187,6 +189,7 @@ io.on('connection', (socket) => {
           mimeType: data.mimeType,
           status: 'SENT',
           expiresAt,
+          replyToId: data.replyToId || null,
         },
       })
       ack?.({ ok: true, message: msg, tempId: data.tempId })
@@ -378,6 +381,7 @@ io.on('connection', (socket) => {
           fileSize: data.fileSize,
           mimeType: data.mimeType,
           status: 'SENT',
+          replyToId: data.replyToId || null,
         },
         include: { sender: true },
       })

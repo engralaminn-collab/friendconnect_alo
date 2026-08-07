@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { api, uploadFile } from '@/lib/api'
 import { useAuth } from '@/hooks/use-auth'
-import { UserAvatar } from '@/components/fc/ui'
+import { UserAvatar, SectionTitle } from '@/components/fc/ui'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -16,7 +16,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
-import { Plus, Camera, Type, Loader2, ImageIcon } from 'lucide-react'
+import { Plus, Camera, Type, Loader2, ImageIcon, Bookmark } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { StoryViewer, type StoryItem, type StoryViewerUser } from './StoryViewer'
@@ -28,6 +28,7 @@ interface StoryUser {
   photoUrl: string | null
   isMe: boolean
   stories: StoryItem[]
+  highlights: StoryItem[]
 }
 
 // Curated background swatches for text stories (no indigo/blue)
@@ -48,7 +49,14 @@ export function StoriesBar() {
   const { user } = useAuth()
   const [groups, setGroups] = useState<StoryUser[]>([])
   const [loading, setLoading] = useState(true)
-  const [viewerUser, setViewerUser] = useState<StoryUser | null>(null)
+  // Viewer state — `list` selects whether the viewer shows the user's active
+  // stories or their highlights. `startIndex` lets us open on a specific
+  // highlight when one is tapped.
+  const [viewer, setViewer] = useState<{
+    user: StoryUser
+    list: 'stories' | 'highlights'
+    startIndex?: number
+  } | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
 
   const load = useCallback(async () => {
@@ -83,18 +91,36 @@ export function StoriesBar() {
       photoUrl: user.profile?.photoUrl ?? null,
       isMe: true,
       stories: [],
+      highlights: [],
     }
   })()
 
-  const ordered = myGroup ? [myGroup, ...groups.filter((g) => !g.isMe)] : groups
+  // Main stories row — only show users that have at least one active story, or
+  // the current user (so they can always add a story). Friends with only
+  // highlights appear exclusively in the highlights section below.
+  const ordered = (myGroup ? [myGroup, ...groups.filter((g) => !g.isMe)] : groups).filter(
+    (g) => g.isMe || g.stories.length > 0
+  )
   const hasAny = groups.length > 0
+
+  // Flatten all highlights across users (me first, then friends) for the
+  // highlights row. Each entry carries a reference to its owning user so we
+  // can open the viewer on that user's highlights array.
+  const highlightEntries = (myGroup ? [myGroup, ...groups.filter((g) => !g.isMe)] : groups)
+    .filter((g) => g.highlights.length > 0)
+    .flatMap((g) => g.highlights.map((h) => ({ user: g, story: h })))
 
   const openViewerFor = (g: StoryUser) => {
     if (g.stories.length === 0) {
       setCreateOpen(true)
       return
     }
-    setViewerUser(g)
+    setViewer({ user: g, list: 'stories' })
+  }
+
+  const openHighlightAt = (g: StoryUser, storyId: string) => {
+    const startIndex = Math.max(0, g.highlights.findIndex((h) => h.id === storyId))
+    setViewer({ user: g, list: 'highlights', startIndex })
   }
 
   // Loading skeleton
@@ -201,15 +227,50 @@ export function StoriesBar() {
         })}
       </div>
 
+      {/* Highlights section — saved stories from me + friends that don't expire */}
+      {highlightEntries.length > 0 && (
+        <section className="mt-3">
+          <SectionTitle>HIGHLIGHTS</SectionTitle>
+          <div className="fc-no-scroll mt-2 flex gap-3 overflow-x-auto pb-1">
+            {highlightEntries.map(({ user: g, story }) => (
+              <button
+                key={story.id}
+                type="button"
+                onClick={() => openHighlightAt(g, story.id)}
+                className="flex w-[48px] flex-shrink-0 flex-col items-center gap-1"
+                aria-label={`Highlight from ${g.isMe ? 'you' : g.name}`}
+                title={g.isMe ? 'Your highlight' : `${g.name}'s highlight`}
+              >
+                <div className="relative">
+                  <HighlightThumbnail story={story} />
+                  <span className="absolute -bottom-0.5 -right-0.5 grid h-4 w-4 place-items-center rounded-full border-2 border-background bg-primary text-primary-foreground">
+                    <Bookmark size={9} className="fill-current" />
+                  </span>
+                </div>
+                <span
+                  className="max-w-[44px] truncate text-center text-[9px] text-muted-foreground"
+                  title={g.isMe ? 'You' : g.name}
+                >
+                  {g.isMe ? 'You' : (g.name || g.username || 'User').split(' ')[0]}
+                </span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* Story viewer (full-screen modal) */}
       <AnimatePresence>
-        {viewerUser && viewerUser.stories.length > 0 && (
-          <StoryViewer
-            stories={viewerUser.stories}
-            user={viewerUser as StoryViewerUser}
-            onClose={() => setViewerUser(null)}
-          />
-        )}
+        {viewer &&
+          (viewer.list === 'stories' ? viewer.user.stories : viewer.user.highlights).length > 0 && (
+            <StoryViewer
+              stories={viewer.list === 'stories' ? viewer.user.stories : viewer.user.highlights}
+              user={viewer.user as StoryViewerUser}
+              startIndex={viewer.startIndex}
+              onClose={() => setViewer(null)}
+              onHighlightChange={() => load()}
+            />
+          )}
       </AnimatePresence>
 
       <CreateStoryDialog
@@ -218,6 +279,37 @@ export function StoriesBar() {
         onCreated={load}
       />
     </>
+  )
+}
+
+/* ---------------- Highlight thumbnail ---------------- */
+
+function HighlightThumbnail({ story }: { story: StoryItem }) {
+  // Image highlights show the image as a 40px circular preview.
+  if (story.type === 'image') {
+    return (
+      <div className="h-10 w-10 overflow-hidden rounded-full ring-1 ring-border">
+        <img
+          src={story.content}
+          alt=""
+          className="h-full w-full object-cover"
+          loading="lazy"
+        />
+      </div>
+    )
+  }
+  // Text highlights show the gradient background with a tiny snippet of the text.
+  return (
+    <div
+      className="grid h-10 w-10 place-items-center rounded-full ring-1 ring-border"
+      style={{
+        background: story.bg || 'linear-gradient(135deg, var(--color-primary), var(--color-accent))',
+      }}
+    >
+      <span className="line-clamp-2 px-1 text-center text-[7px] font-semibold leading-tight text-white">
+        {story.content}
+      </span>
+    </div>
   )
 }
 

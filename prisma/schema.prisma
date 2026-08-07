@@ -112,6 +112,8 @@ model Message {
   edited    Boolean  @default(false)
   // Additive (round 6): pin message within a 1:1 chat (per-user, stores userId who pinned)
   pinnedBy  String?  
+  // Additive (round 7): reply-to (quote) — stores the id of the message being replied to
+  replyToId String?
 
   sender   User   @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
   receiver User?  @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
@@ -229,6 +231,8 @@ model Story {
   bg        String?  // background color/gradient for text stories
   createdAt DateTime @default(now())
   expiresAt DateTime // 24h after createdAt
+  // Additive (round 7): highlight — saved story that doesn't expire
+  isHighlight Boolean @default(false)
 
   user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   views  StoryView[]
