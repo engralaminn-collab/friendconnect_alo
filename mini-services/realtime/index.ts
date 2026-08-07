@@ -1,5 +1,7 @@
 import { createServer } from 'http'
 import { Server } from 'socket.io'
+import { createAdapter } from '@socket.io/redis-adapter'
+import { Redis } from 'ioredis'
 // Import PrismaClient from the main project (where prisma generate produced the client)
 import { PrismaClient } from '/home/z/my-project/node_modules/@prisma/client'
 
@@ -12,6 +14,26 @@ const io = new Server(httpServer, {
   pingTimeout: 60000,
   pingInterval: 25000,
 })
+
+// Redis adapter for multi-process Socket.IO scaling (round 14).
+// If REDIS_URL is set, connects pub/sub clients + creates the adapter.
+// Without Redis, falls back to single-process (fine for small deployments).
+const REDIS_URL = process.env.REDIS_URL || ''
+let redisConnected = false
+if (REDIS_URL) {
+  try {
+    const pubClient = new Redis(REDIS_URL, { retryStrategy: (times: number) => Math.min(times * 500, 2000) })
+    const subClient = pubClient.duplicate()
+    io.adapter(createAdapter(pubClient, subClient))
+    pubClient.on('connect', () => { redisConnected = true; console.log('[rt] Redis adapter connected') })
+    pubClient.on('error', (err: any) => console.error('[rt] Redis pub error:', err.message))
+    subClient.on('error', (err: any) => console.error('[rt] Redis sub error:', err.message))
+  } catch (e: any) {
+    console.warn('[rt] Redis adapter init failed, running single-process:', e?.message)
+  }
+} else {
+  console.log('[rt] REDIS_URL not set — running single-process (no multi-server scaling)')
+}
 
 interface AuthPayload {
   token: string
