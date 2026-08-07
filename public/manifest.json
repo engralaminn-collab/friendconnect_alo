@@ -1,0 +1,10 @@
+{
+  "name": "FriendConnect",
+  "short_name": "FriendConnect",
+  "description": "Private social platform to reconnect with old friends.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#10b981",
+  "icons": []
+}

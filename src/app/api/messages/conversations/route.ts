@@ -1,0 +1,74 @@
+import { db } from '@/lib/db'
+import { getSessionUser } from '@/lib/session'
+import { errorJson, json } from '@/lib/serialize'
+
+export async function GET() {
+  try {
+    const me = await getSessionUser()
+    if (!me) return errorJson('Unauthorized', 401)
+
+    // friends
+    const friendships = await db.friendship.findMany({
+      where: { status: 'ACCEPTED', OR: [{ requesterId: me.id }, { receiverId: me.id }] },
+      include: { requester: { include: { profile: true } }, receiver: { include: { profile: true } } },
+    })
+    const friendMap = new Map<string, { id: string; username: string; name: string; photoUrl: string | null }>()
+    for (const f of friendships) {
+      const other = f.requesterId === me.id ? f.receiver : f.requester
+      friendMap.set(other.id, {
+        id: other.id,
+        username: other.username,
+        name: other.name,
+        photoUrl: other.profile?.photoUrl ?? null,
+      })
+    }
+
+    // last message per peer
+    const msgs = await db.message.findMany({
+      where: {
+        OR: [{ senderId: me.id }, { receiverId: me.id }],
+        groupId: null,
+      },
+      orderBy: { createdAt: 'desc' },
+    })
+    const lastByPeer = new Map<string, (typeof msgs)[number]>()
+    const unreadByPeer = new Map<string, number>()
+    for (const m of msgs) {
+      const peer = m.senderId === me.id ? m.receiverId! : m.senderId
+      if (!lastByPeer.has(peer)) lastByPeer.set(peer, m)
+      if (m.receiverId === me.id && m.status !== 'SEEN') {
+        unreadByPeer.set(peer, (unreadByPeer.get(peer) || 0) + 1)
+      }
+    }
+
+    const conversations = Array.from(new Set([...friendMap.keys(), ...lastByPeer.keys()])).map((peerId) => {
+      const friend = friendMap.get(peerId)
+      const last = lastByPeer.get(peerId)
+      return {
+        id: peerId,
+        username: friend?.username ?? 'user',
+        name: friend?.name ?? 'User',
+        photoUrl: friend?.photoUrl ?? null,
+        lastMessage: last
+          ? {
+              content: last.content,
+              type: last.type,
+              senderId: last.senderId,
+              createdAt: last.createdAt.toISOString(),
+              status: last.status,
+            }
+          : null,
+        unread: unreadByPeer.get(peerId) || 0,
+      }
+    })
+    conversations.sort((a, b) => {
+      const at = a.lastMessage ? new Date(a.lastMessage.createdAt).getTime() : 0
+      const bt = b.lastMessage ? new Date(b.lastMessage.createdAt).getTime() : 0
+      return bt - at
+    })
+
+    return json({ conversations })
+  } catch (e: any) {
+    return errorJson(e?.message || 'Server error', 500)
+  }
+}

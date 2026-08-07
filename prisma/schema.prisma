@@ -1,0 +1,162 @@
+// FriendConnect - Private Social Platform schema
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  username     String   @unique
+  passwordHash String
+  name         String
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  profile       Profile?
+  sessions      Session[]
+  sentRequests  Friendship[] @relation("FriendshipRequester")
+  recvRequests  Friendship[] @relation("FriendshipReceiver")
+  sentMessages  Message[]     @relation("MessageSender")
+  recvMessages  Message[]     @relation("MessageReceiver")
+  ownedGroups   Group[]       @relation("GroupOwner")
+  memberships   GroupMember[]
+  callsInitiated Call[]      @relation("CallCaller")
+  callsReceived   Call[]      @relation("CallReceiver")
+  notifications Notification[]
+  files         File[]
+  otpCode       String?
+  otpExpiry     DateTime?
+}
+
+model Profile {
+  id                 String   @id @default(cuid())
+  userId             String   @unique
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  photoUrl           String?
+  bio                String?
+  phone              String?
+  location           String?
+  birthday           String?
+  education          String?
+  work               String?
+  // privacy: PUBLIC | FRIENDS | PRIVATE
+  profileVisibility  String   @default("PUBLIC")
+  messagePermission  String   @default("FRIENDS")
+  callPermission     String   @default("FRIENDS")
+  lastSeen           DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token     String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+}
+
+model Friendship {
+  id          String   @id @default(cuid())
+  requesterId String
+  receiverId  String
+  status      String   @default("PENDING") // PENDING | ACCEPTED | DECLINED | BLOCKED
+  blockerId   String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  requester User @relation("FriendshipRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  receiver User @relation("FriendshipReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@unique([requesterId, receiverId])
+}
+
+model Message {
+  id         String   @id @default(cuid())
+  senderId   String
+  receiverId String?
+  groupId    String?
+  content    String
+  type       String   @default("text") // text | image | video | audio | document
+  fileUrl    String?
+  fileName   String?
+  fileSize   Int?
+  mimeType   String?
+  status     String   @default("SENT") // SENDING | SENT | DELIVERED | SEEN
+  createdAt  DateTime @default(now())
+  seenAt     DateTime?
+
+  sender   User   @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver User?  @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+  group    Group? @relation(fields: [groupId], references: [id], onDelete: Cascade)
+}
+
+model Group {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  photoUrl    String?
+  createdBy   String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  owner     User         @relation("GroupOwner", fields: [createdBy], references: [id], onDelete: Cascade)
+  members   GroupMember[]
+  messages  Message[]
+}
+
+model GroupMember {
+  id        String   @id @default(cuid())
+  groupId   String
+  userId    String
+  role      String   @default("MEMBER") // OWNER | ADMIN | MEMBER
+  joinedAt  DateTime @default(now())
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+}
+
+model Call {
+  id         String    @id @default(cuid())
+  callerId   String
+  receiverId String?
+  groupId    String?
+  type       String    @default("audio") // audio | video
+  status     String    @default("ringing") // ringing | connected | ended | missed | declined
+  startedAt  DateTime  @default(now())
+  endedAt    DateTime?
+  duration   Int?
+
+  caller   User   @relation("CallCaller", fields: [callerId], references: [id], onDelete: Cascade)
+  receiver User?  @relation("CallReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type      String   // friend_request | message | call | group | system
+  title     String
+  body      String
+  data      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+}
+
+model File {
+  id        String   @id @default(cuid())
+  ownerId   String
+  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  name      String
+  mimeType  String
+  size      Int
+  url       String
+  createdAt DateTime @default(now())
+}
