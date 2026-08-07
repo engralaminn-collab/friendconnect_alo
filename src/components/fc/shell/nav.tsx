@@ -6,7 +6,7 @@ import { useAuth } from '@/hooks/use-auth'
 import { useNotifications } from '@/hooks/use-notifications'
 import { FCLogo, UserAvatar } from '@/components/fc/ui'
 import { cn } from '@/lib/utils'
-import { Home, Users, MessageCircle, Phone, Bell, User as UserIcon, Settings, Menu, Moon, Sun, Megaphone } from 'lucide-react'
+import { Home, Users, MessageCircle, Phone, Bell, User as UserIcon, Settings, Menu, Moon, Sun, Megaphone, Shield } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import {
   DropdownMenu,
@@ -17,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { BroadcastsView } from '@/components/fc/broadcasts/BroadcastsView'
+import { AdminView } from '@/components/fc/admin/AdminView'
 import { toast } from 'sonner'
 
 const TABS: { view: View; label: string; icon: typeof Home }[] = [
@@ -70,6 +71,8 @@ export function TopBar() {
   const { unread } = useNotifications()
   const { theme, setTheme } = useTheme()
   const [broadcastsOpen, setBroadcastsOpen] = useState(false)
+  const [adminOpen, setAdminOpen] = useState(false)
+  const isAdmin = user?.role === 'admin'
 
   return (
     <header className="fc-safe-top sticky top-0 z-30 border-b border-border bg-background/90 backdrop-blur-xl">
@@ -119,6 +122,11 @@ export function TopBar() {
               <DropdownMenuItem onClick={() => setBroadcastsOpen(true)}>
                 <Megaphone size={16} className="mr-2" /> Broadcasts
               </DropdownMenuItem>
+              {isAdmin && (
+                <DropdownMenuItem onClick={() => setAdminOpen(true)}>
+                  <Shield size={16} className="mr-2" /> Admin
+                </DropdownMenuItem>
+              )}
               <DropdownMenuItem onClick={() => setView('settings')}>
                 <Settings size={16} className="mr-2" /> Settings
               </DropdownMenuItem>
@@ -137,6 +145,7 @@ export function TopBar() {
         </div>
       </div>
       <BroadcastsView open={broadcastsOpen} onOpenChange={setBroadcastsOpen} />
+      <AdminView open={adminOpen} onOpenChange={setAdminOpen} />
     </header>
   )
 }

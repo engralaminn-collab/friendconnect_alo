@@ -16,13 +16,18 @@ export async function POST() {
       let user = await db.user.findUnique({ where: { email: d.email } })
       if (!user) {
         user = await db.user.create({
-          data: { email: d.email, username: d.username, name: d.name, passwordHash: hashPassword(d.password) },
+          data: { email: d.email, username: d.username, name: d.name, passwordHash: hashPassword(d.password), emailVerified: true },
         })
         await ensureProfile(user.id)
         await db.profile.update({
           where: { userId: user.id },
           data: { bio: d.bio, location: d.location },
         })
+      }
+      // make aria an admin + verified profile for the admin dashboard
+      if (d.username === 'aria') {
+        await db.user.update({ where: { id: user.id }, data: { role: 'admin', emailVerified: true } })
+        await db.profile.updateMany({ where: { userId: user.id }, data: { verified: 'verified' } })
       }
       ids[d.username] = user.id
       created.push({ username: d.username, email: d.email, password: d.password, name: d.name })

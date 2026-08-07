@@ -16,6 +16,14 @@ model User {
   name         String
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
+  // Additive (round 11): enterprise auth
+  emailVerified     Boolean  @default(false)
+  twoFactorSecret   String?
+  twoFactorEnabled  Boolean  @default(false)
+  twoFactorBackup   String?  // comma-sep backup codes (hashed)
+  role              String   @default("user") // user | admin
+  fileQuotaBytes    Int      @default(104857600) // 100MB default quota
+  fileUsedBytes     Int      @default(0)
 
   profile       Profile?
   sessions      Session[]
@@ -44,6 +52,7 @@ model User {
   // BroadcastMember). Additive — no existing fields changed.
   broadcastMemberships BroadcastMember[]
   reminders      MessageReminder[]
+  auditLogs      AuditLog[]
 }
 
 model Profile {
@@ -78,6 +87,11 @@ model Session {
   token     String   @unique
   expiresAt DateTime
   createdAt DateTime @default(now())
+  // Additive (round 11): device management
+  userAgent   String?  // browser/device User-Agent string
+  deviceName  String?  // parsed friendly name (e.g. "Chrome on macOS")
+  ipAddress   String?  // last known IP
+  lastActiveAt DateTime @default(now())
 }
 
 model Friendship {
@@ -370,4 +384,22 @@ model MessageReminder {
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@index([userId, notified])
+}
+
+// ---- Additive (round 11): audit log (enterprise security) ----
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?  // actor (null for system)
+  action    String   // e.g. "login", "logout", "2fa_enable", "admin_user_view"
+  resource  String?  // e.g. "user:abc123", "message:def456"
+  ip        String?
+  userAgent String?
+  meta      String?  // JSON string of extra context
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([action])
+  @@index([createdAt])
 }

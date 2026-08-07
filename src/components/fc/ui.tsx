@@ -1,5 +1,6 @@
 'use client'
 
+import { useState } from 'react'
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
 import { Check } from 'lucide-react'
 import { initials } from '@/lib/api'
@@ -65,20 +66,45 @@ export function UserAvatar({
 }
 
 export function FCLogo({ size = 40, className }: { size?: number; className?: string }) {
+  // Prefer the uploaded brand logo (/friendconnect-logo.png). If it fails to
+  // load (missing file, offline, blocked, etc.) we transparently fall back to
+  // the original SVG mark so the logo always renders.
+  const [imgFailed, setImgFailed] = useState(false)
   return (
     <div
       className={cn(
-        'relative grid place-items-center rounded-2xl bg-gradient-to-br from-primary to-primary/70 text-primary-foreground shadow-lg shadow-primary/30',
+        'relative grid place-items-center overflow-hidden rounded-2xl bg-gradient-to-br from-primary to-primary/70 text-primary-foreground shadow-lg shadow-primary/30',
         className
       )}
       style={{ width: size, height: size }}
     >
-      <svg viewBox="0 0 24 24" width={size * 0.62} height={size * 0.62} fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M17 6a3 3 0 0 1 3 3v4a3 3 0 0 1-3 3 3 3 0 0 1-3-3V9a3 3 0 0 1 3-3Z" />
-        <path d="M9 18H6a3 3 0 0 1-3-3v-1" />
-        <circle cx="6" cy="6" r="3" />
-        <path d="m9 12-1.5 1.5" />
-      </svg>
+      {!imgFailed ? (
+        <img
+          src="/friendconnect-logo.png"
+          alt="FriendConnect logo"
+          width={size}
+          height={size}
+          className="h-full w-full object-cover"
+          onError={() => setImgFailed(true)}
+        />
+      ) : (
+        <svg
+          viewBox="0 0 24 24"
+          width={size * 0.62}
+          height={size * 0.62}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M17 6a3 3 0 0 1 3 3v4a3 3 0 0 1-3 3 3 3 0 0 1-3-3V9a3 3 0 0 1 3-3Z" />
+          <path d="M9 18H6a3 3 0 0 1-3-3v-1" />
+          <circle cx="6" cy="6" r="3" />
+          <path d="m9 12-1.5 1.5" />
+        </svg>
+      )}
     </div>
   )
 }

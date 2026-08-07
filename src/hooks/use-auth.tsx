@@ -25,6 +25,10 @@ export interface AuthUser {
   email: string
   username: string
   name: string
+  role: string
+  emailVerified: boolean
+  twoFactorEnabled: boolean
+  fileQuota: { used: number; quota: number } | null
   profile: ProfileData | null
 }
 

@@ -7,6 +7,7 @@ export async function GET() {
     const user = await getSessionUser()
     if (!user) return json({ user: null }, 200)
     await ensureProfile(user.id)
+    const fullUser = await db.user.findUnique({ where: { id: user.id }, select: { emailVerified: true, twoFactorEnabled: true, role: true, fileQuotaBytes: true, fileUsedBytes: true } })
     const profile = await db.profile.findUnique({ where: { userId: user.id } })
     return json({
       user: {
@@ -14,6 +15,10 @@ export async function GET() {
         email: user.email,
         username: user.username,
         name: user.name,
+        role: fullUser?.role || 'user',
+        emailVerified: fullUser?.emailVerified ?? false,
+        twoFactorEnabled: fullUser?.twoFactorEnabled ?? false,
+        fileQuota: fullUser ? { used: fullUser.fileUsedBytes, quota: fullUser.fileQuotaBytes } : null,
         profile: profile
           ? {
               photoUrl: profile.photoUrl,

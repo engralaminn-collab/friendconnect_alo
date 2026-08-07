@@ -17,6 +17,11 @@ export const metadata: Metadata = {
   keywords: ["FriendConnect", "social", "friends", "chat", "calls", "reconnect"],
   authors: [{ name: "FriendConnect" }],
   manifest: "/manifest.json",
+  icons: {
+    icon: "/friendconnect-logo.png",
+    shortcut: "/friendconnect-logo.png",
+    apple: "/friendconnect-logo.png",
+  },
   appleWebApp: { capable: true, statusBarStyle: "default", title: "FriendConnect" },
 };
 
