@@ -31,7 +31,18 @@ export function SettingsView() {
   const { theme, setTheme } = useTheme()
   const [notifSound, setNotifSound] = useState(true)
   const [notifVibrate, setNotifVibrate] = useState(true)
-  const [readReceipts, setReadReceipts] = useState(true)
+  const [readReceipts, setReadReceipts] = useState(user?.profile?.readReceipts ?? true)
+
+  const toggleReadReceipts = async (v: boolean) => {
+    setReadReceipts(v)
+    try {
+      await api('/api/users/me', { method: 'PUT', body: JSON.stringify({ readReceipts: v }) })
+      toast.success(v ? 'Read receipts enabled' : 'Read receipts disabled')
+    } catch (e: any) {
+      setReadReceipts(!v)
+      toast.error(e.message || 'Failed to update')
+    }
+  }
 
   return (
     <div className="fc-scroll h-full overflow-y-auto pb-6">
@@ -74,7 +85,7 @@ export function SettingsView() {
       {/* Privacy */}
       <Section title="Privacy & Security">
         <Card className="divide-y divide-border border-border shadow-none">
-          <ToggleRow icon={Shield} label="Read receipts" desc="Show others when you read messages" checked={readReceipts} onChange={setReadReceipts} />
+          <ToggleRow icon={Shield} label="Read receipts" desc="Show others when you read messages" checked={readReceipts} onChange={toggleReadReceipts} />
           <button onClick={() => setView('friends')} className="flex w-full items-center gap-3 p-3 text-left hover:bg-accent/40">
             <div className="grid h-9 w-9 place-items-center rounded-lg bg-primary/10 text-primary"><Shield size={16} /></div>
             <div className="flex-1"><div className="text-sm font-medium">Blocked users</div><div className="text-xs text-muted-foreground">Manage who you've blocked</div></div>

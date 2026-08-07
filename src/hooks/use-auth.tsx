@@ -14,6 +14,7 @@ export interface ProfileData {
   profileVisibility: string
   messagePermission: string
   callPermission: string
+  readReceipts: boolean
   lastSeen: string | null
 }
 

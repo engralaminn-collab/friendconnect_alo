@@ -8,6 +8,7 @@ import { UserAvatar, EmptyState, SectionTitle } from '@/components/fc/ui'
 import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Search, Users, MessageCircle, Phone, Video, UserPlus, Sparkles, ChevronRight, Clock } from 'lucide-react'
+import { StoriesBar } from '@/components/fc/stories/StoriesBar'
 
 interface Friend {
   id: string
@@ -64,6 +65,11 @@ export function HomeView() {
 
   return (
     <div className="fc-scroll h-full overflow-y-auto pb-6">
+      {/* Stories bar */}
+      <div className="px-4 pt-4">
+        <StoriesBar />
+      </div>
+
       {/* Hero greeting */}
       <div className="relative overflow-hidden px-4 pt-5 pb-6">
         <div className="pointer-events-none absolute -right-10 -top-10 h-40 w-40 rounded-full bg-primary/15 blur-3xl" />

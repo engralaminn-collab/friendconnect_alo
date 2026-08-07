@@ -43,6 +43,8 @@ export async function GET(req: NextRequest) {
           fileSize: m.fileSize,
           mimeType: m.mimeType,
           createdAt: m.createdAt.toISOString(),
+          deletedFor: m.deletedFor,
+          forwardedFrom: m.forwardedFrom,
           reactions: m.reactions.map((r) => ({ emoji: r.emoji, userId: r.user.id, userName: r.user.name })),
         })),
       })
@@ -98,6 +100,8 @@ export async function GET(req: NextRequest) {
         mimeType: m.mimeType,
         status: m.status,
         createdAt: m.createdAt.toISOString(),
+        deletedFor: m.deletedFor,
+        forwardedFrom: m.forwardedFrom,
         reactions: m.reactions.map((r) => ({ emoji: r.emoji, userId: r.user.id, userName: r.user.name })),
       })),
     })

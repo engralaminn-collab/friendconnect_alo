@@ -32,9 +32,12 @@ export const RT = {
   GROUP_MESSAGE_SEND: 'group:message:send',
   REACTION_ADD: 'reaction:add',
   REACTION_REMOVE: 'reaction:remove',
+  MESSAGE_DELETE: 'message:delete',
+  MESSAGE_FORWARD: 'message:forward',
   // server -> client
   MESSAGE_NEW: 'message:new',
   MESSAGE_STATUS: 'message:status',
+  MESSAGE_DELETED: 'message:deleted',
   TYPING_INDICATOR: 'typing:indicator',
   PRESENCE: 'presence',
   NOTIFICATION: 'notification',

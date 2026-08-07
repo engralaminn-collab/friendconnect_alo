@@ -265,6 +265,36 @@ io.on('connection', (socket) => {
     }
   })
 
+  // ---------- Message delete (realtime propagation) ----------
+  socket.on('message:delete', async (data: { messageId: string; scope: 'me' | 'everyone' }, ack?: (r: any) => void) => {
+    if (!userId) return ack?.({ ok: false, error: 'unauth' })
+    try {
+      const msg = await db.message.findUnique({ where: { id: data.messageId } })
+      if (!msg) return ack?.({ ok: false, error: 'not found' })
+      if (data.scope === 'everyone') {
+        if (msg.senderId !== userId) return ack?.({ ok: false, error: 'forbidden' })
+        await db.message.update({
+          where: { id: data.messageId },
+          data: { deletedFor: 'everyone', content: '', fileUrl: null, fileName: null, fileSize: null, mimeType: null },
+        })
+        const payload = { messageId: data.messageId, scope: 'everyone' }
+        io.to(room(msg.senderId)).emit('message:deleted', payload)
+        if (msg.receiverId) io.to(room(msg.receiverId)).emit('message:deleted', payload)
+        if (msg.groupId) {
+          const members = await db.groupMember.findMany({ where: { groupId: msg.groupId } })
+          for (const m of members) io.to(room(m.userId)).emit('message:deleted', payload)
+        }
+      } else {
+        const existing = msg.deletedFor ? msg.deletedFor.split(',').filter(Boolean) : []
+        if (!existing.includes(userId)) existing.push(userId)
+        await db.message.update({ where: { id: data.messageId }, data: { deletedFor: existing.join(',') } })
+      }
+      ack?.({ ok: true })
+    } catch (e: any) {
+      ack?.({ ok: false, error: e?.message })
+    }
+  })
+
   socket.on('group:message:send', async (data: GroupSendPayload, ack?: (r: any) => void) => {
     if (!userId) return ack?.({ ok: false, error: 'unauth' })
     try {

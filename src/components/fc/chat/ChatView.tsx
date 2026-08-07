@@ -13,7 +13,19 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover'
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogTitle, DialogHeader, DialogFooter } from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogAction,
+  AlertDialogCancel,
+} from '@/components/ui/alert-dialog'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Button } from '@/components/ui/button'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import {
@@ -39,6 +51,9 @@ import {
   X,
   Trash2,
   Heart,
+  Forward,
+  Copy,
+  Reply,
 } from 'lucide-react'
 
 // ---------------- types ----------------
@@ -95,6 +110,8 @@ interface Message {
   status?: MessageStatus
   createdAt: string
   reactions?: Reaction[]
+  deletedFor?: string
+  forwardedFrom?: string | null
 }
 
 interface Friend {
@@ -193,7 +210,23 @@ function normalizeMessage(raw: any): Message {
     status: (raw.status ?? 'SENT') as MessageStatus,
     createdAt: toISO(raw.createdAt),
     reactions: Array.isArray(raw.reactions) ? raw.reactions.map((r: any) => ({ emoji: r.emoji, userId: r.userId, userName: r.userName })) : [],
+    deletedFor: raw.deletedFor ?? '',
+    forwardedFrom: raw.forwardedFrom ?? null,
   }
+}
+
+// A message is rendered as the "🚫 This message was deleted" placeholder when
+// it was deleted for everyone OR explicitly deleted-for-me (deletedFor is a
+// comma-separated list of user ids, or the literal 'everyone').
+function isDeletedForMe(msg: Message, meId?: string): boolean {
+  if (!msg.deletedFor) return false
+  if (msg.deletedFor === 'everyone') return true
+  if (!meId) return false
+  return msg.deletedFor
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .includes(meId)
 }
 
 function lastMessagePreview(c: Conversation, meId: string | undefined): string {
@@ -595,6 +628,8 @@ function ChatRoom({
   const [searchOpen, setSearchOpen] = useState(false)
   const [recording, setRecording] = useState(false)
   const [recordSecs, setRecordSecs] = useState(0)
+  const [deleteTarget, setDeleteTarget] = useState<Message | null>(null)
+  const [forwardTarget, setForwardTarget] = useState<Message | null>(null)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -760,11 +795,36 @@ function ChatRoom({
       )
     }
 
+    // Realtime message delete: when another participant deletes a message for
+    // everyone, the server emits message:deleted { messageId, scope:'everyone' }.
+    // We swap the local message for the "🚫 This message was deleted" placeholder.
+    const onDeleted = ({ messageId, scope }: { messageId: string; scope: string }) => {
+      if (scope !== 'everyone') return
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? {
+                ...m,
+                deletedFor: 'everyone',
+                content: '',
+                fileUrl: null,
+                fileName: null,
+                fileSize: null,
+                mimeType: null,
+                type: 'text',
+                reactions: [],
+              }
+            : m
+        )
+      )
+    }
+
     socket.on(RT.MESSAGE_NEW, onNew)
     socket.on(RT.GROUP_MESSAGE_NEW, onNew)
     socket.on(RT.MESSAGE_STATUS, onStatus)
     socket.on(RT.TYPING_INDICATOR, onTyping)
     socket.on(RT.REACTION_UPDATE, onReaction)
+    socket.on(RT.MESSAGE_DELETED, onDeleted)
 
     return () => {
       socket.off(RT.MESSAGE_NEW, onNew)
@@ -772,6 +832,7 @@ function ChatRoom({
       socket.off(RT.MESSAGE_STATUS, onStatus)
       socket.off(RT.TYPING_INDICATOR, onTyping)
       socket.off(RT.REACTION_UPDATE, onReaction)
+      socket.off(RT.MESSAGE_DELETED, onDeleted)
       if (mode === 'direct') {
         socket.emit(RT.TYPING, { receiverId: peerId, isTyping: false })
       }
@@ -801,6 +862,55 @@ function ChatRoom({
       )
     },
     [socket, meId, me]
+  )
+
+  // ---- reply (inserts a simple @reply prefix into the input) ----
+  const handleReply = useCallback((msg: Message) => {
+    setText((t) => (t.startsWith('@reply') ? t : `@reply ${t}`))
+  }, [])
+
+  // ---- delete message (for me / for everyone) ----
+  const confirmDelete = useCallback(
+    async (msg: Message, scope: 'me' | 'everyone') => {
+      setDeleteTarget(null)
+      try {
+        await api(`/api/messages/${msg.id}/delete`, {
+          method: 'POST',
+          body: JSON.stringify({ scope }),
+        })
+        if (scope === 'me') {
+          // optimistic: remove from local view immediately
+          setMessages((prev) => prev.filter((m) => m.id !== msg.id))
+          toast.success('Message deleted for you')
+        } else {
+          // tell other participants via realtime + swap local for placeholder
+          if (socket) {
+            socket.emit(RT.MESSAGE_DELETE, { messageId: msg.id, scope: 'everyone' })
+          }
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === msg.id
+                ? {
+                    ...m,
+                    deletedFor: 'everyone',
+                    content: '',
+                    fileUrl: null,
+                    fileName: null,
+                    fileSize: null,
+                    mimeType: null,
+                    type: 'text',
+                    reactions: [],
+                  }
+                : m
+            )
+          )
+          toast.success('Message deleted for everyone')
+        }
+      } catch (e: any) {
+        toast.error(e?.message || 'Failed to delete message')
+      }
+    },
+    [socket]
   )
 
   // ---- scroll handling + infinite scroll up ----
@@ -1191,6 +1301,9 @@ function ChatRoom({
                     searchQuery={searchQuery}
                     onImageClick={(url) => setImagePreview(url)}
                     onReact={toggleReaction}
+                    onReply={handleReply}
+                    onForward={(msg) => setForwardTarget(msg)}
+                    onDelete={(msg) => setDeleteTarget(msg)}
                   />
                 )
               })}
@@ -1314,6 +1427,20 @@ function ChatRoom({
           )}
         </DialogContent>
       </Dialog>
+
+      {/* forward dialog */}
+      <ForwardDialog
+        message={forwardTarget}
+        onClose={() => setForwardTarget(null)}
+      />
+
+      {/* delete confirm dialog */}
+      <DeleteConfirmDialog
+        message={deleteTarget}
+        meId={meId}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={confirmDelete}
+      />
     </div>
   )
 }
@@ -1387,6 +1514,9 @@ function MessageBubble({
   searchQuery,
   onImageClick,
   onReact,
+  onReply,
+  onForward,
+  onDelete,
 }: {
   msg: Message
   mine: boolean
@@ -1396,17 +1526,32 @@ function MessageBubble({
   searchQuery?: string
   onImageClick: (url: string) => void
   onReact: (messageId: string, emoji: string) => void
+  onReply: (msg: Message) => void
+  onForward: (msg: Message) => void
+  onDelete: (msg: Message) => void
 }) {
   const bubbleClass = mine ? 'fc-bubble-me' : 'fc-bubble-them'
   const isMedia = msg.type === 'image' || msg.type === 'video'
-  const [reactOpen, setReactOpen] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
+  const deleted = isDeletedForMe(msg, meId)
+  const forwarded = !!msg.forwardedFrom
+
   const startPress = () => {
-    pressTimer.current = setTimeout(() => setReactOpen(true), 450)
+    if (deleted) return
+    pressTimer.current = setTimeout(() => setMenuOpen(true), 450)
   }
   const cancelPress = () => {
     if (pressTimer.current) clearTimeout(pressTimer.current)
+  }
+
+  const copyContent = (text: string) => {
+    if (!text) return
+    navigator.clipboard
+      .writeText(text)
+      .then(() => toast.success('Copied to clipboard'))
+      .catch(() => toast.error('Failed to copy'))
   }
 
   // aggregate reactions: emoji -> { count, mine }
@@ -1433,6 +1578,37 @@ function MessageBubble({
     </div>
   )
 
+  // ---- deleted placeholder (WhatsApp-style) ----
+  if (deleted) {
+    return (
+      <div className={cn('flex w-full gap-2', mine ? 'justify-end' : 'justify-start')}>
+        {!mine && isGroup && (
+          <div className="mt-1 self-start">
+            <UserAvatar name={msg.senderName || 'User'} src={msg.senderPhoto || undefined} size={28} />
+          </div>
+        )}
+        <div className={cn('fc-rise flex max-w-[78%] flex-col', mine ? 'items-end' : 'items-start')}>
+          {!mine && isGroup && showSender && (
+            <span className="mb-0.5 px-1 text-xs font-semibold text-primary">
+              {msg.senderName || 'Unknown'}
+            </span>
+          )}
+          <div
+            className={cn(
+              'rounded-2xl bg-muted px-2.5 py-1.5 text-sm italic text-muted-foreground shadow-sm',
+              mine ? 'rounded-br-sm' : 'rounded-bl-sm'
+            )}
+          >
+            <p className="whitespace-pre-wrap break-words">🚫 This message was deleted</p>
+            <div className="mt-0.5 flex items-center justify-end gap-1 text-[10px] leading-none opacity-70">
+              <span>{clockTime(msg.createdAt)}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className={cn('flex w-full gap-2', mine ? 'justify-end' : 'justify-start')}>
       {!mine && isGroup && (
@@ -1445,6 +1621,11 @@ function MessageBubble({
           <span className="mb-0.5 px-1 text-xs font-semibold text-primary">
             {msg.senderName || 'Unknown'}
           </span>
+        )}
+        {forwarded && (
+          <div className="mb-0.5 flex items-center gap-0.5 px-1 text-[10px] italic text-muted-foreground">
+            <Forward size={10} /> Forwarded
+          </div>
         )}
         <div
           onPointerDown={startPress}
@@ -1514,25 +1695,53 @@ function MessageBubble({
             </>
           )}
 
-          {/* reaction picker popover */}
-          {reactOpen && (
+          {/* action menu: quick reactions row + Reply/Forward/Copy/Delete */}
+          {menuOpen && (
             <>
-              <div className="fixed inset-0 z-20" onClick={() => setReactOpen(false)} />
+              <div className="fixed inset-0 z-20" onClick={() => setMenuOpen(false)} />
               <div
                 className={cn(
-                  'absolute -top-10 z-30 flex items-center gap-0.5 rounded-full border border-border bg-popover p-1 shadow-xl fc-rise',
+                  'absolute bottom-full z-30 mb-1 w-52 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-xl fc-rise',
                   mine ? 'right-0' : 'left-0'
                 )}
               >
-                {QUICK_REACTIONS.map((e) => (
+                <div className="mb-1 grid grid-cols-6 gap-0.5 border-b border-border px-0.5 pb-1">
+                  {QUICK_REACTIONS.map((e) => (
+                    <button
+                      key={e}
+                      onClick={() => { onReact(msg.id, e); setMenuOpen(false) }}
+                      className="grid h-8 w-8 place-items-center rounded-full text-lg transition hover:scale-125 hover:bg-accent"
+                    >
+                      {e}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={() => { onReply(msg); setMenuOpen(false) }}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition hover:bg-accent"
+                >
+                  <Reply size={14} className="text-muted-foreground" /> Reply
+                </button>
+                <button
+                  onClick={() => { onForward(msg); setMenuOpen(false) }}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition hover:bg-accent"
+                >
+                  <Forward size={14} className="text-muted-foreground" /> Forward
+                </button>
+                {msg.content && (
                   <button
-                    key={e}
-                    onClick={() => { onReact(msg.id, e); setReactOpen(false) }}
-                    className="grid h-8 w-8 place-items-center rounded-full text-lg transition hover:scale-125 hover:bg-accent"
+                    onClick={() => { copyContent(msg.content); setMenuOpen(false) }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition hover:bg-accent"
                   >
-                    {e}
+                    <Copy size={14} className="text-muted-foreground" /> Copy
                   </button>
-                ))}
+                )}
+                <button
+                  onClick={() => { onDelete(msg); setMenuOpen(false) }}
+                  className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm text-destructive transition hover:bg-destructive/10"
+                >
+                  <Trash2 size={14} /> Delete
+                </button>
               </div>
             </>
           )}
@@ -1578,4 +1787,219 @@ function StatusTick({ status }: { status?: MessageStatus }) {
     return <CheckCheck size={12} className="opacity-100" />
   }
   return null
+}
+
+// ---------------- forward dialog ----------------
+function ForwardDialog({
+  message,
+  onClose,
+}: {
+  message: Message | null
+  onClose: () => void
+}) {
+  const [friends, setFriends] = useState<Friend[]>([])
+  const [groups, setGroups] = useState<GroupLite[]>([])
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [loading, setLoading] = useState(false)
+  const [sending, setSending] = useState(false)
+
+  useEffect(() => {
+    if (!message) {
+      setSelected(new Set())
+      setFriends([])
+      setGroups([])
+      return
+    }
+    setLoading(true)
+    Promise.all([
+      api<{ friends: Friend[] }>('/api/friends').catch(() => ({ friends: [] as Friend[] })),
+      api<{ groups: GroupLite[] }>('/api/groups').catch(() => ({ groups: [] as GroupLite[] })),
+    ])
+      .then(([f, g]) => {
+        setFriends(f.friends)
+        setGroups(g.groups)
+      })
+      .finally(() => setLoading(false))
+  }, [message])
+
+  const toggle = (key: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
+
+  const count = selected.size
+
+  const handleForward = async () => {
+    if (!message || count === 0) return
+    setSending(true)
+    try {
+      const targets = Array.from(selected).map((key) => {
+        const [type, id] = key.split(':')
+        return type === 'user' ? { receiverId: id } : { groupId: id }
+      })
+      const res = await api<{ forwarded: number }>('/api/messages/forward', {
+        method: 'POST',
+        body: JSON.stringify({ messageId: message.id, targets }),
+      })
+      toast.success(`Forwarded to ${res.forwarded || targets.length} ${res.forwarded === 1 ? 'chat' : 'chats'}`)
+      onClose()
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to forward')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  return (
+    <Dialog open={!!message} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md gap-0 p-0">
+        <DialogHeader className="border-b border-border px-4 py-3">
+          <DialogTitle className="text-base">Forward message</DialogTitle>
+        </DialogHeader>
+        <div className="fc-scroll max-h-[60vh] overflow-y-auto px-2 py-2">
+          {loading ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="animate-spin text-muted-foreground" size={20} />
+            </div>
+          ) : friends.length === 0 && groups.length === 0 ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              No friends or groups available to forward to.
+            </div>
+          ) : (
+            <>
+              {groups.length > 0 && (
+                <div className="mb-2">
+                  <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Groups
+                  </div>
+                  {groups.map((g) => {
+                    const key = `group:${g.id}`
+                    const checked = selected.has(key)
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => toggle(key)}
+                        className="flex w-full items-center gap-3 rounded-lg p-2 text-left transition hover:bg-accent"
+                      >
+                        <Checkbox checked={checked} onCheckedChange={() => toggle(key)} />
+                        {g.photoUrl ? (
+                          <div className="h-9 w-9 shrink-0 overflow-hidden rounded-full ring-1 ring-border">
+                            <img src={g.photoUrl} alt={g.name} className="h-full w-full object-cover" />
+                          </div>
+                        ) : (
+                          <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary/15 text-primary ring-1 ring-border">
+                            <Users size={16} />
+                          </div>
+                        )}
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium">{g.name}</div>
+                          <div className="text-[11px] text-muted-foreground">
+                            {g.memberCount} {g.memberCount === 1 ? 'member' : 'members'}
+                          </div>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+              {friends.length > 0 && (
+                <div>
+                  <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                    Friends
+                  </div>
+                  {friends.map((f) => {
+                    const key = `user:${f.id}`
+                    const checked = selected.has(key)
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => toggle(key)}
+                        className="flex w-full items-center gap-3 rounded-lg p-2 text-left transition hover:bg-accent"
+                      >
+                        <Checkbox checked={checked} onCheckedChange={() => toggle(key)} />
+                        <UserAvatar name={f.name} src={f.photoUrl} size={36} />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium">{f.name}</div>
+                          <div className="text-[11px] text-muted-foreground">@{f.username}</div>
+                        </div>
+                      </button>
+                    )
+                  })}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+        <DialogFooter className="flex-row items-center justify-between gap-2 border-t border-border px-4 py-3 sm:justify-between">
+          <span className="text-xs text-muted-foreground">
+            {count > 0 ? `${count} selected` : 'Select recipients'}
+          </span>
+          <div className="flex gap-2">
+            <Button variant="ghost" onClick={onClose} disabled={sending}>
+              Cancel
+            </Button>
+            <Button onClick={handleForward} disabled={count === 0 || sending}>
+              {sending ? <Loader2 className="animate-spin" size={14} /> : <Send size={14} />}
+              Forward to {count}
+            </Button>
+          </div>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------------- delete confirm dialog ----------------
+function DeleteConfirmDialog({
+  message,
+  meId,
+  onClose,
+  onConfirm,
+}: {
+  message: Message | null
+  meId?: string
+  onClose: () => void
+  onConfirm: (msg: Message, scope: 'me' | 'everyone') => void
+}) {
+  const canDeleteForEveryone = !!(
+    message &&
+    meId &&
+    message.senderId === meId &&
+    !isDeletedForMe(message, meId)
+  )
+
+  return (
+    <AlertDialog open={!!message} onOpenChange={(o) => !o && onClose()}>
+      <AlertDialogContent className="max-w-sm">
+        <AlertDialogHeader>
+          <AlertDialogTitle>Delete message?</AlertDialogTitle>
+          <AlertDialogDescription>
+            Choose how you want to delete this message. This action cannot be undone.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        <AlertDialogFooter className="flex-col gap-2 sm:flex-col">
+          <AlertDialogAction
+            disabled={!canDeleteForEveryone}
+            onClick={() => message && onConfirm(message, 'everyone')}
+            className="bg-destructive text-white shadow-xs hover:bg-destructive/90 disabled:opacity-40"
+          >
+            <Trash2 size={14} /> Delete for everyone
+          </AlertDialogAction>
+          <AlertDialogAction
+            onClick={() => message && onConfirm(message, 'me')}
+            className="border border-border bg-background text-foreground shadow-xs hover:bg-accent"
+          >
+            Delete for me
+          </AlertDialogAction>
+          <AlertDialogCancel className="mt-1">Cancel</AlertDialogCancel>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
+  )
 }

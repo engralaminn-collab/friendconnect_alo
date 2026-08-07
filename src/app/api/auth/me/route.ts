@@ -26,6 +26,7 @@ export async function GET() {
               profileVisibility: profile.profileVisibility,
               messagePermission: profile.messagePermission,
               callPermission: profile.callPermission,
+              readReceipts: profile.readReceipts,
               lastSeen: profile.lastSeen?.toISOString(),
             }
           : null,

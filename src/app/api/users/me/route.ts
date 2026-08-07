@@ -28,8 +28,12 @@ export async function PUT(req: NextRequest) {
         profileData[key] = body[key] === '' ? null : String(body[key])
       }
     }
+    // boolean field handled separately
+    if (typeof body.readReceipts === 'boolean') {
+      profileData.readReceipts = body.readReceipts as unknown as string
+    }
     if (Object.keys(profileData).length > 0) {
-      await db.profile.update({ where: { userId: me.id }, data: profileData })
+      await db.profile.update({ where: { userId: me.id }, data: profileData as any })
     }
 
     const updated = await db.user.findUnique({ where: { id: me.id }, include: { profile: true } })
@@ -51,6 +55,7 @@ export async function PUT(req: NextRequest) {
               profileVisibility: updated!.profile.profileVisibility,
               messagePermission: updated!.profile.messagePermission,
               callPermission: updated!.profile.callPermission,
+              readReceipts: updated!.profile.readReceipts,
               lastSeen: updated!.profile.lastSeen?.toISOString(),
             }
           : null,
