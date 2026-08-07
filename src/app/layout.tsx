@@ -26,7 +26,7 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#10b981",
+  themeColor: "#F97316",
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
@@ -34,11 +34,23 @@ export const viewport: Viewport = {
   viewportFit: "cover",
 };
 
+// Register service worker for PWA + push notifications
+const SW_SCRIPT = `
+if ('serviceWorker' in navigator) {
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/sw.js').catch(() => {});
+  });
+}
+`;
+
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" suppressHydrationWarning>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: SW_SCRIPT }} />
+      </head>
       <body className={`${geistSans.variable} antialiased bg-background text-foreground`}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange={false}>
           {children}

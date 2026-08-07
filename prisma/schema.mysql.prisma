@@ -401,3 +401,18 @@ model AuditLog {
   @@index([action])
   @@index([createdAt])
 }
+
+model PushSubscription {
+  id        String   @id @default(cuid()) @db.VarChar(128)
+  userId    String   @db.VarChar(128)
+  endpoint  String   @unique @db.Text
+  p256dh    String   @db.Text
+  auth      String   @db.Text
+  userAgent String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
