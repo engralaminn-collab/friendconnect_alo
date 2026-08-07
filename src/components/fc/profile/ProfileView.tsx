@@ -15,12 +15,12 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Slider } from '@/components/ui/slider'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Camera, MapPin, Phone, Cake, GraduationCap, Briefcase, Pencil, MessageCircle, PhoneCall, Video, UserPlus, Check, Ban, ShieldOff, ArrowLeft, Lock, Sparkles, Loader2, Crop, X } from 'lucide-react'
+import { Camera, MapPin, Phone, Cake, GraduationCap, Briefcase, Pencil, MessageCircle, PhoneCall, Video, UserPlus, Check, Ban, ShieldOff, ArrowLeft, Lock, Sparkles, Loader2, Crop, X, BadgeCheck, ShieldCheck, Clock } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
 interface ProfileResult {
-  user: { id: string; username: string; name: string; photoUrl: string | null; photoFilter: string | null; bio: string | null; phone: string | null; location: string | null; birthday: string | null; education: string | null; work: string | null; lastSeen?: string | null }
+  user: { id: string; username: string; name: string; photoUrl: string | null; photoFilter: string | null; verified: string; bio: string | null; phone: string | null; location: string | null; birthday: string | null; education: string | null; work: string | null; lastSeen?: string | null }
   relation: { isFriend: boolean; isBlocked: boolean; blockedByMe: boolean; status: string; incomingRequest: boolean; outgoingRequest: boolean }
   canMessage: boolean
   canCall: boolean
@@ -90,9 +90,14 @@ export function ProfileView() {
       <div className="relative px-4 pb-4">
         <div className="h-24 rounded-b-3xl bg-gradient-to-br from-primary/40 via-primary/20 to-accent" />
         <div className="-mt-12 flex items-end gap-4">
-          <UserAvatar name={u.name} src={u.photoUrl} size={96} online={online} filter={u.photoFilter} className="border-4 border-background" />
+          <UserAvatar name={u.name} src={u.photoUrl} size={96} online={online} filter={u.photoFilter} verified={u.verified} className="border-4 border-background" />
           <div className="pb-1">
-            <h1 className="text-xl font-bold">{u.name}</h1>
+            <h1 className="flex items-center gap-1.5 text-xl font-bold">
+              <span>{u.name}</span>
+              {u.verified === 'verified' && (
+                <BadgeCheck size={18} className="text-primary" aria-label="Verified" />
+              )}
+            </h1>
             <p className="text-sm text-muted-foreground">@{u.username}</p>
             <p
               className={online ? 'text-xs font-medium text-primary' : 'text-xs text-muted-foreground'}
@@ -174,12 +179,14 @@ function MyProfile() {
   const { setView } = useApp()
   const { isOnline } = useSocket()
   const [open, setOpen] = useState(false)
+  const [verifyOpen, setVerifyOpen] = useState(false)
   // Round 9: data URL of the image the user just picked from the camera
   // button. When set, the PhotoCropDialog opens so the user can crop a
   // square region before uploading (ensures every avatar is square).
   const [cropSrc, setCropSrc] = useState<string | null>(null)
   if (!user) return null
   const p = user.profile
+  const verified = p?.verified || 'unverified'
   const meOnline = isOnline(user.id)
   const lastActive = meOnline
     ? { label: 'online', detail: 'active now' }
@@ -200,7 +207,7 @@ function MyProfile() {
         <div className="h-24 rounded-b-3xl bg-gradient-to-br from-primary/40 via-primary/20 to-accent" />
         <div className="-mt-12 flex items-end gap-4">
           <div className="relative">
-            <UserAvatar name={user.name} src={p?.photoUrl} size={96} filter={p?.photoFilter} className="border-4 border-background" />
+            <UserAvatar name={user.name} src={p?.photoUrl} size={96} filter={p?.photoFilter} verified={verified} className="border-4 border-background" />
             <div className="absolute bottom-1 right-1 flex items-center gap-1">
               <PhotoFilterPicker user={user} refresh={refresh} />
               <label className="grid h-8 w-8 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground shadow-lg">
@@ -220,7 +227,12 @@ function MyProfile() {
             </div>
           </div>
           <div className="pb-1">
-            <h1 className="text-xl font-bold">{user.name}</h1>
+            <h1 className="flex items-center gap-1.5 text-xl font-bold">
+              <span>{user.name}</span>
+              {verified === 'verified' && (
+                <BadgeCheck size={18} className="text-primary" aria-label="Verified" />
+              )}
+            </h1>
             <p className="text-sm text-muted-foreground">@{user.username}</p>
             <p className="text-xs text-muted-foreground">{user.email}</p>
             {lastActive.label !== 'offline' && (
@@ -231,6 +243,22 @@ function MyProfile() {
                 {lastActive.label === 'online' ? 'Active now' : lastActive.detail}
               </p>
             )}
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              {verified === 'unverified' && (
+                <button
+                  type="button"
+                  onClick={() => setVerifyOpen(true)}
+                  className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-3 py-1 text-xs font-medium text-primary transition hover:bg-primary/25"
+                >
+                  <ShieldCheck size={12} /> Get verified
+                </button>
+              )}
+              {verified === 'pending' && (
+                <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-600">
+                  <Clock size={12} /> Verification pending
+                </span>
+              )}
+            </div>
           </div>
         </div>
       </div>
@@ -261,6 +289,8 @@ function MyProfile() {
       </Card>
 
       <EditProfileDialog open={open} onOpenChange={setOpen} />
+
+      <VerifyDialog open={verifyOpen} onOpenChange={setVerifyOpen} refresh={refresh} />
 
       {cropSrc && (
         <PhotoCropDialog src={cropSrc} onClose={() => setCropSrc(null)} refresh={refresh} />
@@ -358,6 +388,95 @@ function EditProfileDialog({ open, onOpenChange }: { open: boolean; onOpenChange
           </div>
           <Button disabled={saving} onClick={submit} className="rounded-xl">{saving ? 'Saving…' : 'Save changes'}</Button>
         </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+/**
+ * VerifyDialog — Round 10. Opens when the user taps "Get verified" on their
+ * own profile. Submits a verification request with an optional reason to
+ * POST /api/verify; the backend flips `verified` to "pending" and creates a
+ * system notification for review. On success we refresh the session so the
+ * profile re-renders with the "Verification pending" badge.
+ */
+function VerifyDialog({
+  open,
+  onOpenChange,
+  refresh,
+}: {
+  open: boolean
+  onOpenChange: (b: boolean) => void
+  refresh: () => Promise<AuthUser | null>
+}) {
+  const [reason, setReason] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  // Reset the textarea each time the dialog opens.
+  useEffect(() => {
+    if (open) setReason('')
+  }, [open])
+
+  const submit = async () => {
+    if (submitting) return
+    setSubmitting(true)
+    try {
+      await api('/api/verify', {
+        method: 'POST',
+        body: JSON.stringify({ reason: reason.trim() }),
+      })
+      await refresh()
+      toast.success('Verification request submitted')
+      onOpenChange(false)
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to submit request')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <ShieldCheck size={18} className="text-primary" />
+            Get verified
+          </DialogTitle>
+        </DialogHeader>
+        <div className="space-y-3">
+          <p className="text-sm text-muted-foreground">
+            Submit a verification request with a brief reason — links to your work, notable public presence, or why your account should be verified. Our team will review it shortly.
+          </p>
+          <div className="space-y-1.5">
+            <Label htmlFor="verify-reason">Reason (optional)</Label>
+            <Textarea
+              id="verify-reason"
+              rows={4}
+              value={reason}
+              onChange={(e) => setReason(e.target.value)}
+              placeholder="Why should you be verified?"
+              maxLength={500}
+            />
+            <div className="text-right text-[11px] text-muted-foreground">{reason.length}/500</div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>Cancel</Button>
+          <Button onClick={submit} disabled={submitting} className="rounded-xl">
+            {submitting ? (
+              <>
+                <Loader2 size={16} className="mr-1 animate-spin" />
+                Submitting…
+              </>
+            ) : (
+              <>
+                <ShieldCheck size={16} className="mr-1" />
+                Submit request
+              </>
+            )}
+          </Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

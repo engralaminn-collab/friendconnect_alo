@@ -43,8 +43,8 @@ export async function GET() {
 
     // chat preferences (pin/mute/disappearing/wallpaper/archived)
     const prefs = await db.chatPreference.findMany({ where: { userId: me.id } })
-    const prefMap = new Map<string, { pinned: boolean; muted: boolean; disappearing: string; wallpaper: string | null; archived: boolean }>()
-    for (const p of prefs) prefMap.set(p.peerId, { pinned: p.pinned, muted: p.muted, disappearing: p.disappearing, wallpaper: p.wallpaper, archived: p.archived })
+    const prefMap = new Map<string, { pinned: boolean; muted: boolean; disappearing: string; wallpaper: string | null; archived: boolean; folder: string | null }>()
+    for (const p of prefs) prefMap.set(p.peerId, { pinned: p.pinned, muted: p.muted, disappearing: p.disappearing, wallpaper: p.wallpaper, archived: p.archived, folder: p.folder })
 
     const conversations = Array.from(new Set([...friendMap.keys(), ...lastByPeer.keys()])).map((peerId) => {
       const friend = friendMap.get(peerId)
@@ -70,6 +70,7 @@ export async function GET() {
         disappearing: pref?.disappearing ?? 'OFF',
         wallpaper: pref?.wallpaper ?? null,
         archived: pref?.archived ?? false,
+        folder: pref?.folder ?? null,
       }
     })
     conversations.sort((a, b) => {

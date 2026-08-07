@@ -104,7 +104,7 @@ export function TopBar() {
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <button className="rounded-full ring-2 ring-transparent transition hover:ring-primary/30">
-                <UserAvatar name={user?.name || 'Me'} src={user?.profile?.photoUrl} size={34} />
+                <UserAvatar name={user?.name || 'Me'} src={user?.profile?.photoUrl} size={34} verified={user?.profile?.verified} />
               </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-52">

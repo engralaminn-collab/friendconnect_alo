@@ -38,6 +38,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
         name: user.name,
         photoUrl: profile?.photoUrl ?? null,
         photoFilter: profile?.photoFilter ?? null,
+        verified: profile?.verified ?? 'unverified',
         bio: canViewFull ? profile?.bio ?? null : null,
         phone: canViewFull ? profile?.phone ?? null : null,
         location: canViewFull ? profile?.location ?? null : null,

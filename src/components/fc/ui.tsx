@@ -1,6 +1,7 @@
 'use client'
 
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar'
+import { Check } from 'lucide-react'
 import { initials } from '@/lib/api'
 import { cn } from '@/lib/utils'
 
@@ -11,6 +12,7 @@ export function UserAvatar({
   online,
   className,
   filter,
+  verified,
 }: {
   name: string
   src?: string | null
@@ -19,9 +21,18 @@ export function UserAvatar({
   className?: string
   /** Optional CSS filter (e.g. "grayscale(1)", "sepia(0.6)") applied to the AvatarImage only. */
   filter?: string | null
+  /** Verification status: "unverified" | "pending" | "verified". When "verified",
+   * renders a small verified badge (emerald circle + white Check) at the
+   * bottom-right of the avatar. When the online dot is also shown, it shifts
+   * to the top-right corner so both indicators remain visible. */
+  verified?: string
 }) {
   // Normalize: null/undefined/''/'none' all mean "no filter".
   const activeFilter = filter && filter !== 'none' ? filter : undefined
+  const isVerified = verified === 'verified'
+  // When a verified badge occupies the bottom-right corner, move the online
+  // dot to the top-right corner so both indicators render without overlap.
+  const onlineDotPosition = isVerified ? 'absolute top-0 right-0' : 'absolute -bottom-0 -right-0'
   return (
     <div className="relative shrink-0" style={{ width: size, height: size }}>
       <Avatar style={{ width: size, height: size }} className={cn('ring-1 ring-border', className)}>
@@ -33,11 +44,21 @@ export function UserAvatar({
       {online !== undefined && (
         <span
           className={cn(
-            'absolute -bottom-0 -right-0 rounded-full border-2 border-background',
+            'rounded-full border-2 border-background',
+            onlineDotPosition,
             online ? 'fc-online-dot' : 'bg-muted-foreground'
           )}
           style={{ width: Math.max(8, size * 0.3), height: Math.max(8, size * 0.3) }}
         />
+      )}
+      {isVerified && (
+        <span
+          className="absolute -bottom-0 -right-0 grid h-4 w-4 place-items-center rounded-full bg-primary text-primary-foreground border-2 border-background"
+          aria-label="Verified"
+          title="Verified"
+        >
+          <Check size={10} strokeWidth={3} />
+        </span>
       )}
     </div>
   )

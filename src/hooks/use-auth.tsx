@@ -16,6 +16,7 @@ export interface ProfileData {
   callPermission: string
   readReceipts: boolean
   photoFilter: string | null
+  verified: string
   lastSeen: string | null
 }
 

@@ -1331,3 +1331,125 @@ Stage Summary:
 - Lint clean, dev 200, realtime 200, all features QA'd.
 - Cumulative feature set now: auth, profiles (view/edit/privacy/photo-filters/**photo-cropping**), friends (search/request/accept/reject/remove/block/suggestions/online-widget/close-friends/mute-stories), 1:1+group chat (realtime/typing/presence/granular-last-seen/status/file-sharing/voice-notes/emoji/reactions/delete/forward/star/disappearing/wallpaper/custom-wallpaper/global-search/search-within/pin-chat/mute/archive/drafts/edit/group-typing/message-pin/reply-with-quote/typing-in-conv-list/message-scheduling/**chat-export**), stories (create/view/auto-advance/replies/highlights/reactions/**views-list**), WebRTC calls (stats), groups CRUD, **broadcast lists**, notifications, settings, dark mode, file previews (PDF inline).
 - Recommended next-phase features: group calls, scheduled message delivery cron (background job), call recordings, chat backup/restore, message forward to multiple, typing indicator in group conv list, story repost, profile verification badge, message reminders, chat folders.
+
+---
+Task ID: 20-backend
+Agent: orchestrator (Z.ai Code) — scheduled 15-min review (round 10, backend)
+Task: Backend for round 10 features: message reminders, chat folders, profile verification badge, (message-forward-to-multiple uses existing forward endpoint which already accepts multiple targets).
+
+Work Log:
+- DB (additive): added `verified String @default("unverified")` to Profile (unverified|pending|verified). Added `folder String?` to ChatPreference (chat folder name). Added new `MessageReminder` model (id, userId, messageId, remindAt, createdAt, notified; @@index [userId,notified]). Added `reminders MessageReminder[]` relations to User + Message. Ran `bun run db:push` + `bun run db:generate` — success.
+- API (new routes, no existing endpoints renamed):
+  - `POST/DELETE /api/messages/[id]/remind` — set/cancel a reminder for a message (validates participation + future date).
+  - `GET /api/messages/reminders` — lists my active (not-yet-notified, future) reminders with message + peer context.
+  - `GET/POST /api/verify` — GET returns verification status; POST requests verification (sets status to pending, creates a system notification). 
+- API (modified, backward-compatible):
+  - `GET/POST /api/messages/preferences`: now accepts/returns `folder` (string or null, max 50 chars).
+  - `GET /api/messages/conversations`: now includes `folder` per conversation.
+  - `GET /api/auth/me` + `PUT /api/users/me` + response: now include `verified` string.
+  - `GET /api/users/[id]`: now includes `verified` so other users' badges render.
+- Updated `ProfileData` type in src/hooks/use-auth.tsx to include `verified: string`.
+- Note on message-forward-to-multiple: the existing `POST /api/messages/forward` endpoint (round 2) already accepts `targets: [{receiverId?|groupId?}]` as an array — it already supports forwarding to multiple recipients in one call. The frontend just needs to allow multi-select in the ForwardDialog (which it already does via checkboxes). The enhancement is frontend-only: show a "forward to multiple" summary + confirmation.
+- Restarted realtime mini-service + Next dev server. Verified: gateway 200, realtime 200, /api/messages/x/remind → 405 (POST only), /api/messages/reminders → 401, /api/verify → 401 (all need auth = correct).
+- `bun run lint` clean (0 errors).
+
+Stage Summary:
+- Backend for message reminders, chat folders, profile verification is complete. Message-forward-to-multiple is frontend-only (existing endpoint supports it). Frontend not yet wired.
+- New files: src/app/api/messages/[id]/remind/route.ts, src/app/api/messages/reminders/route.ts, src/app/api/verify/route.ts.
+- Modified: prisma/schema.prisma (+Profile.verified, +ChatPreference.folder, +MessageReminder model, +User/Message.reminders relations), src/app/api/messages/preferences/route.ts (+folder), src/app/api/messages/conversations/route.ts (+folder), src/app/api/auth/me/route.ts (+verified), src/app/api/users/me/route.ts (+verified), src/app/api/users/[id]/route.ts (+verified), src/hooks/use-auth.tsx (+verified in ProfileData).
+- Next: frontend subagents will build message reminders in ChatView action menu, chat folders in ConversationList, verification badge in ProfileView + nav avatar, and enhance the ForwardDialog multi-select summary.
+
+---
+Task ID: 20-reminders-forward
+Agent: full-stack-developer (Reminders + forward multiple)
+Task: Surgically extended `src/components/fc/chat/ChatView.tsx` (rounds 1-9 preserved) with Round 10 message-reminders UI (action-menu entry + Remind dialog + Reminders viewer) and ForwardDialog multi-select polish (search + Select all/Clear all + count badge). Frontend-only — backend contracts from Task 20-backend were already in place.
+
+Work Log:
+- Read /home/z/my-project/worklog.md end-to-end (architecture, API, hooks, styling rules, Task 20-backend entry) and inspected the existing ChatView.tsx (4203 lines) + the two new API routes (`/api/messages/[id]/remind` POST/DELETE + `/api/messages/reminders` GET) to confirm the request/response shapes.
+- Imports: added `BellRing` to the lucide-react import list (Bell + BellOff + Clock + Calendar + Search + Check + X were already imported). Added `MessageReminderLite` interface near `GlobalSearchResult`.
+- ChatRoom state: added `remindTarget: Message | null` + `remindersDialogOpen: boolean` alongside the existing dialog states (after `starredDialogOpen`, before `disappearing`) so derived vars used by downstream effects stay safe from temporal-dead-zone errors. Wired `onRemind={(msg) => setRemindTarget(msg)}` into the `<MessageBubble>` invocation. Mounted `<RemindMessageDialog message={remindTarget} onClose={...} />` + `<RemindersDialog open={remindersDialogOpen} onOpenChange={...} />` near the other dialogs. Passed `onOpenReminders={() => setRemindersDialogOpen(true)}` to `<ChatSettingsSheet>`.
+- MessageBubble: added optional `onRemind?: (msg: Message) => void` to the props type + destructuring. Inserted a new "Remind" button (BellRing icon) in the long-press action menu AFTER the Star button and BEFORE the Copy button. Available for all messages (mine + theirs, 1:1 + group) — backend validates participation.
+- ChatSettingsSheet: added `onOpenReminders: () => void` to the props type + destructuring. Added a new "Reminders" section (SectionTitle + BellRing icon button + description "View + cancel reminders you set on messages") between the Scheduled and Export sections. Tapping opens the viewer + closes the sheet (matches the Starred/Scheduled pattern).
+- RemindMessageDialog (new, max-w-md): target message preview (line-clamp-2, read-only) + datetime-local input (`min={now}`, future-only with isFuture guard + destructive hint when past) + optional note Textarea (maxLength 200, char counter). Reset on every open (defaults the time picker to one hour from now). On confirm: POST `/api/messages/[id]/remind { remindAt }` → toast `Reminder set for {time}` → close. Note is UI-only (the API contract accepts only `remindAt`).
+- RemindersDialog (new, max-w-md, viewer): fetches GET `/api/messages/reminders`, renders rows with `rounded-xl p-2 hover:bg-accent/40` — Bell icon + content (line-clamp-2, falls back to 📷/🎥/🎤/📄 for media) + peer name ("with {peerName}") + Calendar icon + `formatScheduledTime(remindAt)` + Cancel button (destructive, X icon, with spinner while in flight). Cancel calls DELETE `/api/messages/[messageId]/remind` and removes the row optimistically. Empty state shows a hint pointing to the long-press → Remind flow.
+- ForwardDialog (enhanced): added `search` state (reset on dialog close). Added a sticky search row above the list with `Search` icon input (`rounded-lg border border-border bg-background px-3 py-2 pl-9`) + clear-X button. Computed `filteredFriends` / `filteredGroups` from the query (matches name/username for friends, name/description for groups). Added a "Select all" / "Clear all" toggle next to the search input — uses `visibleKeys` (post-filter) + `allVisibleSelected`; additive on select (preserves hidden selections) and only removes visible keys on clear. Added a "No matches for '{query}'" empty state. Replaced the plain `{count} selected` text in the footer with a count badge: `inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary` (Check icon + "N selected"); reverts to muted "Select recipients" text when 0 are selected. The existing "Forward to N" confirm button + the multi-target POST are unchanged.
+- Verified: `bun run lint` → 0 errors, 0 warnings (initial run reported a stale-cache error in `src/components/fc/profile/ProfileView.tsx` from a sibling agent's task — not my file; cleared `.eslintcache` + re-ran clean). Dev server returns HTTP 200 on `/`. No backend, realtime, or API route files touched.
+- Wrote `/home/z/my-project/agent-ctx/20-reminders-forward-full-stack-developer.md` with the work record for the next agent.
+
+Stage Summary:
+- Single file surgically extended: `/home/z/my-project/src/components/fc/chat/ChatView.tsx` (~350 new lines added; existing rounds 1-9 code paths untouched).
+- New top-level components: `RemindMessageDialog`, `RemindersDialog`. New prop on `MessageBubble` (`onRemind`) + `ChatSettingsSheet` (`onOpenReminders`). New `MessageReminderLite` type.
+- Feature 1 (message reminders) fully wired end-to-end: action-menu entry → dialog → POST → toast → close; viewer → GET → list → DELETE → optimistic remove.
+- Feature 2 (forward-to-multiple polish) delivered: search filter + Select all/Clear all toggle + count badge in the footer. The core multi-forward (POST `/api/messages/forward { targets: [...] }`) was already working and is unchanged.
+- All mandatory styling honored (emerald/teal brand, max-w-md dialogs, rounded-lg bordered inputs, rounded-xl hover rows, primary-tinted count badge). No temporal-dead-zone errors (state declared before any derived var or effect that references it).
+- Lint clean, dev server 200, no backend touched. Ready for QA.
+
+---
+Task ID: 20-folders-verify
+Agent: full-stack-developer (Chat folders + verification badge)
+Task: Built two frontend features on top of the round-10 backend: (1) chat folders in ConversationList (group conversations by folder, collapsible headers, move-to-folder dialog via the existing long-press menu), and (2) profile verification badge — verified badge on UserAvatar + Get-verified dialog in MyProfile + verified badge on other-user profiles + verified badge on the TopBar avatar.
+
+Work Log:
+- Read worklog.md (architecture, API contracts, styling rules, Task 20-backend entry). Inspected existing files I had to edit (ui.tsx, nav.tsx, ProfileView.tsx, ChatView.tsx) + the backend routes (/api/verify, /api/messages/preferences, /api/messages/conversations, /api/users/[id]) to confirm the data shapes (`verified: 'unverified'|'pending'|'verified'`, `folder: string | null`) and request/response contracts.
+- ui.tsx — added optional `verified?: string` prop to UserAvatar. When `verified === 'verified'`, renders a 16px (`h-4 w-4`) emerald badge (`bg-primary text-primary-foreground border-2 border-background`) at `-bottom-0 -right-0` with a white `Check` icon (size 10, strokeWidth 3). When the online dot is also rendered, the online dot shifts to `top-0 right-0` so both indicators are visible without overlap. Added `import { Check } from 'lucide-react'`.
+- nav.tsx — passed `verified={user?.profile?.verified}` to the TopBar avatar button's UserAvatar so the current user's verified badge (if any) renders next to their name in the top nav.
+- ProfileView.tsx —
+  • Added `verified: string` to the `ProfileResult.user` type (consumed from `GET /api/users/[id]`).
+  • Added lucide imports: `BadgeCheck, ShieldCheck, Clock`.
+  • MyProfile: shows a `BadgeCheck` icon (size 18, text-primary) next to the user's name when `verified === 'verified'`; shows a "Get verified" pill button (`rounded-full bg-primary/15 text-primary px-3 py-1 text-xs`) opening a VerifyDialog when `verified === 'unverified'`; shows an amber "Verification pending" pill (`bg-amber-500/15 text-amber-600 rounded-full px-2 py-0.5 text-xs`) when `verified === 'pending'`. Also passes `verified` to the 96px UserAvatar.
+  • Other-user profile (ProfileView main): shows a `BadgeCheck` icon next to the user's name when `verified === 'verified'`; passes `verified` to the 96px UserAvatar.
+  • New `VerifyDialog` component: shadcn Dialog (`max-w-md`) with a Textarea (maxLength 500, char counter) for an optional reason + Cancel/Submit buttons. On submit, POSTs `{ reason }` to `/api/verify`, calls `refresh()` from useAuth (so `user.profile.verified` flips to `'pending'`), shows a success toast, and closes the dialog. Loading spinner (`Loader2`) on the submit button while submitting.
+- ChatView.tsx —
+  • Added `folder?: string | null` to the `Conversation` interface (matches the new backend field on `GET /api/messages/conversations`).
+  • Added lucide imports: `Folder, FolderOpen, Move`.
+  • Added `useMemo` to the React import list.
+  • ConversationList: added `collapsedFolders` state (Set<string>) + `moveTarget` state (Conversation | null). Added three memos + callbacks:
+      - `existingFolders` (useMemo): unique non-null `folder` values across active + archived conversations, sorted alphabetically. Used as quick-pick chips in the move dialog.
+      - `groupedConvs` (useMemo): groups `filteredConvs` by folder (synthetic `'All'` key for no-folder, always sorts first; alphabetical after).
+      - `hasFolders` (derived boolean): whether the user has any folders defined at all (controls whether to render the grouping UI vs. flat list).
+      - `toggleFolder` (useCallback): adds/removes a folder key from the collapsed set.
+      - `handleMoveToFolder` (useCallback): optimistically updates local conversations + archivedConvs state with the new folder, then POSTs `{ peerId, folder }` to `/api/messages/preferences` (empty string clears it); on error refetches via `load()`.
+  • Render: when `hasFolders` is true, the chats tab renders a collapsible folder section per group (header = Folder/FolderOpen/MessageCircle icon + folder name + count badge + chevron, body = the group's ConversationRow list). When `hasFolders` is false, the chats tab renders exactly as before (flat list — preserves the existing UX). The archived section is unchanged in structure but each archived row now also gets `onMoveToFolder`.
+  • ConversationRow: added optional `onMoveToFolder?: () => void` prop. When present, the long-press menu shows a "Move to folder" / "Change folder" item (with the current folder name shown as a small label on the right when set).
+  • New `MoveToFolderDialog` component: shadcn Dialog (`max-w-sm`, sticky header + scrollable body + sticky footer pattern matching other dialogs). Body has: a label that says "Choose a folder for {name}", a text Input (maxLength 50, autoFocus, Enter to confirm) for typing a new folder name, a quick-pick chips section listing every existing folder (clicking a chip fills the input; the active chip is highlighted with `bg-primary text-primary-foreground`), and a "Remove from {currentFolder}" destructive button (only shown when the conversation is already in a folder). Footer has Cancel + Move buttons. Move is disabled when the trimmed name is empty or unchanged from the current folder. Calls `onConfirm(peerId, folderName)` (or `''` to remove).
+- Verified lint clean (0 errors, 0 warnings) and dev server returns HTTP 200 on `/`. All existing functionality preserved (chat header, calls, settings dialog, edit profile, crop dialog, filters, privacy, archive, pin, mute, search, etc.) — only additive changes.
+
+Stage Summary:
+- Files edited (surgical, additive only — no existing code paths removed):
+  - `/home/z/my-project/src/components/fc/ui.tsx` (+`verified` prop on UserAvatar + Check icon import; ~25 lines added)
+  - `/home/z/my-project/src/components/fc/shell/nav.tsx` (passed `verified` to TopBar avatar)
+  - `/home/z/my-project/src/components/fc/profile/ProfileView.tsx` (+`verified` field on ProfileResult.user; MyProfile verified badge + Get-verified pill + Pending pill; new VerifyDialog component; other-user verified badge; ~120 lines added)
+  - `/home/z/my-project/src/components/fc/chat/ChatView.tsx` (+`folder` field on Conversation; folder grouping + collapsible headers in ConversationList; `onMoveToFolder` prop on ConversationRow + new "Move to folder" long-press menu item; new MoveToFolderDialog component; ~330 lines added)
+- No backend changes (consumed the round-10 backend as-is).
+- Decisions:
+  - Verified badge stays emerald (`bg-primary`) per spec — distinct from the online dot via the white Check icon. When both render, the online dot moves to top-right; when only the online dot renders, it stays at its canonical bottom-right position. This avoids any overlap and keeps both indicators visible.
+  - Folder grouping UI only renders when the user has at least one folder defined — when zero folders exist, the conversation list looks identical to before (no superfluous "All" header on a flat list). This keeps the change invisible to existing users who haven't opted into folders.
+  - "All" is the synthetic key for no-folder conversations and always sorts first; other folders sort alphabetically (case-insensitive `localeCompare`).
+  - The move-to-folder dialog is owned by ConversationList (not ConversationRow) so it can access the full list of existing folders for the quick-pick chips. ConversationRow just calls `onMoveToFolder()` to bubble up which conversation is being moved.
+  - Folder changes are optimistic: local state updates immediately, then the API call confirms; on failure we refetch and toast an error. This matches the existing pattern used by archive/pin/mute.
+  - Per the spec, the `verified` prop is only applied where the data actually exists (current user via useAuth + profile view via /api/users/[id]) — NOT threaded through the FriendsView / conversation list / chat header because those endpoints don't return `verified`. If those endpoints later add it, the prop is ready to receive it.
+- `bun run lint` clean (0 errors, 0 warnings). Dev server returns HTTP 200 on `/`.
+
+---
+Task ID: 20-frontend
+Agent: orchestrator (Z.ai Code) — scheduled 15-min review (round 10, frontend + integration)
+Task: Wire round 10 features frontend (message reminders, forward-to-multiple enhancement, chat folders, profile verification badge) + integration QA.
+
+Work Log:
+- Dispatched 2 parallel subagents:
+  - Task 20-reminders-forward: edited ChatView.tsx surgically. Message reminders: Remind option in long-press action menu (BellRing icon, after Star); RemindMessageDialog (datetime-local + optional note); RemindersDialog viewer in ChatSettingsSheet (lists active reminders with Cancel). Forward-to-multiple enhancement: search box + Select all/Clear all toggle + count badge in ForwardDialog footer.
+  - Task 20-folders-verify: edited ChatView.tsx (chat folders: ConversationList groups by folder with collapsible headers; Move to folder in long-press menu; MoveToFolderDialog with text input + quick-pick chips; only renders folder UI when ≥1 folder exists) + ui.tsx (UserAvatar gains `verified` prop — emerald badge with white Check at bottom-right; shifts online dot to top-right when both present) + nav.tsx (TopBar avatar passes verified) + ProfileView.tsx (MyProfile: BadgeCheck next to name when verified, "Get verified" pill when unverified, amber "Verification pending" pill when pending; VerifyDialog with reason textarea; other-user profile shows verified badge).
+- Integration QA via agent-browser (gateway 81, mobile 390x844, nextjs-portal hidden):
+  - Login as aria → Chats → Bilal chat → long-press message → action menu shows Remind (between Star and Copy) ✓
+  - Clicked Remind → dialog with datetime picker + note → Set reminder → API confirms 1 reminder ✓
+  - Profile → "Get verified" button → dialog with reason textarea → Submit → API confirms verified:"pending" → pending badge shows ✓
+  - Chats → long-press Bilal conversation → "Move to folder" → typed "Work" → Move → API confirms folder:"Work" → folder header shows in list ✓
+  - No errors. `bun run lint` clean (0 errors). Gateway 200. Realtime 200.
+
+Stage Summary:
+- Round 10 complete: 4 new features (message reminders, forward-to-multiple enhancement, chat folders, profile verification badge) all shipped + browser-verified. All additive — zero existing code/features removed.
+- New files: src/app/api/messages/[id]/remind/route.ts, src/app/api/messages/reminders/route.ts, src/app/api/verify/route.ts.
+- Modified (surgical): prisma/schema.prisma (+Profile.verified, +ChatPreference.folder, +MessageReminder model, +User/Message.reminders relations), src/app/api/messages/preferences/route.ts (+folder), src/app/api/messages/conversations/route.ts (+folder), src/app/api/auth/me/route.ts (+verified), src/app/api/users/me/route.ts (+verified), src/app/api/users/[id]/route.ts (+verified), src/hooks/use-auth.tsx (+verified in ProfileData), src/components/fc/chat/ChatView.tsx (+reminders + forward enhancement + chat folders), src/components/fc/ui.tsx (UserAvatar +verified prop), src/components/fc/shell/nav.tsx (+verified on avatar), src/components/fc/profile/ProfileView.tsx (+verification badge + Get verified + VerifyDialog).
+- Lint clean, dev 200, realtime 200, all features QA'd.
+- Cumulative feature set now: auth, profiles (view/edit/privacy/photo-filters/photo-cropping/**verification-badge**), friends (search/request/accept/reject/remove/block/suggestions/online-widget/close-friends/mute-stories), 1:1+group chat (realtime/typing/presence/granular-last-seen/status/file-sharing/voice-notes/emoji/reactions/delete/forward/**forward-multiple**/star/disappearing/wallpaper/custom-wallpaper/global-search/search-within/pin-chat/mute/archive/**folders**/drafts/edit/group-typing/message-pin/reply-with-quote/typing-in-conv-list/message-scheduling/chat-export/**reminders**), stories (create/view/auto-advance/replies/highlights/reactions/views-list), WebRTC calls (stats), groups CRUD, broadcast lists, notifications, settings, dark mode, file previews (PDF inline).
+- Recommended next-phase features: group calls, scheduled message delivery cron (background job), call recordings, chat backup/restore, story repost, message read-by list (group), profile bio links, chat themes, message font size, voice message transcription, chat lock (PIN).

@@ -57,6 +57,7 @@ export async function PUT(req: NextRequest) {
               callPermission: updated!.profile.callPermission,
               readReceipts: updated!.profile.readReceipts,
               photoFilter: updated!.profile.photoFilter,
+              verified: updated!.profile.verified,
               lastSeen: updated!.profile.lastSeen?.toISOString(),
             }
           : null,

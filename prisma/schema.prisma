@@ -43,6 +43,7 @@ model User {
   // Round 9 fix: back-relation for BroadcastMember.recipient (see comment on
   // BroadcastMember). Additive — no existing fields changed.
   broadcastMemberships BroadcastMember[]
+  reminders      MessageReminder[]
 }
 
 model Profile {
@@ -64,6 +65,8 @@ model Profile {
   readReceipts       Boolean  @default(true)
   // Additive (round 6): CSS filter for profile photo (e.g. "grayscale(1)", "sepia(0.5)", "none")
   photoFilter        String?  
+  // Additive (round 10): profile verification badge (verified | unverified | pending)
+  verified           String   @default("unverified")
   lastSeen           DateTime @default(now())
   updatedAt          DateTime @updatedAt
 }
@@ -131,6 +134,7 @@ model Message {
   group    Group? @relation(fields: [groupId], references: [id], onDelete: Cascade)
   reactions MessageReaction[]
   starredBy MessageStar[]
+  reminders MessageReminder[]
 }
 
 model Group {
@@ -226,6 +230,8 @@ model ChatPreference {
   wallpaper String?
   // Additive (round 4): chat archive
   archived  Boolean  @default(false)
+  // Additive (round 10): chat folder name (null = no folder; e.g. "Work", "Family")
+  folder    String?
   updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -349,4 +355,19 @@ model BroadcastMember {
   recipient User @relation(fields: [recipientId], references: [id], onDelete: Cascade)
 
   @@unique([broadcastId, recipientId])
+}
+
+// ---- Additive (round 10): message reminders ----
+model MessageReminder {
+  id          String   @id @default(cuid())
+  userId      String  // who set the reminder
+  messageId   String  // the message to be reminded of
+  remindAt    DateTime // when to notify
+  createdAt   DateTime @default(now())
+  notified    Boolean  @default(false)
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([userId, notified])
 }

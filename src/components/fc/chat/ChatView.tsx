@@ -2,7 +2,7 @@
 /* eslint-disable react-hooks/set-state-in-effect */
 
 import * as React from 'react'
-import { useEffect, useState, useRef, useCallback } from 'react'
+import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
 import { useApp } from '@/lib/store'
 import { useAuth } from '@/hooks/use-auth'
 import { useSocket } from '@/hooks/use-socket'
@@ -51,6 +51,7 @@ import {
   Loader2,
   Pin,
   Bell,
+  BellRing,
   BellOff,
   Mic,
   X,
@@ -73,6 +74,9 @@ import {
   Image as ImageIcon,
   CornerUpLeft,
   Calendar,
+  Folder,
+  FolderOpen,
+  Move,
 } from 'lucide-react'
 
 // ---------------- types ----------------
@@ -94,6 +98,9 @@ interface Conversation {
   pinned?: boolean
   muted?: boolean
   archived?: boolean
+  // Round 10: chat folder name (null = "All" / no folder). Backend stores
+  // this on ChatPreference.folder and returns it on GET /api/messages/conversations.
+  folder?: string | null
   lastMessage: {
     content: string
     type: string
@@ -180,6 +187,20 @@ interface GlobalSearchResult {
   peerPhoto?: string | null
   groupId?: string
   groupName?: string
+}
+
+// Round 10: message reminder shape returned by GET /api/messages/reminders.
+// Each reminder carries the originating message content + the peer context so
+// the RemindersDialog can render a row without an extra fetch. `messageId` is
+// used as the DELETE URL param (DELETE /api/messages/[messageId]/remind).
+interface MessageReminderLite {
+  id: string
+  messageId: string
+  content: string
+  type: string
+  remindAt: string
+  peerId: string | null
+  peerName: string
 }
 
 const EMOJIS = [
@@ -367,6 +388,13 @@ function ConversationList() {
   // doesn't leave a stale "typing…" indicator forever.
   const [typingConvs, setTypingConvs] = useState<Set<string>>(new Set())
   const typingTimersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map())
+  // Round 10: chat folders. `collapsedFolders` holds the set of folder keys
+  // (folder name string, or "All" for the no-folder section) that are
+  // currently collapsed. Empty set = all expanded. `moveTarget` is the
+  // conversation currently being moved via the MoveToFolderDialog (null when
+  // the dialog is closed).
+  const [collapsedFolders, setCollapsedFolders] = useState<Set<string>>(new Set())
+  const [moveTarget, setMoveTarget] = useState<Conversation | null>(null)
   const { openChat, openGroupChat } = useApp()
   const { socket, isOnline } = useSocket()
   const { user: me } = useAuth()
@@ -623,6 +651,83 @@ function ConversationList() {
     [load]
   )
 
+  // ---- Round 10: chat folders ----
+  // Collect every distinct folder name across active + archived conversations
+  // so the MoveToFolderDialog can offer them as quick-pick chips. Sorted
+  // alphabetically for a stable, predictable order.
+  const existingFolders = useMemo(() => {
+    const set = new Set<string>()
+    for (const c of conversations) {
+      if (c.folder) set.add(c.folder)
+    }
+    for (const c of archivedConvs) {
+      if (c.folder) set.add(c.folder)
+    }
+    return Array.from(set).sort((a, b) => a.localeCompare(b))
+  }, [conversations, archivedConvs])
+
+  // Group the filtered (search-matched) conversations by folder. "All" is
+  // the synthetic key for conversations without a folder; it always sorts
+  // first. Folders (when present) follow alphabetically. Within each group
+  // the API's pinned-first + lastMessage-time ordering is preserved.
+  const groupedConvs = useMemo(() => {
+    const groups = new Map<string, Conversation[]>()
+    for (const c of filteredConvs) {
+      const key = c.folder || 'All'
+      const arr = groups.get(key)
+      if (arr) arr.push(c)
+      else groups.set(key, [c])
+    }
+    const keys = Array.from(groups.keys()).sort((a, b) => {
+      if (a === 'All') return -1
+      if (b === 'All') return 1
+      return a.localeCompare(b)
+    })
+    return keys.map((k) => ({ folder: k, items: groups.get(k)! }))
+  }, [filteredConvs])
+
+  // Whether folder section headers should render at all. We only show the
+  // grouping UI when the user has at least one folder defined — otherwise
+  // the list looks exactly like before (no superfluous "All" header).
+  const hasFolders = existingFolders.length > 0
+
+  const toggleFolder = useCallback((key: string) => {
+    setCollapsedFolders((prev) => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }, [])
+
+  // POST /api/messages/preferences { peerId, folder } — empty string clears
+  // the folder (moves back to "All"). Optimistically update local state for
+  // both active and archived arrays, then refetch to confirm.
+  const handleMoveToFolder = useCallback(
+    async (peerId: string, folder: string) => {
+      const nextFolder = folder && folder !== 'All' ? folder : ''
+      // Optimistic update across both arrays.
+      setConversations((prev) =>
+        prev.map((c) => (c.id === peerId ? { ...c, folder: nextFolder || null } : c))
+      )
+      setArchivedConvs((prev) =>
+        prev.map((c) => (c.id === peerId ? { ...c, folder: nextFolder || null } : c))
+      )
+      setMoveTarget(null)
+      try {
+        await api('/api/messages/preferences', {
+          method: 'POST',
+          body: JSON.stringify({ peerId, folder: nextFolder }),
+        })
+        toast.success(nextFolder ? `Moved to "${nextFolder}"` : 'Removed from folder')
+      } catch (e: any) {
+        toast.error(e?.message || 'Failed to move chat')
+        load()
+      }
+    },
+    [load]
+  )
+
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-border px-4 py-3">
@@ -813,30 +918,100 @@ function ConversationList() {
             />
           ) : (
             <div className="space-y-0.5">
-              {filteredConvs.map((c) => (
-                <ConversationRow
-                  key={c.id}
-                  conversation={c}
-                  online={isOnline(c.id)}
-                  meId={meId}
-                  draftPreview={drafts.get(c.id)}
-                  isTyping={typingConvs.has(c.id)}
-                  onOpen={() => openChat(c.id)}
-                  onTogglePin={async () => {
-                    try {
-                      await api('/api/messages/preferences', { method: 'POST', body: JSON.stringify({ peerId: c.id, pinned: !c.pinned }) })
-                      setConversations((prev) => prev.map((x) => (x.id === c.id ? { ...x, pinned: !x.pinned } : x)))
-                    } catch (e: any) { toast.error(e.message) }
-                  }}
-                  onToggleMute={async () => {
-                    try {
-                      await api('/api/messages/preferences', { method: 'POST', body: JSON.stringify({ peerId: c.id, muted: !c.muted }) })
-                      setConversations((prev) => prev.map((x) => (x.id === c.id ? { ...x, muted: !x.muted } : x)))
-                    } catch (e: any) { toast.error(e.message) }
-                  }}
-                  onToggleArchive={() => handleToggleArchive(c, false)}
-                />
-              ))}
+              {hasFolders
+                ? // Round 10: folder-grouped view — render a collapsible section
+                  // per folder (with "All" for unfiled convs always first).
+                  groupedConvs.map((group) => {
+                    const collapsed = collapsedFolders.has(group.folder)
+                    const isAll = group.folder === 'All'
+                    return (
+                      <div key={group.folder} className="mt-1">
+                        <button
+                          type="button"
+                          onClick={() => toggleFolder(group.folder)}
+                          className="flex w-full items-center gap-2 px-3 py-2 cursor-pointer hover:bg-accent/40 rounded-lg transition-colors"
+                          aria-expanded={!collapsed}
+                          aria-controls={`folder-${group.folder}-list`}
+                        >
+                          {isAll ? (
+                            <MessageCircle size={14} className="shrink-0 text-muted-foreground" />
+                          ) : collapsed ? (
+                            <Folder size={14} className="shrink-0 text-muted-foreground" />
+                          ) : (
+                            <FolderOpen size={14} className="shrink-0 text-primary" />
+                          )}
+                          <span className="text-xs font-semibold uppercase tracking-wide text-foreground/80">
+                            {isAll ? 'All' : group.folder}
+                          </span>
+                          <span className="grid h-4 min-w-4 place-items-center rounded-full bg-muted px-1 text-[9px] font-bold text-muted-foreground">
+                            {group.items.length}
+                          </span>
+                          <ChevronDown
+                            size={14}
+                            className={cn(
+                              'ml-auto text-muted-foreground transition-transform',
+                              collapsed && '-rotate-90'
+                            )}
+                          />
+                        </button>
+                        {!collapsed && (
+                          <div id={`folder-${group.folder}-list`} className="space-y-0.5">
+                            {group.items.map((c) => (
+                              <ConversationRow
+                                key={c.id}
+                                conversation={c}
+                                online={isOnline(c.id)}
+                                meId={meId}
+                                draftPreview={drafts.get(c.id)}
+                                isTyping={typingConvs.has(c.id)}
+                                onOpen={() => openChat(c.id)}
+                                onTogglePin={async () => {
+                                  try {
+                                    await api('/api/messages/preferences', { method: 'POST', body: JSON.stringify({ peerId: c.id, pinned: !c.pinned }) })
+                                    setConversations((prev) => prev.map((x) => (x.id === c.id ? { ...x, pinned: !x.pinned } : x)))
+                                  } catch (e: any) { toast.error(e.message) }
+                                }}
+                                onToggleMute={async () => {
+                                  try {
+                                    await api('/api/messages/preferences', { method: 'POST', body: JSON.stringify({ peerId: c.id, muted: !c.muted }) })
+                                    setConversations((prev) => prev.map((x) => (x.id === c.id ? { ...x, muted: !x.muted } : x)))
+                                  } catch (e: any) { toast.error(e.message) }
+                                }}
+                                onToggleArchive={() => handleToggleArchive(c, false)}
+                                onMoveToFolder={() => setMoveTarget(c)}
+                              />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })
+                : // No folders defined — flat list, exactly like before.
+                  filteredConvs.map((c) => (
+                    <ConversationRow
+                      key={c.id}
+                      conversation={c}
+                      online={isOnline(c.id)}
+                      meId={meId}
+                      draftPreview={drafts.get(c.id)}
+                      isTyping={typingConvs.has(c.id)}
+                      onOpen={() => openChat(c.id)}
+                      onTogglePin={async () => {
+                        try {
+                          await api('/api/messages/preferences', { method: 'POST', body: JSON.stringify({ peerId: c.id, pinned: !c.pinned }) })
+                          setConversations((prev) => prev.map((x) => (x.id === c.id ? { ...x, pinned: !x.pinned } : x)))
+                        } catch (e: any) { toast.error(e.message) }
+                      }}
+                      onToggleMute={async () => {
+                        try {
+                          await api('/api/messages/preferences', { method: 'POST', body: JSON.stringify({ peerId: c.id, muted: !c.muted }) })
+                          setConversations((prev) => prev.map((x) => (x.id === c.id ? { ...x, muted: !x.muted } : x)))
+                        } catch (e: any) { toast.error(e.message) }
+                      }}
+                      onToggleArchive={() => handleToggleArchive(c, false)}
+                      onMoveToFolder={() => setMoveTarget(c)}
+                    />
+                  ))}
 
               {/* Archived section (collapsed by default) */}
               {filteredArchived.length > 0 && (
@@ -876,6 +1051,7 @@ function ConversationList() {
                             } catch (e: any) { toast.error(e.message) }
                           }}
                           onToggleArchive={() => handleToggleArchive(c, true)}
+                          onMoveToFolder={() => setMoveTarget(c)}
                         />
                       ))}
                     </div>
@@ -914,6 +1090,16 @@ function ConversationList() {
         </TabsContent>
       </Tabs>
       )}
+
+      {/* Round 10: move-to-folder dialog — opened from the ConversationRow
+          long-press menu. Lets the user type a new folder name or pick from
+          existing folders, plus a "Remove from folder" option. */}
+      <MoveToFolderDialog
+        conversation={moveTarget}
+        existingFolders={existingFolders}
+        onClose={() => setMoveTarget(null)}
+        onConfirm={handleMoveToFolder}
+      />
     </div>
   )
 }
@@ -929,6 +1115,7 @@ function ConversationRow({
   onTogglePin,
   onToggleMute,
   onToggleArchive,
+  onMoveToFolder,
 }: {
   conversation: Conversation
   online: boolean
@@ -940,6 +1127,10 @@ function ConversationRow({
   onTogglePin: () => void
   onToggleMute: () => void
   onToggleArchive: () => void
+  // Round 10: open the move-to-folder dialog (passes the conversation up to
+  // the parent ConversationList, which owns the dialog state so it can show
+  // the full list of existing folders as quick-pick chips).
+  onMoveToFolder?: () => void
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -1070,10 +1261,150 @@ function ConversationRow({
               {archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
               {archived ? 'Unarchive' : 'Archive chat'}
             </button>
+            {onMoveToFolder && (
+              <button
+                onClick={() => { onMoveToFolder(); setMenuOpen(false) }}
+                className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-accent"
+              >
+                <Move size={14} /> {conversation.folder ? 'Change folder' : 'Move to folder'}
+                {conversation.folder && (
+                  <span className="ml-auto truncate text-[10px] text-muted-foreground">{conversation.folder}</span>
+                )}
+              </button>
+            )}
           </div>
         </>
       )}
     </div>
+  )
+}
+
+/**
+ * Round 10: MoveToFolderDialog — opened from the ConversationRow long-press
+ * menu. Lets the user type a new folder name (max 50 chars) or pick from
+ * existing folders as quick-pick chips. Includes a "Remove from folder"
+ * option (only shown when the conversation is already in a folder).
+ *
+ * The parent ConversationList owns this dialog's open state via `conversation`
+ * (null = closed) so it can pass the full list of existing folders as chips.
+ * On confirm, calls `onConfirm(peerId, folderName)` — empty string clears the
+ * folder (sends `folder: ''` to the backend, which the API treats as null =
+ * back to the "All" section).
+ */
+function MoveToFolderDialog({
+  conversation,
+  existingFolders,
+  onClose,
+  onConfirm,
+}: {
+  conversation: Conversation | null
+  existingFolders: string[]
+  onClose: () => void
+  onConfirm: (peerId: string, folder: string) => void
+}) {
+  const [folderName, setFolderName] = useState('')
+
+  // Reset the input each time a new conversation is targeted / dialog closed.
+  useEffect(() => {
+    if (conversation) {
+      setFolderName(conversation.folder || '')
+    }
+  }, [conversation])
+
+  if (!conversation) return null
+
+  const trimmed = folderName.trim()
+  const trimmedLower = trimmed.toLowerCase()
+  const isNewName = trimmed.length > 0 && !existingFolders.some((f) => f.toLowerCase() === trimmedLower)
+  const canMove = trimmed.length > 0 && trimmed !== (conversation.folder || '')
+
+  const handleMove = () => {
+    if (canMove) onConfirm(conversation.id, trimmed)
+  }
+  const handleRemove = () => {
+    onConfirm(conversation.id, '')
+  }
+
+  return (
+    <Dialog open={!!conversation} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-sm gap-0 p-0">
+        <DialogHeader className="border-b border-border px-4 py-3">
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <Folder size={16} className="text-primary" />
+            Move to folder
+          </DialogTitle>
+        </DialogHeader>
+        <div className="p-4">
+          <p className="mb-3 text-sm text-muted-foreground">
+            Choose a folder for <span className="font-medium text-foreground">{conversation.name}</span>.
+          </p>
+          <Input
+            value={folderName}
+            onChange={(e) => setFolderName(e.target.value)}
+            placeholder="Type a new folder name…"
+            maxLength={50}
+            autoFocus
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && canMove) {
+                e.preventDefault()
+                handleMove()
+              }
+            }}
+          />
+          <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
+            <span>{isNewName ? 'Creates a new folder' : '\u00A0'}</span>
+            <span>{trimmed.length}/50</span>
+          </div>
+
+          {existingFolders.length > 0 && (
+            <div className="mt-3">
+              <div className="mb-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Existing folders
+              </div>
+              <div className="flex flex-wrap gap-1.5">
+                {existingFolders.map((f) => {
+                  const selected = trimmedLower === f.toLowerCase()
+                  return (
+                    <button
+                      key={f}
+                      type="button"
+                      onClick={() => setFolderName(f)}
+                      className={cn(
+                        'inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium transition',
+                        selected
+                          ? 'bg-primary text-primary-foreground'
+                          : 'bg-accent text-foreground hover:bg-accent/70'
+                      )}
+                    >
+                      <Folder size={10} />
+                      {f}
+                    </button>
+                  )
+                })}
+              </div>
+            </div>
+          )}
+
+          {conversation.folder && (
+            <button
+              type="button"
+              onClick={handleRemove}
+              className="mt-3 flex w-full items-center gap-2 rounded-xl border border-border px-3 py-2 text-sm text-destructive transition hover:bg-destructive/10"
+            >
+              <Move size={14} />
+              Remove from "{conversation.folder}"
+            </button>
+          )}
+        </div>
+        <DialogFooter className="flex-row justify-end gap-2 border-t border-border px-4 py-3">
+          <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
+          <Button type="button" onClick={handleMove} disabled={!canMove}>
+            <Move size={14} className="mr-1" />
+            Move
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }
 
@@ -1176,6 +1507,11 @@ function ChatRoom({
   const [scheduledViewerOpen, setScheduledViewerOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [starredDialogOpen, setStarredDialogOpen] = useState(false)
+  // Round 10: message reminders. `remindTarget` is the message the user
+  // long-pressed → opened the Remind dialog on. `remindersDialogOpen` toggles
+  // the global Reminders viewer (opened from the ChatSettingsSheet).
+  const [remindTarget, setRemindTarget] = useState<Message | null>(null)
+  const [remindersDialogOpen, setRemindersDialogOpen] = useState(false)
   const [disappearing, setDisappearing] = useState<'OFF' | '24H' | '7D'>('OFF')
   const [wallpaper, setWallpaper] = useState<string | null>(null)
   // Group typing (sender-aware): set of userIds currently typing in this group
@@ -2387,6 +2723,7 @@ function ChatRoom({
                       onStar={toggleStar}
                       onEdit={(msg) => setEditTarget(msg)}
                       onPin={togglePin}
+                      onRemind={(msg) => setRemindTarget(msg)}
                       replyToMessage={replyToMessage}
                       replyPeerName={mode === 'direct' ? peerInfo?.name : undefined}
                       onJumpToMessage={scrollToMessage}
@@ -2600,7 +2937,7 @@ function ChatRoom({
         onSave={handleEditSave}
       />
 
-      {/* chat settings sheet (disappearing + wallpaper + starred + scheduled + export) */}
+      {/* chat settings sheet (disappearing + wallpaper + starred + scheduled + reminders + export) */}
       <ChatSettingsSheet
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
@@ -2611,6 +2948,7 @@ function ChatRoom({
         onCustomWallpaperUpload={handleCustomWallpaperUpload}
         onOpenStarred={() => setStarredDialogOpen(true)}
         onOpenScheduled={() => setScheduledViewerOpen(true)}
+        onOpenReminders={() => setRemindersDialogOpen(true)}
         mode={mode}
         peerId={peerId}
         peerName={peerInfo?.name}
@@ -2620,6 +2958,19 @@ function ChatRoom({
       <StarredMessagesDialog
         open={starredDialogOpen}
         onOpenChange={setStarredDialogOpen}
+      />
+
+      {/* Round 10: set a reminder for a specific message (datetime-local + optional note) */}
+      <RemindMessageDialog
+        message={remindTarget}
+        onClose={() => setRemindTarget(null)}
+      />
+
+      {/* Round 10: reminders viewer — lists all my active message reminders
+          across chats with a Cancel button each. */}
+      <RemindersDialog
+        open={remindersDialogOpen}
+        onOpenChange={setRemindersDialogOpen}
       />
 
       {/* Round 8: schedule a message for future delivery */}
@@ -2718,6 +3069,7 @@ function MessageBubble({
   onStar,
   onEdit,
   onPin,
+  onRemind,
   replyToMessage,
   replyPeerName,
   onJumpToMessage,
@@ -2736,6 +3088,10 @@ function MessageBubble({
   onStar: (msg: Message) => void
   onEdit: (msg: Message) => void
   onPin?: (msg: Message) => void
+  // Round 10: open the Remind dialog for this message (sets a future
+  // reminder that surfaces in the Reminders viewer + will notify the user
+  // when remindAt arrives — backend handles the notification trigger).
+  onRemind?: (msg: Message) => void
   // Round 7: replied-to message (resolved from the local messages array by
   // the parent). null when the message has no replyToId OR the original
   // isn't loaded — in the latter case the quote card shows a placeholder.
@@ -3096,6 +3452,21 @@ function MessageBubble({
                   />{' '}
                   {msg.starred ? 'Unstar' : 'Star'}
                 </button>
+                {/* Round 10: remind me about this message later. Available for
+                    all messages (mine + theirs) in both 1:1 and group chats —
+                    the backend validates participation. Opens the
+                    RemindMessageDialog (datetime-local + optional note) which
+                    POSTs /api/messages/[id]/remind { remindAt }. Setting a new
+                    reminder on a message that already has one replaces it
+                    (backend handles the delete-then-create). */}
+                {onRemind && (
+                  <button
+                    onClick={() => { onRemind(msg); setMenuOpen(false) }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition hover:bg-accent"
+                  >
+                    <BellRing size={14} className="text-muted-foreground" /> Remind
+                  </button>
+                )}
                 {msg.content && (
                   <button
                     onClick={() => { copyContent(msg.content); setMenuOpen(false) }}
@@ -3170,12 +3541,16 @@ function ForwardDialog({
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [loading, setLoading] = useState(false)
   const [sending, setSending] = useState(false)
+  // Round 10: forward-to-multiple enhancement — search filter for the
+  // friend/group list (useful once you have many contacts). Reset on close.
+  const [search, setSearch] = useState('')
 
   useEffect(() => {
     if (!message) {
       setSelected(new Set())
       setFriends([])
       setGroups([])
+      setSearch('')
       return
     }
     setLoading(true)
@@ -3197,6 +3572,51 @@ function ForwardDialog({
       else next.add(key)
       return next
     })
+  }
+
+  // Round 10: filter the friend/group list by the search query. Matches on
+  // name + username for friends, name + description for groups.
+  const q = search.trim().toLowerCase()
+  const filteredFriends = q
+    ? friends.filter(
+        (f) =>
+          f.name.toLowerCase().includes(q) || f.username.toLowerCase().includes(q)
+      )
+    : friends
+  const filteredGroups = q
+    ? groups.filter(
+        (g) =>
+          g.name.toLowerCase().includes(q) ||
+          (g.description || '').toLowerCase().includes(q)
+      )
+    : groups
+
+  // Round 10: all visible (post-filter) keys — used by the Select all /
+  // Clear all toggle. Empty when no friends/groups match the current search.
+  const visibleKeys: string[] = [
+    ...filteredGroups.map((g) => `group:${g.id}`),
+    ...filteredFriends.map((f) => `user:${f.id}`),
+  ]
+  const allVisibleSelected =
+    visibleKeys.length > 0 && visibleKeys.every((k) => selected.has(k))
+
+  const handleToggleAll = () => {
+    if (allVisibleSelected) {
+      // Clear all visible keys (leaves any non-visible selections intact).
+      setSelected((prev) => {
+        const next = new Set(prev)
+        for (const k of visibleKeys) next.delete(k)
+        return next
+      })
+    } else {
+      // Select all visible keys (additive — keeps any existing selections
+      // for items outside the current filter).
+      setSelected((prev) => {
+        const next = new Set(prev)
+        for (const k of visibleKeys) next.add(k)
+        return next
+      })
+    }
   }
 
   const count = selected.size
@@ -3228,6 +3648,41 @@ function ForwardDialog({
         <DialogHeader className="border-b border-border px-4 py-3">
           <DialogTitle className="text-base">Forward message</DialogTitle>
         </DialogHeader>
+
+        {/* Round 10: search + Select-all toggle — sticky above the list so
+            it stays reachable when scrolling through many friends/groups. */}
+        {!loading && (friends.length > 0 || groups.length > 0) && (
+          <div className="flex items-center gap-2 border-b border-border bg-background/95 px-3 py-2">
+            <div className="relative flex-1">
+              <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search friends or groups"
+                className="rounded-lg border border-border bg-background px-3 py-2 pl-9 text-sm"
+              />
+              {search && (
+                <button
+                  type="button"
+                  onClick={() => setSearch('')}
+                  className="absolute right-1.5 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-foreground"
+                  aria-label="Clear search"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={handleToggleAll}
+              disabled={visibleKeys.length === 0}
+              className="shrink-0 rounded-lg px-2.5 py-2 text-xs font-medium text-primary transition hover:bg-primary/10 disabled:opacity-40"
+            >
+              {allVisibleSelected ? 'Clear all' : 'Select all'}
+            </button>
+          </div>
+        )}
+
         <div className="fc-scroll max-h-[60vh] overflow-y-auto px-2 py-2">
           {loading ? (
             <div className="flex justify-center py-8">
@@ -3237,14 +3692,18 @@ function ForwardDialog({
             <div className="py-8 text-center text-sm text-muted-foreground">
               No friends or groups available to forward to.
             </div>
+          ) : filteredFriends.length === 0 && filteredGroups.length === 0 ? (
+            <div className="py-8 text-center text-sm text-muted-foreground">
+              No matches for &ldquo;{search.trim()}&rdquo;.
+            </div>
           ) : (
             <>
-              {groups.length > 0 && (
+              {filteredGroups.length > 0 && (
                 <div className="mb-2">
                   <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                     Groups
                   </div>
-                  {groups.map((g) => {
+                  {filteredGroups.map((g) => {
                     const key = `group:${g.id}`
                     const checked = selected.has(key)
                     return (
@@ -3275,12 +3734,12 @@ function ForwardDialog({
                   })}
                 </div>
               )}
-              {friends.length > 0 && (
+              {filteredFriends.length > 0 && (
                 <div>
                   <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
                     Friends
                   </div>
-                  {friends.map((f) => {
+                  {filteredFriends.map((f) => {
                     const key = `user:${f.id}`
                     const checked = selected.has(key)
                     return (
@@ -3305,9 +3764,17 @@ function ForwardDialog({
           )}
         </div>
         <DialogFooter className="flex-row items-center justify-between gap-2 border-t border-border px-4 py-3 sm:justify-between">
-          <span className="text-xs text-muted-foreground">
-            {count > 0 ? `${count} selected` : 'Select recipients'}
-          </span>
+          {/* Round 10: count badge with primary-tinted styling — gives the
+              user clear feedback on how many recipients are currently
+              selected. Replaces the plain text label. */}
+          {count > 0 ? (
+            <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-xs font-medium text-primary">
+              <Check size={11} />
+              {count} selected
+            </span>
+          ) : (
+            <span className="text-xs text-muted-foreground">Select recipients</span>
+          )}
           <div className="flex gap-2">
             <Button variant="ghost" onClick={onClose} disabled={sending}>
               Cancel
@@ -3345,6 +3812,7 @@ function ChatSettingsSheet({
   onCustomWallpaperUpload,
   onOpenStarred,
   onOpenScheduled,
+  onOpenReminders,
 }: {
   open: boolean
   onOpenChange: (o: boolean) => void
@@ -3357,6 +3825,9 @@ function ChatSettingsSheet({
   // Round 8: opens the ScheduledMessagesDialog (lists scheduled messages
   // for this conversation + supports cancellation).
   onOpenScheduled: () => void
+  // Round 10: opens the RemindersDialog (lists active message reminders
+  // across all chats + supports cancellation).
+  onOpenReminders: () => void
   // Round 9: chat export — `mode` + `peerId` build the export URL
   // (?userId= for direct, ?groupId= for group). `peerName` is used for
   // the downloaded filename.
@@ -3498,6 +3969,32 @@ function ChatSettingsSheet({
                 <div className="text-sm font-medium">Scheduled messages</div>
                 <div className="text-[11px] text-muted-foreground">
                   View + cancel messages scheduled for later in this chat
+                </div>
+              </div>
+            </button>
+          </section>
+
+          {/* Round 10: Message reminders — opens the RemindersDialog which
+              lists all my active message reminders across every chat (with
+              the originating message content + peer name + remind time) and
+              supports cancellation. */}
+          <section className="mb-6">
+            <SectionTitle>Reminders</SectionTitle>
+            <button
+              type="button"
+              onClick={() => {
+                onOpenReminders()
+                onOpenChange(false)
+              }}
+              className="mt-2 flex w-full items-center gap-3 rounded-xl border border-border bg-card p-3 text-left transition hover:bg-accent"
+            >
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
+                <BellRing size={16} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium">Message reminders</div>
+                <div className="text-[11px] text-muted-foreground">
+                  View + cancel reminders you set on messages
                 </div>
               </div>
             </button>
@@ -4188,6 +4685,268 @@ function ScheduledMessagesDialog({
                         <Loader2 size={12} className="animate-spin" />
                       ) : (
                         <Trash2 size={12} />
+                      )}
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------------- Round 10: remind-message dialog ----------------
+// Composer for setting a per-message reminder. The datetime-local input is
+// constrained to future values (backend rejects past/now). An optional note
+// field lets the user type a reason ("why am I setting this?") — the backend
+// schema doesn't persist a note, so we POST only `remindAt` per the API
+// contract; the note is local UI affordance only (kept in component state,
+// shown in the dialog footer hint while composing).
+//
+// Backend: POST /api/messages/[id]/remind { remindAt } →
+// { reminder: { id, remindAt } }. Validates participation + future date.
+// Setting a new reminder on a message that already has one replaces it
+// (backend deleteMany-then-create).
+function RemindMessageDialog({
+  message,
+  onClose,
+}: {
+  message: Message | null
+  onClose: () => void
+}) {
+  const [remindAt, setRemindAt] = useState('')
+  const [note, setNote] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  // Reset the form whenever a new message target is set (or the dialog
+  // closes). Default the time picker to one hour from now so the user can
+  // confirm with one tap for a quick reminder.
+  useEffect(() => {
+    if (message) {
+      const soon = new Date(Date.now() + 60 * 60 * 1000)
+      setRemindAt(toLocalDateTimeInput(soon))
+      setNote('')
+      setSaving(false)
+    }
+  }, [message])
+
+  const remindDate = remindAt ? new Date(remindAt) : null
+  const isFuture =
+    !!remindDate &&
+    !isNaN(remindDate.getTime()) &&
+    remindDate.getTime() > Date.now()
+  const canSubmit = !!message && isFuture && !saving
+
+  const handleSubmit = async () => {
+    if (!canSubmit || !message || !remindDate) return
+    setSaving(true)
+    try {
+      await api<{ reminder: { id: string; remindAt: string } }>(
+        `/api/messages/${message.id}/remind`,
+        {
+          method: 'POST',
+          body: JSON.stringify({ remindAt: remindDate.toISOString() }),
+        }
+      )
+      toast.success(`Reminder set for ${formatScheduledTime(remindDate.toISOString())}`)
+      onClose()
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to set reminder')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  // Build a short preview of the target message so the user can confirm
+  // they're setting a reminder on the right bubble.
+  const messagePreview = message
+    ? message.content ||
+      (message.type === 'image'
+        ? '📷 Photo'
+        : message.type === 'video'
+          ? '🎥 Video'
+          : message.type === 'audio'
+            ? '🎤 Audio'
+            : message.fileName || '📄 Document')
+    : ''
+
+  return (
+    <Dialog open={!!message} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md gap-0 p-0">
+        <DialogHeader className="border-b border-border px-4 py-3">
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <BellRing size={16} className="text-primary" />
+            Remind me
+          </DialogTitle>
+        </DialogHeader>
+        <div className="px-4 py-3">
+          {/* Target message preview (truncated, read-only) */}
+          {message && (
+            <div className="mb-3 rounded-lg border-l-2 border-primary bg-muted/50 px-3 py-2">
+              <div className="line-clamp-2 break-words text-xs text-muted-foreground">
+                {messagePreview}
+              </div>
+            </div>
+          )}
+          <label className="flex flex-col gap-1.5 text-xs font-medium text-muted-foreground">
+            <span className="flex items-center gap-1.5">
+              <Calendar size={12} />
+              Remind me at
+            </span>
+            <input
+              type="datetime-local"
+              value={remindAt}
+              onChange={(e) => setRemindAt(e.target.value)}
+              min={toLocalDateTimeInput(new Date())}
+              className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/30"
+            />
+          </label>
+          <label className="mt-3 flex flex-col gap-1.5 text-xs font-medium text-muted-foreground">
+            <span className="flex items-center gap-1.5">
+              <Bell size={12} />
+              Note (optional)
+            </span>
+            <Textarea
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              maxLength={200}
+              rows={2}
+              className="resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm"
+              placeholder="Why are you setting this reminder?"
+            />
+            <span className="self-end text-[10px] text-muted-foreground">
+              {note.length} / 200
+            </span>
+          </label>
+          {remindAt && !isFuture && (
+            <p className="mt-1.5 text-[11px] text-destructive">
+              Pick a time in the future.
+            </p>
+          )}
+        </div>
+        <DialogFooter className="flex-row items-center justify-end gap-2 border-t border-border px-4 py-3 sm:justify-end">
+          <Button variant="ghost" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button onClick={handleSubmit} disabled={!canSubmit}>
+            {saving ? <Loader2 className="animate-spin" size={14} /> : <BellRing size={14} />}
+            Set reminder
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------------- Round 10: reminders dialog (viewer) ----------------
+// Lists ALL my active message reminders across every chat (fetched from
+// GET /api/messages/reminders — backend returns future + not-notified
+// reminders with the originating message content + peer context). Each row
+// shows a Bell icon, the message content (line-clamp-2), the peer name, a
+// Calendar icon + formatted remind time, and a destructive Cancel button
+// that DELETEs the reminder via /api/messages/[messageId]/remind and removes
+// it from the list.
+function RemindersDialog({
+  open,
+  onOpenChange,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+}) {
+  const [loading, setLoading] = useState(false)
+  const [reminders, setReminders] = useState<MessageReminderLite[]>([])
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    setLoading(true)
+    api<{ reminders: MessageReminderLite[] }>('/api/messages/reminders')
+      .then((d) => setReminders(d.reminders || []))
+      .catch((e: any) => toast.error(e?.message || 'Failed to load reminders'))
+      .finally(() => setLoading(false))
+  }, [open])
+
+  const handleCancel = async (reminder: MessageReminderLite) => {
+    setCancellingId(reminder.id)
+    try {
+      await api(`/api/messages/${reminder.messageId}/remind`, { method: 'DELETE' })
+      setReminders((prev) => prev.filter((r) => r.id !== reminder.id))
+      toast.success('Reminder cancelled')
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to cancel reminder')
+    } finally {
+      setCancellingId(null)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md gap-0 p-0">
+        <DialogHeader className="border-b border-border px-4 py-3">
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <BellRing size={16} className="text-primary" />
+            Message reminders
+          </DialogTitle>
+        </DialogHeader>
+        <div className="fc-scroll max-h-[70vh] overflow-y-auto p-2">
+          {loading ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="animate-spin text-muted-foreground" size={20} />
+            </div>
+          ) : reminders.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">
+              No active reminders. Long-press a message and tap{' '}
+              <span className="inline-flex items-center gap-0.5 font-medium text-foreground">
+                <BellRing size={11} /> Remind
+              </span>{' '}
+              to set one.
+            </div>
+          ) : (
+            <div className="space-y-0.5">
+              {reminders.map((r) => (
+                <div
+                  key={r.id}
+                  className="rounded-xl p-2 hover:bg-accent/40"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
+                      <Bell size={16} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="line-clamp-2 break-words text-sm">
+                        {r.content || (
+                          r.type === 'image'
+                            ? '📷 Photo'
+                            : r.type === 'video'
+                              ? '🎥 Video'
+                              : r.type === 'audio'
+                                ? '🎤 Audio'
+                                : '📄 Document'
+                        )}
+                      </div>
+                      <div className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] text-muted-foreground">
+                        <span className="truncate">with {r.peerName || 'Unknown'}</span>
+                        <span className="inline-flex items-center gap-0.5">
+                          <Calendar size={10} />
+                          {formatScheduledTime(r.remindAt)}
+                        </span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleCancel(r)}
+                      disabled={cancellingId === r.id}
+                      className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-destructive transition hover:bg-destructive/10 disabled:opacity-50"
+                      aria-label="Cancel reminder"
+                    >
+                      {cancellingId === r.id ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : (
+                        <X size={12} />
                       )}
                       Cancel
                     </button>

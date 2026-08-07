@@ -28,6 +28,7 @@ export async function GET() {
               callPermission: profile.callPermission,
               readReceipts: profile.readReceipts,
               photoFilter: profile.photoFilter,
+              verified: profile.verified,
               lastSeen: profile.lastSeen?.toISOString(),
             }
           : null,
