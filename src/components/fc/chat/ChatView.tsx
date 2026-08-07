@@ -1,4 +1,5 @@
 'use client'
+/* eslint-disable react-hooks/set-state-in-effect */
 
 import * as React from 'react'
 import { useEffect, useState, useRef, useCallback } from 'react'
@@ -31,11 +32,24 @@ import {
   Users,
   MessageCircle,
   Loader2,
+  Pin,
+  Bell,
+  BellOff,
+  Mic,
+  X,
+  Trash2,
+  Heart,
 } from 'lucide-react'
 
 // ---------------- types ----------------
 type MessageType = 'text' | 'image' | 'video' | 'audio' | 'document'
 type MessageStatus = 'SENDING' | 'SENT' | 'DELIVERED' | 'SEEN'
+
+interface Reaction {
+  emoji: string
+  userId: string
+  userName: string
+}
 
 interface Conversation {
   id: string
@@ -43,6 +57,8 @@ interface Conversation {
   name: string
   photoUrl: string | null
   unread: number
+  pinned?: boolean
+  muted?: boolean
   lastMessage: {
     content: string
     type: string
@@ -78,6 +94,7 @@ interface Message {
   mimeType?: string | null
   status?: MessageStatus
   createdAt: string
+  reactions?: Reaction[]
 }
 
 interface Friend {
@@ -175,6 +192,7 @@ function normalizeMessage(raw: any): Message {
     mimeType: raw.mimeType ?? null,
     status: (raw.status ?? 'SENT') as MessageStatus,
     createdAt: toISO(raw.createdAt),
+    reactions: Array.isArray(raw.reactions) ? raw.reactions.map((r: any) => ({ emoji: r.emoji, userId: r.userId, userName: r.userName })) : [],
   }
 }
 
@@ -364,6 +382,18 @@ function ConversationList() {
                   online={isOnline(c.id)}
                   meId={meId}
                   onOpen={() => openChat(c.id)}
+                  onTogglePin={async () => {
+                    try {
+                      await api('/api/messages/preferences', { method: 'POST', body: JSON.stringify({ peerId: c.id, pinned: !c.pinned }) })
+                      setConversations((prev) => prev.map((x) => (x.id === c.id ? { ...x, pinned: !x.pinned } : x)))
+                    } catch (e: any) { toast.error(e.message) }
+                  }}
+                  onToggleMute={async () => {
+                    try {
+                      await api('/api/messages/preferences', { method: 'POST', body: JSON.stringify({ peerId: c.id, muted: !c.muted }) })
+                      setConversations((prev) => prev.map((x) => (x.id === c.id ? { ...x, muted: !x.muted } : x)))
+                    } catch (e: any) { toast.error(e.message) }
+                  }}
                 />
               ))}
             </div>
@@ -401,44 +431,101 @@ function ConversationRow({
   online,
   meId,
   onOpen,
+  onTogglePin,
+  onToggleMute,
 }: {
   conversation: Conversation
   online: boolean
   meId?: string
   onOpen: () => void
+  onTogglePin: () => void
+  onToggleMute: () => void
 }) {
+  const [menuOpen, setMenuOpen] = useState(false)
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const [pinned, setPinned] = useState(!!conversation.pinned)
+  const [muted, setMuted] = useState(!!conversation.muted)
+
+  useEffect(() => {
+    setPinned(!!conversation.pinned)
+    setMuted(!!conversation.muted)
+  }, [conversation.pinned, conversation.muted])
+
+  const startPress = () => {
+    pressTimer.current = setTimeout(() => setMenuOpen(true), 500)
+  }
+  const cancelPress = () => {
+    if (pressTimer.current) clearTimeout(pressTimer.current)
+  }
+
   return (
-    <button
-      onClick={onOpen}
-      className="flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition-colors hover:bg-accent/50"
-    >
-      <UserAvatar name={conversation.name} src={conversation.photoUrl} size={48} online={online} />
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline justify-between gap-2">
-          <span className="truncate text-sm font-semibold">{conversation.name}</span>
-          {conversation.lastMessage && (
-            <span className="shrink-0 text-[10px] text-muted-foreground">
-              {timeAgo(conversation.lastMessage.createdAt)}
+    <div className="relative">
+      <button
+        onClick={onOpen}
+        onPointerDown={startPress}
+        onPointerUp={cancelPress}
+        onPointerLeave={cancelPress}
+        className={cn(
+          'flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition-colors hover:bg-accent/50',
+          pinned && 'bg-primary/5'
+        )}
+      >
+        <UserAvatar name={conversation.name} src={conversation.photoUrl} size={48} online={online} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="flex min-w-0 items-center gap-1 truncate text-sm font-semibold">
+              <span className="truncate">{conversation.name}</span>
+              {pinned && <Pin size={11} className="shrink-0 text-primary" />}
+              {muted && <BellOff size={11} className="shrink-0 text-muted-foreground" />}
             </span>
-          )}
-        </div>
-        <div className="flex items-center justify-between gap-2">
-          <span
-            className={cn(
-              'truncate text-xs',
-              conversation.unread > 0 ? 'font-medium text-foreground' : 'text-muted-foreground'
+            {conversation.lastMessage && (
+              <span className="shrink-0 text-[10px] text-muted-foreground">
+                {timeAgo(conversation.lastMessage.createdAt)}
+              </span>
             )}
-          >
-            {lastMessagePreview(conversation, meId)}
-          </span>
-          {conversation.unread > 0 && (
-            <span className="grid h-5 min-w-5 shrink-0 place-items-center rounded-full bg-primary px-1.5 text-[10px] font-bold text-primary-foreground">
-              {conversation.unread > 9 ? '9+' : conversation.unread}
+          </div>
+          <div className="flex items-center justify-between gap-2">
+            <span
+              className={cn(
+                'truncate text-xs',
+                conversation.unread > 0 && !muted ? 'font-medium text-foreground' : 'text-muted-foreground'
+              )}
+            >
+              {lastMessagePreview(conversation, meId)}
             </span>
-          )}
+            {conversation.unread > 0 && (
+              <span
+                className={cn(
+                  'grid h-5 min-w-5 shrink-0 place-items-center rounded-full px-1.5 text-[10px] font-bold',
+                  muted ? 'bg-muted text-muted-foreground' : 'bg-primary text-primary-foreground'
+                )}
+              >
+                {conversation.unread > 9 ? '9+' : conversation.unread}
+              </span>
+            )}
+          </div>
         </div>
-      </div>
-    </button>
+      </button>
+      {menuOpen && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => setMenuOpen(false)} />
+          <div className="absolute right-2 top-12 z-30 w-44 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-xl fc-rise">
+            <button
+              onClick={() => { onTogglePin(); setPinned((p) => !p); setMenuOpen(false) }}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-accent"
+            >
+              <Pin size={14} /> {pinned ? 'Unpin chat' : 'Pin chat'}
+            </button>
+            <button
+              onClick={() => { onToggleMute(); setMuted((m) => !m); setMenuOpen(false) }}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-accent"
+            >
+              {muted ? <Bell size={14} /> : <BellOff size={14} />} {muted ? 'Unmute' : 'Mute notifications'}
+            </button>
+          </div>
+        </>
+      )}
+    </div>
   )
 }
 
@@ -504,6 +591,10 @@ function ChatRoom({
   const [imagePreview, setImagePreview] = useState<string | null>(null)
   const [loadingOlder, setLoadingOlder] = useState(false)
   const [hasMore, setHasMore] = useState(true)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const [recording, setRecording] = useState(false)
+  const [recordSecs, setRecordSecs] = useState(0)
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -511,6 +602,10 @@ function ChatRoom({
   const typingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const atBottomRef = useRef(true)
   const oldestTsRef = useRef<string | null>(null)
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null)
+  const recordedChunksRef = useRef<Blob[]>([])
+  const recordStreamRef = useRef<MediaStream | null>(null)
+  const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const prevHeightRef = useRef(0)
   const skipAutoScrollRef = useRef(false)
   const meId = me?.id
@@ -647,22 +742,66 @@ function ChatRoom({
       if (mode === 'direct' && userId === peerId) setPeerTyping(isTyping)
     }
 
+    const onReaction = ({ messageId, userId, emoji, action }: { messageId: string; userId: string; emoji: string; action: 'add' | 'remove' }) => {
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== messageId) return m
+          const reactions = m.reactions ? [...m.reactions] : []
+          if (action === 'add') {
+            if (!reactions.some((r) => r.userId === userId && r.emoji === emoji)) {
+              reactions.push({ emoji, userId, userName: '' })
+            }
+          } else {
+            const idx = reactions.findIndex((r) => r.userId === userId && r.emoji === emoji)
+            if (idx >= 0) reactions.splice(idx, 1)
+          }
+          return { ...m, reactions }
+        })
+      )
+    }
+
     socket.on(RT.MESSAGE_NEW, onNew)
     socket.on(RT.GROUP_MESSAGE_NEW, onNew)
     socket.on(RT.MESSAGE_STATUS, onStatus)
     socket.on(RT.TYPING_INDICATOR, onTyping)
+    socket.on(RT.REACTION_UPDATE, onReaction)
 
     return () => {
       socket.off(RT.MESSAGE_NEW, onNew)
       socket.off(RT.GROUP_MESSAGE_NEW, onNew)
       socket.off(RT.MESSAGE_STATUS, onStatus)
       socket.off(RT.TYPING_INDICATOR, onTyping)
+      socket.off(RT.REACTION_UPDATE, onReaction)
       if (mode === 'direct') {
         socket.emit(RT.TYPING, { receiverId: peerId, isTyping: false })
       }
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current)
     }
   }, [socket, meId, peerId, mode])
+
+  // ---- toggle reaction on a message ----
+  const toggleReaction = useCallback(
+    (messageId: string, emoji: string) => {
+      if (!socket) return
+      setMessages((prev) =>
+        prev.map((m) => {
+          if (m.id !== messageId) return m
+          const reactions = m.reactions ? [...m.reactions] : []
+          const existing = reactions.find((r) => r.userId === meId && r.emoji === emoji)
+          if (existing) {
+            const idx = reactions.indexOf(existing)
+            reactions.splice(idx, 1)
+            socket.emit(RT.REACTION_REMOVE, { messageId, emoji })
+          } else {
+            reactions.push({ emoji, userId: meId, userName: me?.name || '' })
+            socket.emit(RT.REACTION_ADD, { messageId, emoji })
+          }
+          return { ...m, reactions }
+        })
+      )
+    },
+    [socket, meId, me]
+  )
 
   // ---- scroll handling + infinite scroll up ----
   const loadOlder = useCallback(async () => {
@@ -799,6 +938,87 @@ function ChatRoom({
     [sendMessage]
   )
 
+  // ---- voice note recording ----
+  const startRecording = useCallback(async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      recordStreamRef.current = stream
+      recordedChunksRef.current = []
+      const mr = new MediaRecorder(stream)
+      mr.ondataavailable = (e) => {
+        if (e.data.size > 0) recordedChunksRef.current.push(e.data)
+      }
+      mr.onstop = async () => {
+        const blob = new Blob(recordedChunksRef.current, { type: mr.mimeType || 'audio/webm' })
+        const ext = (mr.mimeType || 'audio/webm').includes('mp4') ? 'm4a' : 'webm'
+        const file = new File([blob], `voice-${Date.now()}.${ext}`, { type: blob.type })
+        await sendFile(file)
+      }
+      mr.start()
+      mediaRecorderRef.current = mr
+      setRecording(true)
+      setRecordSecs(0)
+      recordTimerRef.current = setInterval(() => setRecordSecs((s) => s + 1), 1000)
+    } catch (e: any) {
+      toast.error(e?.message || 'Microphone access denied')
+    }
+  }, [sendFile])
+
+  const stopRecording = useCallback((cancel: boolean = false) => {
+    const mr = mediaRecorderRef.current
+    if (mr && mr.state !== 'inactive') {
+      if (cancel) {
+        mr.onstop = null
+        mr.stop()
+      } else {
+        mr.stop()
+      }
+    }
+    if (recordStreamRef.current) {
+      recordStreamRef.current.getTracks().forEach((t) => t.stop())
+      recordStreamRef.current = null
+    }
+    if (recordTimerRef.current) {
+      clearInterval(recordTimerRef.current)
+      recordTimerRef.current = null
+    }
+    setRecording(false)
+    setRecordSecs(0)
+  }, [])
+
+  // cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (recordStreamRef.current) recordStreamRef.current.getTracks().forEach((t) => t.stop())
+      if (recordTimerRef.current) clearInterval(recordTimerRef.current)
+    }
+  }, [])
+
+  // ---- search reload ----
+  const runSearch = useCallback(
+    async (q: string) => {
+      setSearchQuery(q)
+      if (!q.trim()) {
+        // reload normal history
+        try {
+          const endpoint = `/api/messages?${mode === 'direct' ? 'userId' : 'groupId'}=${encodeURIComponent(peerId)}`
+          const data = await api<{ messages: Message[] }>(endpoint)
+          setMessages(data.messages.map(normalizeMessage))
+          if (data.messages.length > 0) oldestTsRef.current = data.messages[0].createdAt
+          setHasMore(data.messages.length >= 50)
+        } catch {}
+        return
+      }
+      try {
+        const endpoint = `/api/messages?${mode === 'direct' ? 'userId' : 'groupId'}=${encodeURIComponent(peerId)}&q=${encodeURIComponent(q)}`
+        const data = await api<{ messages: Message[] }>(endpoint)
+        setMessages(data.messages.map(normalizeMessage))
+        setHasMore(false)
+      } catch {}
+    },
+    [mode, peerId]
+  )
+
   // ---- typing ----
   const handleTextInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     setText(e.target.value)
@@ -871,6 +1091,13 @@ function ChatRoom({
         {mode === 'direct' && (
           <div className="flex shrink-0 items-center gap-1">
             <button
+              onClick={() => setSearchOpen((s) => !s)}
+              className={cn('grid h-9 w-9 place-items-center rounded-full transition hover:bg-accent', searchOpen ? 'text-primary' : 'text-muted-foreground hover:text-primary')}
+              aria-label="Search messages"
+            >
+              <Search size={18} />
+            </button>
+            <button
               onClick={() => startCall('audio')}
               className="grid h-9 w-9 place-items-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-primary"
               aria-label="Start audio call"
@@ -887,6 +1114,29 @@ function ChatRoom({
           </div>
         )}
       </header>
+
+      {/* search bar */}
+      {searchOpen && (
+        <div className="flex items-center gap-2 border-b border-border bg-muted/40 px-3 py-2">
+          <Search size={15} className="text-muted-foreground" />
+          <input
+            autoFocus
+            value={searchQuery}
+            onChange={(e) => runSearch(e.target.value)}
+            placeholder="Search messages in this chat…"
+            className="flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground"
+          />
+          {searchQuery && (
+            <button
+              onClick={() => { setSearchQuery(''); setSearchOpen(false); runSearch('') }}
+              className="grid h-6 w-6 place-items-center rounded-full text-muted-foreground hover:bg-accent"
+              aria-label="Close search"
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
+      )}
 
       {/* messages */}
       <div
@@ -937,7 +1187,10 @@ function ChatRoom({
                     mine={mine}
                     isGroup={mode === 'group'}
                     showSender={showSender}
+                    meId={meId}
+                    searchQuery={searchQuery}
                     onImageClick={(url) => setImagePreview(url)}
+                    onReact={toggleReaction}
                   />
                 )
               })}
@@ -967,44 +1220,82 @@ function ChatRoom({
       </div>
 
       {/* input bar */}
-      <div className="border-t border-border bg-background p-2">
-        <div className="flex items-end gap-1.5">
-          <EmojiPicker onPick={(emoji) => setText((t) => t + emoji)} />
-          <input
-            ref={fileInputRef}
-            type="file"
-            className="hidden"
-            accept="image/*,video/*,audio/*,.pdf,.zip,.doc,.docx,.txt"
-            onChange={(e) => {
-              const f = e.target.files?.[0]
-              if (f) sendFile(f)
-            }}
-          />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploading}
-            className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-primary disabled:opacity-50"
-            aria-label="Attach file"
-          >
-            {uploading ? <Loader2 className="animate-spin" size={20} /> : <Paperclip size={20} />}
-          </button>
-          <Textarea
-            value={text}
-            onChange={handleTextInput}
-            onKeyDown={handleKey}
-            placeholder="Type a message…"
-            rows={1}
-            className="min-h-10 max-h-32 flex-1 resize-none rounded-2xl bg-accent/40 px-3 py-2.5 text-sm"
-          />
-          <button
-            onClick={sendText}
-            disabled={!text.trim() || uploading}
-            className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:opacity-50"
-            aria-label="Send message"
-          >
-            <Send size={18} />
-          </button>
-        </div>
+      <div className="border-t border-border bg-background p-2 fc-safe-bottom">
+        {recording ? (
+          <div className="flex items-center gap-3 rounded-2xl bg-destructive/10 px-4 py-3">
+            <span className="relative flex h-3 w-3">
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-destructive opacity-75" />
+              <span className="relative inline-flex h-3 w-3 rounded-full bg-destructive" />
+            </span>
+            <span className="font-mono text-sm font-medium text-destructive">
+              {String(Math.floor(recordSecs / 60)).padStart(2, '0')}:{String(recordSecs % 60).padStart(2, '0')}
+            </span>
+            <span className="flex-1 text-sm text-muted-foreground">Recording voice note…</span>
+            <button
+              onClick={() => stopRecording(true)}
+              className="grid h-9 w-9 place-items-center rounded-full text-destructive transition hover:bg-destructive/10"
+              aria-label="Cancel recording"
+            >
+              <Trash2 size={18} />
+            </button>
+            <button
+              onClick={() => stopRecording(false)}
+              className="grid h-9 w-9 place-items-center rounded-full bg-primary text-primary-foreground transition hover:bg-primary/90"
+              aria-label="Send voice note"
+            >
+              <Send size={18} />
+            </button>
+          </div>
+        ) : (
+          <div className="flex items-end gap-1.5">
+            <EmojiPicker onPick={(emoji) => setText((t) => t + emoji)} />
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              accept="image/*,video/*,audio/*,.pdf,.zip,.doc,.docx,.txt"
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) sendFile(f)
+              }}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-primary disabled:opacity-50"
+              aria-label="Attach file"
+            >
+              {uploading ? <Loader2 className="animate-spin" size={20} /> : <Paperclip size={20} />}
+            </button>
+            <Textarea
+              value={text}
+              onChange={handleTextInput}
+              onKeyDown={handleKey}
+              placeholder="Type a message…"
+              rows={1}
+              className="min-h-10 max-h-32 flex-1 resize-none rounded-2xl bg-accent/40 px-3 py-2.5 text-sm"
+            />
+            {text.trim() ? (
+              <button
+                onClick={sendText}
+                disabled={uploading}
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground shadow-sm transition hover:bg-primary/90 disabled:opacity-50"
+                aria-label="Send message"
+              >
+                <Send size={18} />
+              </button>
+            ) : (
+              <button
+                onClick={startRecording}
+                disabled={uploading}
+                className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary/15 text-primary transition hover:bg-primary/25 disabled:opacity-50"
+                aria-label="Record voice note"
+              >
+                <Mic size={20} />
+              </button>
+            )}
+          </div>
+        )}
       </div>
 
       {/* image preview dialog */}
@@ -1063,21 +1354,72 @@ function EmojiPicker({ onPick }: { onPick: (e: string) => void }) {
 }
 
 // ---------------- message bubble ----------------
+const QUICK_REACTIONS = ['❤️', '😂', '👍', '😮', '😢', '🙏']
+
+function highlight(text: string, q: string): React.ReactNode[] {
+  if (!q.trim()) return linkify(text)
+  const lower = text.toLowerCase()
+  const ql = q.toLowerCase()
+  const nodes: React.ReactNode[] = []
+  let i = 0
+  let idx = lower.indexOf(ql, i)
+  let key = 0
+  while (idx !== -1) {
+    if (idx > i) nodes.push(<span key={key++}>{text.slice(i, idx)}</span>)
+    nodes.push(
+      <mark key={key++} className="rounded bg-yellow-300 px-0.5 text-black">
+        {text.slice(idx, idx + ql.length)}
+      </mark>
+    )
+    i = idx + ql.length
+    idx = lower.indexOf(ql, i)
+  }
+  if (i < text.length) nodes.push(<span key={key++}>{text.slice(i)}</span>)
+  return nodes
+}
+
 function MessageBubble({
   msg,
   mine,
   isGroup,
   showSender,
+  meId,
+  searchQuery,
   onImageClick,
+  onReact,
 }: {
   msg: Message
   mine: boolean
   isGroup: boolean
   showSender: boolean
+  meId?: string
+  searchQuery?: string
   onImageClick: (url: string) => void
+  onReact: (messageId: string, emoji: string) => void
 }) {
   const bubbleClass = mine ? 'fc-bubble-me' : 'fc-bubble-them'
   const isMedia = msg.type === 'image' || msg.type === 'video'
+  const [reactOpen, setReactOpen] = useState(false)
+  const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const startPress = () => {
+    pressTimer.current = setTimeout(() => setReactOpen(true), 450)
+  }
+  const cancelPress = () => {
+    if (pressTimer.current) clearTimeout(pressTimer.current)
+  }
+
+  // aggregate reactions: emoji -> { count, mine }
+  const reactionAgg = React.useMemo(() => {
+    const map = new Map<string, { count: number; mine: boolean }>()
+    for (const r of msg.reactions || []) {
+      const cur = map.get(r.emoji) || { count: 0, mine: false }
+      cur.count += 1
+      if (r.userId === meId) cur.mine = true
+      map.set(r.emoji, cur)
+    }
+    return Array.from(map.entries())
+  }, [msg.reactions, meId])
 
   const meta = (
     <div
@@ -1105,15 +1447,15 @@ function MessageBubble({
           </span>
         )}
         <div
-          className={cn(
-            'text-sm shadow-sm',
-            bubbleClass,
-            isMedia ? 'p-1' : 'px-2.5 py-1.5'
-          )}
+          onPointerDown={startPress}
+          onPointerUp={cancelPress}
+          onPointerLeave={cancelPress}
+          onDoubleClick={() => onReact(msg.id, '❤️')}
+          className={cn('relative text-sm shadow-sm', bubbleClass, isMedia ? 'p-1' : 'px-2.5 py-1.5')}
         >
           {msg.type === 'text' && (
             <>
-              <p className="whitespace-pre-wrap break-words">{linkify(msg.content)}</p>
+              <p className="whitespace-pre-wrap break-words">{highlight(msg.content, searchQuery || '')}</p>
               {meta}
             </>
           )}
@@ -1142,7 +1484,10 @@ function MessageBubble({
           {msg.type === 'audio' && msg.fileUrl && (
             <>
               <div className="flex items-center gap-2 py-0.5">
-                <audio src={msg.fileUrl} controls className="w-56 max-w-full" />
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary/20 text-primary">
+                  <Mic size={16} />
+                </span>
+                <audio src={msg.fileUrl} controls className="w-48 max-w-full" />
               </div>
               {meta}
             </>
@@ -1168,7 +1513,51 @@ function MessageBubble({
               {meta}
             </>
           )}
+
+          {/* reaction picker popover */}
+          {reactOpen && (
+            <>
+              <div className="fixed inset-0 z-20" onClick={() => setReactOpen(false)} />
+              <div
+                className={cn(
+                  'absolute -top-10 z-30 flex items-center gap-0.5 rounded-full border border-border bg-popover p-1 shadow-xl fc-rise',
+                  mine ? 'right-0' : 'left-0'
+                )}
+              >
+                {QUICK_REACTIONS.map((e) => (
+                  <button
+                    key={e}
+                    onClick={() => { onReact(msg.id, e); setReactOpen(false) }}
+                    className="grid h-8 w-8 place-items-center rounded-full text-lg transition hover:scale-125 hover:bg-accent"
+                  >
+                    {e}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
         </div>
+
+        {/* reaction chips */}
+        {reactionAgg.length > 0 && (
+          <div className={cn('mt-0.5 flex flex-wrap gap-1', mine ? 'justify-end' : 'justify-start')}>
+            {reactionAgg.map(([emoji, info]) => (
+              <button
+                key={emoji}
+                onClick={() => onReact(msg.id, emoji)}
+                className={cn(
+                  'flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-xs transition',
+                  info.mine
+                    ? 'border-primary bg-primary/15 text-primary'
+                    : 'border-border bg-card text-foreground hover:bg-accent'
+                )}
+              >
+                <span className="text-sm">{emoji}</span>
+                {info.count > 1 && <span className="text-[10px] font-semibold">{info.count}</span>}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   )

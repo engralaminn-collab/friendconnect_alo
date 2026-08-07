@@ -31,6 +31,8 @@ model User {
   files         File[]
   otpCode       String?
   otpExpiry     DateTime?
+  reactions     MessageReaction[]
+  chatPrefs     ChatPreference[]
 }
 
 model Profile {
@@ -94,6 +96,7 @@ model Message {
   sender   User   @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
   receiver User?  @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
   group    Group? @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  reactions MessageReaction[]
 }
 
 model Group {
@@ -159,4 +162,33 @@ model File {
   size      Int
   url       String
   createdAt DateTime @default(now())
+}
+
+// ---- Additive: message reactions ----
+model MessageReaction {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId, emoji])
+  @@index([messageId])
+}
+
+// ---- Additive: per-user chat preferences (pin / mute) ----
+model ChatPreference {
+  id        String   @id @default(cuid())
+  userId    String
+  peerId    String   // the other participant's userId (1:1 chats)
+  pinned    Boolean  @default(false)
+  muted     Boolean  @default(false)
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, peerId])
 }

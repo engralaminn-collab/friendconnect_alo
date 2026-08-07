@@ -212,6 +212,59 @@ io.on('connection', (socket) => {
     io.to(room(data.receiverId)).emit('typing:indicator', { userId, isTyping: data.isTyping })
   })
 
+  // ---------- Reactions ----------
+  socket.on('reaction:add', async (data: { messageId: string; emoji: string }, ack?: (r: any) => void) => {
+    if (!userId) return ack?.({ ok: false, error: 'unauth' })
+    try {
+      const msg = await db.message.findUnique({ where: { id: data.messageId } })
+      if (!msg) return ack?.({ ok: false, error: 'message not found' })
+      // validate participation: sender, receiver, or group member
+      const isParticipant =
+        msg.senderId === userId ||
+        msg.receiverId === userId ||
+        (msg.groupId ? !!(await db.groupMember.findUnique({ where: { groupId_userId: { groupId: msg.groupId, userId } } })) : false)
+      if (!isParticipant) return ack?.({ ok: false, error: 'forbidden' })
+      const emoji = String(data.emoji || '').slice(0, 8)
+      if (!emoji) return ack?.({ ok: false, error: 'no emoji' })
+      await db.messageReaction.upsert({
+        where: { messageId_userId_emoji: { messageId: data.messageId, userId, emoji } },
+        update: {},
+        create: { messageId: data.messageId, userId, emoji },
+      })
+      ack?.({ ok: true })
+      const payload = { messageId: data.messageId, userId, emoji, action: 'add' as const }
+      // notify sender + receiver (or group members)
+      io.to(room(msg.senderId)).emit('reaction:update', payload)
+      if (msg.receiverId) io.to(room(msg.receiverId)).emit('reaction:update', payload)
+      if (msg.groupId) {
+        const members = await db.groupMember.findMany({ where: { groupId: msg.groupId } })
+        for (const m of members) io.to(room(m.userId)).emit('reaction:update', payload)
+      }
+    } catch (e: any) {
+      ack?.({ ok: false, error: e?.message })
+    }
+  })
+
+  socket.on('reaction:remove', async (data: { messageId: string; emoji: string }, ack?: (r: any) => void) => {
+    if (!userId) return ack?.({ ok: false, error: 'unauth' })
+    try {
+      const msg = await db.message.findUnique({ where: { id: data.messageId } })
+      if (!msg) return ack?.({ ok: false, error: 'message not found' })
+      const emoji = String(data.emoji || '').slice(0, 8)
+      await db.messageReaction.deleteMany({ where: { messageId: data.messageId, userId, emoji } })
+      ack?.({ ok: true })
+      const payload = { messageId: data.messageId, userId, emoji, action: 'remove' as const }
+      io.to(room(msg.senderId)).emit('reaction:update', payload)
+      if (msg.receiverId) io.to(room(msg.receiverId)).emit('reaction:update', payload)
+      if (msg.groupId) {
+        const members = await db.groupMember.findMany({ where: { groupId: msg.groupId } })
+        for (const m of members) io.to(room(m.userId)).emit('reaction:update', payload)
+      }
+    } catch (e: any) {
+      ack?.({ ok: false, error: e?.message })
+    }
+  })
+
   socket.on('group:message:send', async (data: GroupSendPayload, ack?: (r: any) => void) => {
     if (!userId) return ack?.({ ok: false, error: 'unauth' })
     try {

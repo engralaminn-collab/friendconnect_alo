@@ -16,14 +16,19 @@ export async function GET(req: NextRequest) {
         where: { groupId_userId: { groupId, userId: me.id } },
       })
       if (!membership) return errorJson('Not a member', 403)
+      const q = req.nextUrl.searchParams.get('q')
       const messages = await db.message.findMany({
         where: {
           groupId,
           ...(before ? { createdAt: { lt: new Date(before) } } : {}),
+          ...(q ? { content: { contains: q } } : {}),
         },
         orderBy: { createdAt: 'desc' },
-        take: 50,
-        include: { sender: { include: { profile: true } } },
+        take: q ? 100 : 50,
+        include: {
+          sender: { include: { profile: true } },
+          reactions: { include: { user: { select: { id: true, name: true } } } },
+        },
       })
       return json({
         messages: messages.reverse().map((m) => ({
@@ -38,6 +43,7 @@ export async function GET(req: NextRequest) {
           fileSize: m.fileSize,
           mimeType: m.mimeType,
           createdAt: m.createdAt.toISOString(),
+          reactions: m.reactions.map((r) => ({ emoji: r.emoji, userId: r.user.id, userName: r.user.name })),
         })),
       })
     }
@@ -55,6 +61,7 @@ export async function GET(req: NextRequest) {
     })
     if (blocked) return errorJson('Cannot view messages', 403)
 
+    const q = req.nextUrl.searchParams.get('q')
     const messages = await db.message.findMany({
       where: {
         groupId: null,
@@ -63,15 +70,21 @@ export async function GET(req: NextRequest) {
           { senderId: userId, receiverId: me.id },
         ],
         ...(before ? { createdAt: { lt: new Date(before) } } : {}),
+        ...(q ? { content: { contains: q } } : {}),
       },
       orderBy: { createdAt: 'desc' },
-      take: 50,
+      take: q ? 100 : 50,
+      include: {
+        reactions: { include: { user: { select: { id: true, name: true } } } },
+      },
     })
-    // mark incoming as seen
-    await db.message.updateMany({
-      where: { senderId: userId, receiverId: me.id, status: { not: 'SEEN' } },
-      data: { status: 'SEEN', seenAt: new Date() },
-    })
+    // mark incoming as seen (only when not searching)
+    if (!q) {
+      await db.message.updateMany({
+        where: { senderId: userId, receiverId: me.id, status: { not: 'SEEN' } },
+        data: { status: 'SEEN', seenAt: new Date() },
+      })
+    }
     return json({
       messages: messages.reverse().map((m) => ({
         id: m.id,
@@ -85,6 +98,7 @@ export async function GET(req: NextRequest) {
         mimeType: m.mimeType,
         status: m.status,
         createdAt: m.createdAt.toISOString(),
+        reactions: m.reactions.map((r) => ({ emoji: r.emoji, userId: r.user.id, userName: r.user.name })),
       })),
     })
   } catch (e: any) {

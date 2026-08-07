@@ -30,6 +30,8 @@ export const RT = {
   CALL_RINGING: 'call:ringing',
   CALL_REJECT: 'call:reject',
   GROUP_MESSAGE_SEND: 'group:message:send',
+  REACTION_ADD: 'reaction:add',
+  REACTION_REMOVE: 'reaction:remove',
   // server -> client
   MESSAGE_NEW: 'message:new',
   MESSAGE_STATUS: 'message:status',
@@ -41,6 +43,7 @@ export const RT = {
   CALL_ICE_CANDIDATE: 'call:ice-candidate',
   CALL_ENDED: 'call:ended',
   GROUP_MESSAGE_NEW: 'group:message:new',
+  REACTION_UPDATE: 'reaction:update',
   AUTH_OK: 'auth:ok',
   AUTH_ERROR: 'auth:error',
 } as const
