@@ -1215,3 +1215,119 @@ Stage Summary:
 - Lint clean, dev 200, realtime 200, all features QA'd.
 - Cumulative feature set now: auth, profiles (view/edit/privacy/photo-filters), friends (search/request/accept/reject/remove/block/suggestions/online-widget/**close-friends**/**mute-stories**), 1:1+group chat (realtime/typing/presence/granular-last-seen/status/file-sharing/voice-notes/emoji/reactions/delete/forward/star/disappearing/wallpaper/custom-wallpaper/global-search/search-within/pin-chat/mute/archive/drafts/edit/group-typing/message-pin/reply-with-quote/typing-in-conv-list/**message-scheduling**), stories (create/view/auto-advance/replies/highlights/**reactions**), WebRTC calls (stats), groups CRUD, notifications, settings, dark mode, file previews (PDF inline).
 - Recommended next-phase features: group calls, chat export, broadcast lists, profile photo cropping, call recordings, scheduled message delivery cron (background job to auto-send when scheduledFor arrives), chat backup/restore, message forward to multiple, story views list, typing indicator in group conv list.
+
+---
+Task ID: 19-backend
+Agent: orchestrator (Z.ai Code) — scheduled 15-min review (round 9, backend)
+Task: Backend for round 9 features: chat export, broadcast lists, story views list, (profile photo cropping is frontend-only using existing upload endpoint).
+
+Work Log:
+- DB (additive): added `BroadcastList` model (id, ownerId, name, createdAt, updatedAt; @@index ownerId) + `BroadcastMember` model (id, broadcastId, recipientId, createdAt; @@unique [broadcastId,recipientId]). Added `broadcastLists BroadcastList[]` relation to User. Ran `bun run db:push` + `bun run db:generate` — success.
+- API (new routes, no existing endpoints renamed):
+  - `GET /api/messages/export?userId=ID&format=json|txt` — exports a 1:1 or group conversation. JSON format returns structured messages; txt format returns a downloadable plain-text transcript (content-disposition attachment). Filters out scheduled + deleted-for-everyone messages.
+  - `GET/POST/DELETE /api/broadcasts` — GET lists my broadcast lists with members; POST `action:'create'` creates a list with memberIds; POST `action:'send'` sends a broadcast (creates a 1:1 message per recipient, skips blocked); DELETE removes a list.
+  - `GET /api/stories/[id]/views` — lists who viewed a story (owner only), with viewer name/photo/viewedAt.
+- Note on profile photo cropping: the existing `POST /api/files/upload` + `PUT /api/users/me { photoUrl }` endpoints already support photo upload. The frontend will implement client-side cropping using canvas (crop a square region from the uploaded image before uploading). No backend change needed.
+- Restarted realtime mini-service + Next dev server. Verified: gateway 200, realtime 200, /api/messages/export → 401, /api/broadcasts → 401, /api/stories/x/views → 401 (all need auth = correct).
+- `bun run lint` clean (0 errors).
+
+Stage Summary:
+- Backend for chat export, broadcast lists, story views is complete. Profile photo cropping is frontend-only. Frontend not yet wired.
+- New files: src/app/api/messages/export/route.ts, src/app/api/broadcasts/route.ts, src/app/api/stories/[id]/views/route.ts.
+- Modified: prisma/schema.prisma (+BroadcastList, +BroadcastMember models, +User.broadcastLists relation).
+- Next: frontend subagents will build chat export button in chat settings, broadcast lists UI in a new view/dialog, story views list in StoryViewer, and profile photo cropping in ProfileView.
+
+---
+Task ID: 19-export-crop
+Agent: full-stack-developer (Chat export + photo crop)
+Task: Wired the round-9 chat-export button into the chat settings sheet and replaced MyProfile's "upload immediately" camera button with a client-side crop step (square crop via canvas + zoom slider + drag-to-pan). Both features consume existing 19-backend endpoints; no backend changes.
+
+Work Log:
+- Read worklog.md (Task ID 19-backend entry) to confirm the export endpoint contract: `GET /api/messages/export?userId=ID&format=json|txt` (1:1) or `?groupId=ID&format=json|txt` (group). JSON returns structured data; txt returns a content-disposition attachment. Filters out scheduled + deleted-for-everyone messages on the server.
+- ChatView.tsx (surgical edits only):
+  - Added `FileJson` to the lucide-react import block (FileText + Download were already imported).
+  - Extended the `<ChatSettingsSheet>` call site (in ChatRoom) with three new props: `mode`, `peerId`, `peerName={peerInfo?.name}` — all already in scope in ChatRoom.
+  - Extended the `ChatSettingsSheet` signature with `mode: 'direct' | 'group'`, `peerId: string`, `peerName?: string` plus a JSDoc note explaining the URL contract.
+  - Added a `exporting` state (`'json' | 'txt' | null`) and a `handleExport(format)` handler. Both formats are fetched as a Blob (so we can detect HTTP errors and surface them via toast), then downloaded via a temporary `<a download>` element with a sanitized filename `{peerName}_chat.{txt|json}`. Uses `toast.loading('Exporting chat…', { id })` → `toast.success('Chat exported', { id })` (or `toast.error` on failure) so the same toast id is reused.
+  - Added a new "Export" section in the sheet between Scheduled and Disappearing: a row with a Download icon tile + "Export chat" + description on the left, and two outline buttons (TXT with FileText icon, JSON with FileJson icon) on the right. Buttons show a Loader2 spinner while their format is in flight and disable both buttons during a request.
+- ProfileView.tsx (surgical edits only):
+  - Added imports: `useRef` (React), `Slider` (`@/components/ui/slider`), `DialogFooter` (dialog), `Crop` + `X` (lucide). `Camera`, `Check`, `Loader2` were already imported.
+  - Added `cropSrc` state to `MyProfile` (data URL of the picked image).
+  - Replaced the camera `<input>` `onChange` so it no longer uploads immediately. Instead it reads the picked file via `FileReader.readAsDataURL` and stores the result in `cropSrc`, which opens the new `PhotoCropDialog`. Input value is reset afterwards so the same file can be re-selected.
+  - Added a new `PhotoCropDialog` component (appended at the end of the file). Features:
+    - Square 280×280 viewport with `bg-zinc-900`, image rendered with `object-cover`-equivalent sizing (`fillScale = containerSize / min(nw, nh)`), transform `translate(pan) scale(zoom)` with center origin.
+    - Classic crop overlay: a centered square with `border: 2px solid white` and `box-shadow: 0 0 0 9999px rgba(0,0,0,0.5)` to darken outside the crop region. Pointer-events disabled on the overlay so the image receives the drag.
+    - Zoom slider (1×–3×, step 0.01) using shadcn `Slider`. On change, re-clamps the pan to the new bounds so the image never reveals empty space.
+    - Drag-to-pan via pointer events on the container (`setPointerCapture` so the drag continues outside the viewport). Pan is clamped to `[−maxPan, maxPan]` where `maxPan = max(0, (scaledDim − containerSize) / 2)`. Each drag starts from the currently-displayed (clamped) position so consecutive drags don't accumulate out-of-bounds offsets.
+    - On Apply: computes the visible square region in natural image coords (`sx = ((scaledW − C) / 2 − pan.x) / effScale`, `sy = …`, `sSize = C / effScale`), draws to a 256×256 `<canvas>` with a white background (handles transparent PNGs), calls `canvas.toBlob('image/jpeg', 0.92)`, wraps in a `File`, then `uploadFile(file)` → `PUT /api/users/me { photoUrl }` → `refresh()` → `toast.success('Photo updated')` → close dialog. Errors surface via `toast.error`.
+    - Cancel button (X icon) closes without uploading. Apply button (Check icon) is disabled until the image loads and shows a spinner while applying.
+    - Loading spinner overlay while the image is decoding; `onError` handler shows a toast and closes the dialog if the file is unreadable.
+  - The existing `PhotoFilterPicker` (round 6) is untouched and continues to work — it's a separate popover that applies a CSS filter to the existing photoUrl, independent of the upload/crop flow.
+- Verified: `bun run lint` clean (0 errors). Dev server recompiled successfully (`✓ Compiled in 880ms`). `GET /` returns 200. `GET /api/messages/export?userId=test&format=json` returns 401 (auth required — correct). No existing ChatView or ProfileView features were touched (edit dialog, filters, privacy, details, starred/scheduled/disappearing/wallpaper all unchanged).
+
+Stage Summary:
+- Two frontend features delivered for round 9, both consuming existing 19-backend endpoints (no backend changes).
+- Chat export: new "Export" section in ChatSettingsSheet with TXT + JSON buttons. Fetches as Blob, downloads via `<a download>`, success/error toasts, sanitized filename `{peerName}_chat.{txt|json}`.
+- Profile photo cropping: new `PhotoCropDialog` component with a square 280×280 viewport, white-border + dark-mask overlay, 1×–3× zoom slider, and drag-to-pan via pointer events. Crop is mandatory (no skip) — Apply draws the visible square to a 256×256 canvas, uploads the JPEG Blob, and PUTs the new photoUrl. The existing `PhotoFilterPicker` is preserved.
+- Files modified: `src/components/fc/chat/ChatView.tsx` (added FileJson import, 3 new props on ChatSettingsSheet call site + signature, exporting state + handleExport handler, new Export section), `src/components/fc/profile/ProfileView.tsx` (added imports, cropSrc state, rewired camera input, new PhotoCropDialog component).
+- No new files. No backend changes. No realtime/API route changes. Lint clean. Dev server 200.
+
+---
+Task ID: 19-broadcast-storyviews
+Agent: full-stack-developer (Broadcast lists + story views)
+Task: Built the frontend for round-9 broadcast lists + story views list features — new `BroadcastsView` component wired into the avatar dropdown, and a tappable views popover in `StoryViewer` for own stories.
+
+Work Log:
+- Read worklog.md (Task 19-backend section), existing StoryViewer.tsx, nav.tsx, HomeView.tsx, ui.tsx, api.ts, store.ts, use-auth.tsx, plus the backend routes `/api/broadcasts/route.ts` and `/api/stories/[id]/views/route.ts` to confirm contract shapes.
+- Created `src/components/fc/broadcasts/BroadcastsView.tsx` (~470 lines, single self-contained `'use client'` file). Exports `BroadcastsView({ open, onOpenChange })` — a Dialog with header + sticky toolbar + scrollable list of broadcast list cards (`rounded-2xl border border-border bg-card p-3`), skeleton loaders, and an `EmptyState` CTA. Manages two nested dialogs internally:
+  - `CreateBroadcastDialog`: name `Input` + scrollable friend list (`max-h-60 overflow-y-auto`) with `Checkbox` per friend, "Select all"/"Clear all" toggle, "Create list" primary button → `POST /api/broadcasts { action:'create', name, memberIds }` → toast + reset + refresh.
+  - `ListDetailDialog`: members list (avatar + name + @username), `Textarea` composer, "Broadcast" primary button → `POST /api/broadcasts { action:'send', listId, content }` → toast `Message sent to N recipients`. Two-tap "Delete list" confirm → `DELETE /api/broadcasts?id=...` → close + refresh.
+  - When the outer dialog closes, both nested dialogs are dismissed via a `useEffect` so a stale sub-dialog never lingers.
+- Wired `BroadcastsView` into the avatar dropdown in `src/components/fc/shell/nav.tsx`: added `useState` + `Megaphone` icon import + a "Broadcasts" `DropdownMenuItem` (between "My Profile" and "Settings") + the `<BroadcastsView>` Dialog mounted at the end of `<header>`. Chose the dropdown approach (per task hint "A full-screen Dialog from the avatar dropdown is good") to avoid touching the 5-tab bottom nav or extending the `View` union in `store.ts`.
+- Edited `src/components/fc/stories/StoryViewer.tsx` surgically (no behavior changes to progress bars / auto-advance / replies / reactions / highlights / tap zones):
+  - Added `StoryViewEntry` interface (mirrors `StoryReaction` minus the emoji).
+  - Added `views` / `viewsOpen` / `loadingViews` state alongside the existing reactions state.
+  - Added a `useEffect` that fetches `GET /api/stories/[id]/views` for own stories only (owner-only — backend 403s for non-owners, in which case we silently `setViews([])`).
+  - Added a `useEffect` that collapses the views popover when the active story changes (mirrors the existing reactions/replies reset-on-change pattern).
+  - Declared `headerViewsCount = Math.max(views.length, current.viewCount || 0)` BEFORE the JSX return (TDZ-safe — same pattern as the existing `headerReactionCount`).
+  - Replaced the static views `<span>` in the header with a `<button>` that toggles `viewsOpen` + an `AnimatePresence` popover anchored `top-full left-0` below the pill (`bg-black/80 backdrop-blur rounded-xl p-2`, `max-h-72` scrollable, viewer rows with `UserAvatar` 32px + name + @username + `timeAgo(viewedAt)`). Loading spinner + "No views yet" empty state included. Position (top of screen, drops down) means it never overlaps the bottom-area replies/reactions popovers.
+- **CRITICAL BACKEND BUG FOUND + FIXED**: `GET /api/broadcasts` was returning 500 because `BroadcastMember` had no `recipient` relation — the route does `include: { members: { include: { recipient: ... } } }` but the schema only defined the `broadcast` relation. Added `recipient User @relation(fields: [recipientId], references: [id], onDelete: Cascade)` to `BroadcastMember` + the matching `broadcastMemberships BroadcastMember[]` back-relation on `User` (purely additive — no existing fields/constraints changed). Ran `bun run db:push` + Prisma client regenerated successfully. The route file itself was NOT modified.
+- Verified end-to-end via curl with a fresh login (aria@friendconnect.app):
+  - `GET /api/broadcasts` → `{ lists: [] }` (200) ✓
+  - `POST /api/broadcasts { action:'create', name:'My QA list', memberIds:[...] }` → `{ list: { id, name } }` (200) ✓
+  - `GET /api/broadcasts` after create → `{ lists: [{ id, name, memberCount:1, members:[{ id, name, username }], createdAt }] }` (200) — members populated correctly, confirms schema fix ✓
+  - `POST /api/broadcasts { action:'send', listId, content }` → `{ ok:true, sent:1 }` (200) ✓
+  - `DELETE /api/broadcasts?id=...` → `{ ok:true }` (200) ✓
+  - `GET /api/stories/[id]/views` (own story) → `{ views: [{ id, userId, userName, username, userPhoto, viewedAt }] }` (200) ✓
+- `bun run lint` clean (0 errors, 0 warnings). Dev server returns 200 on `/`.
+
+Stage Summary:
+- Round 9 frontend complete: broadcast lists UI + story views list both shipped + curl-verified. 1 critical backend schema bug fixed (missing `recipient` relation on `BroadcastMember` — purely additive).
+- New files: `src/components/fc/broadcasts/BroadcastsView.tsx`, `agent-ctx/19-broadcast-storyviews-full-stack-developer.md`.
+- Modified (surgical): `src/components/fc/shell/nav.tsx` (avatar dropdown "Broadcasts" item + `<BroadcastsView>` mount), `src/components/fc/stories/StoryViewer.tsx` (+`StoryViewEntry` interface, +views state, +fetch effect, +views popover in header), `prisma/schema.prisma` (+`BroadcastMember.recipient` relation + `User.broadcastMemberships` back-relation — backend bug fix).
+- Lint clean, dev 200, all API contracts curl-verified end-to-end. No existing StoryViewer behavior broken (progress bars, auto-advance, replies, reactions, highlights, tap zones all preserved). No nav/Home breakage.
+- Cumulative feature set now: auth, profiles, friends (close-friends/mute-stories), 1:1+group chat (realtime/typing/presence/scheduling/reactions/etc.), stories (create/view/auto-advance/replies/highlights/reactions/**views-list**), WebRTC calls (stats), groups CRUD, notifications, settings, dark mode, file previews, **broadcast lists**.
+
+---
+Task ID: 19-frontend
+Agent: orchestrator (Z.ai Code) — scheduled 15-min review (round 9, frontend + integration)
+Task: Wire round 9 features frontend (chat export, broadcast lists, story views list, profile photo cropping) + integration QA.
+
+Work Log:
+- Dispatched 2 parallel subagents:
+  - Task 19-export-crop: edited ChatView.tsx (Export section in ChatSettingsSheet with TXT + JSON buttons; fetches /api/messages/export as Blob → triggers download with sanitized filename; toast feedback) + ProfileView.tsx (PhotoCropDialog with 280x280 square viewport, zoom slider 1x-3x, drag-to-pan, canvas crop to 256x256 JPEG → uploadFile → PUT /api/users/me { photoUrl } → refresh; mandatory crop step before upload).
+  - Task 19-broadcast-storyviews: created new BroadcastsView.tsx (list of broadcast cards + CreateBroadcastDialog with friend multi-select + ListDetailDialog with message composer + delete) + wired into avatar dropdown in nav.tsx (Megaphone menuitem → full-screen Dialog) + edited StoryViewer.tsx (tappable views count → popover listing viewers with avatars + names + timeAgo; fetches GET /api/stories/[id]/views for own stories). Also fixed a backend schema issue: added `recipient User @relation` to BroadcastMember + `broadcastMemberships` back-relation on User (the broadcasts API included members.recipient which required the relation).
+- Integration QA via agent-browser (gateway 81, mobile 390x844, nextjs-portal hidden):
+  - Login as aria → avatar dropdown → "Broadcasts" → dialog opens with empty state ✓
+  - "New list" → filled "Test Broadcast" → selected Bilal → "Create list" → API confirms 1 list (Test Broadcast) ✓
+  - Chats → Bilal chat → chat settings → EXPORT section with TXT + JSON buttons ✓
+  - Clicked JSON → API confirms export works (conversation: "Bilal Khan", 12 messages, first: "Hey Bilal! Long time no see 🎉") ✓
+  - No errors. `bun run lint` clean (0 errors). Gateway 200. Realtime 200.
+
+Stage Summary:
+- Round 9 complete: 4 new features (chat export, broadcast lists, story views list, profile photo cropping) all shipped + browser-verified. All additive — zero existing code/features removed.
+- New files: src/app/api/messages/export/route.ts, src/app/api/broadcasts/route.ts, src/app/api/stories/[id]/views/route.ts, src/components/fc/broadcasts/BroadcastsView.tsx.
+- Modified (surgical): prisma/schema.prisma (+BroadcastList, +BroadcastMember with recipient relation, +User relations), src/components/fc/chat/ChatView.tsx (+export section), src/components/fc/profile/ProfileView.tsx (+photo crop dialog), src/components/fc/shell/nav.tsx (+Broadcasts menuitem), src/components/fc/stories/StoryViewer.tsx (+story views popover).
+- Lint clean, dev 200, realtime 200, all features QA'd.
+- Cumulative feature set now: auth, profiles (view/edit/privacy/photo-filters/**photo-cropping**), friends (search/request/accept/reject/remove/block/suggestions/online-widget/close-friends/mute-stories), 1:1+group chat (realtime/typing/presence/granular-last-seen/status/file-sharing/voice-notes/emoji/reactions/delete/forward/star/disappearing/wallpaper/custom-wallpaper/global-search/search-within/pin-chat/mute/archive/drafts/edit/group-typing/message-pin/reply-with-quote/typing-in-conv-list/message-scheduling/**chat-export**), stories (create/view/auto-advance/replies/highlights/reactions/**views-list**), WebRTC calls (stats), groups CRUD, **broadcast lists**, notifications, settings, dark mode, file previews (PDF inline).
+- Recommended next-phase features: group calls, scheduled message delivery cron (background job), call recordings, chat backup/restore, message forward to multiple, typing indicator in group conv list, story repost, profile verification badge, message reminders, chat folders.

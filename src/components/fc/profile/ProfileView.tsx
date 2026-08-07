@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useAuth, AuthUser } from '@/hooks/use-auth'
 import { useApp } from '@/lib/store'
 import { useSocket } from '@/hooks/use-socket'
@@ -12,9 +12,10 @@ import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
+import { Slider } from '@/components/ui/slider'
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogFooter } from '@/components/ui/dialog'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
-import { Camera, MapPin, Phone, Cake, GraduationCap, Briefcase, Pencil, MessageCircle, PhoneCall, Video, UserPlus, Check, Ban, ShieldOff, ArrowLeft, Lock, Sparkles, Loader2 } from 'lucide-react'
+import { Camera, MapPin, Phone, Cake, GraduationCap, Briefcase, Pencil, MessageCircle, PhoneCall, Video, UserPlus, Check, Ban, ShieldOff, ArrowLeft, Lock, Sparkles, Loader2, Crop, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
@@ -173,6 +174,10 @@ function MyProfile() {
   const { setView } = useApp()
   const { isOnline } = useSocket()
   const [open, setOpen] = useState(false)
+  // Round 9: data URL of the image the user just picked from the camera
+  // button. When set, the PhotoCropDialog opens so the user can crop a
+  // square region before uploading (ensures every avatar is square).
+  const [cropSrc, setCropSrc] = useState<string | null>(null)
   if (!user) return null
   const p = user.profile
   const meOnline = isOnline(user.id)
@@ -200,15 +205,16 @@ function MyProfile() {
               <PhotoFilterPicker user={user} refresh={refresh} />
               <label className="grid h-8 w-8 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground shadow-lg">
                 <Camera size={14} />
-                <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
+                <input type="file" accept="image/*" className="hidden" onChange={(e) => {
                   const f = e.target.files?.[0]
-                  if (!f) return
-                  try {
-                    const { file } = await uploadFile(f)
-                    await api('/api/users/me', { method: 'PUT', body: JSON.stringify({ photoUrl: file.url }) })
-                    await refresh()
-                    toast.success('Photo updated')
-                  } catch (e: any) { toast.error(e.message) }
+                  if (f) {
+                    const reader = new FileReader()
+                    reader.onload = () => setCropSrc(reader.result as string)
+                    reader.onerror = () => toast.error('Could not read image')
+                    reader.readAsDataURL(f)
+                  }
+                  // Always reset so the same file can be re-selected later.
+                  e.target.value = ''
                 }} />
               </label>
             </div>
@@ -255,6 +261,10 @@ function MyProfile() {
       </Card>
 
       <EditProfileDialog open={open} onOpenChange={setOpen} />
+
+      {cropSrc && (
+        <PhotoCropDialog src={cropSrc} onClose={() => setCropSrc(null)} refresh={refresh} />
+      )}
     </div>
   )
 }
@@ -464,5 +474,277 @@ function PhotoFilterPicker({
         </div>
       </PopoverContent>
     </Popover>
+  )
+}
+
+/**
+ * Round 9: PhotoCropDialog — replaces the old "upload immediately" flow with
+ * a client-side crop step. The parent picks an image and hands us its data
+ * URL; we render it in a square viewport with a dark mask outside the crop
+ * region, a 1×–3× zoom slider, and drag-to-pan. On Apply we draw the visible
+ * square region to a 256×256 canvas, convert it to a JPEG Blob, upload it
+ * via `uploadFile`, PUT the new URL to /api/users/me, and refresh the
+ * session. The crop step is mandatory (no skip) so every avatar is square.
+ */
+const CROP_CONTAINER_SIZE = 280
+const CROP_OUTPUT_SIZE = 256
+
+function PhotoCropDialog({
+  src,
+  onClose,
+  refresh,
+}: {
+  src: string
+  onClose: () => void
+  refresh: () => Promise<AuthUser | null>
+}) {
+  const imgRef = useRef<HTMLImageElement | null>(null)
+  const [loaded, setLoaded] = useState(false)
+  const [imgSize, setImgSize] = useState<{ nw: number; nh: number } | null>(null)
+  const [zoom, setZoom] = useState(1) // 1.0 – 3.0
+  const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 })
+  const [applying, setApplying] = useState(false)
+  // Pointer-drag state. Stored in a ref so move/up handlers can read the
+  // latest values without re-creating the handlers each render.
+  const dragRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null)
+
+  // Reset transient state when a new image is handed in.
+  useEffect(() => {
+    setLoaded(false)
+    setImgSize(null)
+    setZoom(1)
+    setPan({ x: 0, y: 0 })
+  }, [src])
+
+  const onImgLoad = () => {
+    const img = imgRef.current
+    if (!img) return
+    setImgSize({ nw: img.naturalWidth, nh: img.naturalHeight })
+    setLoaded(true)
+  }
+  const onImgError = () => {
+    toast.error('Could not load image')
+    onClose()
+  }
+
+  // fillScale = the scale at which the image just fills the container in its
+  // smaller dimension (object-cover semantics). At zoom=1 the visible region
+  // is the centered square of size min(nw,nh) in natural coords.
+  const fillScale = imgSize
+    ? CROP_CONTAINER_SIZE / Math.min(imgSize.nw, imgSize.nh)
+    : 1
+  const effScale = fillScale * zoom
+  const scaledW = imgSize ? imgSize.nw * effScale : 0
+  const scaledH = imgSize ? imgSize.nh * effScale : 0
+  const maxPanX = Math.max(0, (scaledW - CROP_CONTAINER_SIZE) / 2)
+  const maxPanY = Math.max(0, (scaledH - CROP_CONTAINER_SIZE) / 2)
+  const clampPan = (p: { x: number; y: number }) => ({
+    x: Math.max(-maxPanX, Math.min(maxPanX, p.x)),
+    y: Math.max(-maxPanY, Math.min(maxPanY, p.y)),
+  })
+  const clampedPan = clampPan(pan)
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (!loaded) return
+    e.currentTarget.setPointerCapture(e.pointerId)
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      // Start from the currently-displayed (clamped) position so consecutive
+      // drags don't accumulate out-of-bounds offsets.
+      panX: clampedPan.x,
+      panY: clampedPan.y,
+    }
+  }
+  const onPointerMove = (e: React.PointerEvent) => {
+    if (!dragRef.current) return
+    const dx = e.clientX - dragRef.current.startX
+    const dy = e.clientY - dragRef.current.startY
+    setPan(clampPan({ x: dragRef.current.panX + dx, y: dragRef.current.panY + dy }))
+  }
+  const onPointerUp = (e: React.PointerEvent) => {
+    dragRef.current = null
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId)
+    } catch {
+      /* ignore — pointer may already be released */
+    }
+  }
+
+  const onZoomChange = (v: number[]) => {
+    const newZoom = v[0] / 100
+    setZoom(newZoom)
+    // Re-clamp pan for the new zoom level so the image never reveals empty
+    // space outside its bounds.
+    const newEffScale = fillScale * newZoom
+    const newScaledW = imgSize ? imgSize.nw * newEffScale : 0
+    const newScaledH = imgSize ? imgSize.nh * newEffScale : 0
+    const newMaxPanX = Math.max(0, (newScaledW - CROP_CONTAINER_SIZE) / 2)
+    const newMaxPanY = Math.max(0, (newScaledH - CROP_CONTAINER_SIZE) / 2)
+    setPan((p) => ({
+      x: Math.max(-newMaxPanX, Math.min(newMaxPanX, p.x)),
+      y: Math.max(-newMaxPanY, Math.min(newMaxPanY, p.y)),
+    }))
+  }
+
+  // Draw the visible square region to a 256×256 canvas and return a JPEG Blob.
+  const cropToBlob = (): Promise<Blob | null> => {
+    return new Promise((resolve) => {
+      const img = imgRef.current
+      if (!img || !imgSize) {
+        resolve(null)
+        return
+      }
+      // Visible region in displayed-image coords (after transform):
+      //   visX = (scaledW - C) / 2 - pan.x
+      //   visY = (scaledH - C) / 2 - pan.y
+      // Convert to natural coords by dividing by effScale.
+      const sx = ((scaledW - CROP_CONTAINER_SIZE) / 2 - clampedPan.x) / effScale
+      const sy = ((scaledH - CROP_CONTAINER_SIZE) / 2 - clampedPan.y) / effScale
+      const sSize = CROP_CONTAINER_SIZE / effScale
+      const canvas = document.createElement('canvas')
+      canvas.width = CROP_OUTPUT_SIZE
+      canvas.height = CROP_OUTPUT_SIZE
+      const ctx = canvas.getContext('2d')
+      if (!ctx) {
+        resolve(null)
+        return
+      }
+      // White background in case the source has transparency.
+      ctx.fillStyle = '#ffffff'
+      ctx.fillRect(0, 0, CROP_OUTPUT_SIZE, CROP_OUTPUT_SIZE)
+      ctx.drawImage(img, sx, sy, sSize, sSize, 0, 0, CROP_OUTPUT_SIZE, CROP_OUTPUT_SIZE)
+      canvas.toBlob((b) => resolve(b), 'image/jpeg', 0.92)
+    })
+  }
+
+  const apply = async () => {
+    if (applying) return
+    setApplying(true)
+    try {
+      const blob = await cropToBlob()
+      if (!blob) throw new Error('Could not crop image')
+      const file = new File([blob], 'avatar.jpg', { type: 'image/jpeg' })
+      const { file: uploaded } = await uploadFile(file)
+      await api('/api/users/me', {
+        method: 'PUT',
+        body: JSON.stringify({ photoUrl: uploaded.url }),
+      })
+      await refresh()
+      toast.success('Photo updated')
+      onClose()
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to update photo')
+    } finally {
+      setApplying(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md gap-0 p-0">
+        <DialogHeader className="border-b border-border px-4 py-3">
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <Crop size={16} className="text-primary" />
+            Crop photo
+          </DialogTitle>
+        </DialogHeader>
+        <div className="p-4">
+          <div
+            className="relative mx-auto grid touch-none select-none place-items-center overflow-hidden rounded-xl bg-zinc-900"
+            style={{ width: CROP_CONTAINER_SIZE, height: CROP_CONTAINER_SIZE }}
+            onPointerDown={onPointerDown}
+            onPointerMove={onPointerMove}
+            onPointerUp={onPointerUp}
+            onPointerCancel={onPointerUp}
+          >
+            {src && (
+              <img
+                ref={imgRef}
+                src={src}
+                alt="Crop preview"
+                onLoad={onImgLoad}
+                onError={onImgError}
+                draggable={false}
+                className="pointer-events-none max-w-none select-none"
+                style={{
+                  width: imgSize ? imgSize.nw * fillScale : 'auto',
+                  height: imgSize ? imgSize.nh * fillScale : 'auto',
+                  transform: `translate(${clampedPan.x}px, ${clampedPan.y}px) scale(${zoom})`,
+                  transformOrigin: 'center center',
+                  opacity: loaded ? 1 : 0,
+                }}
+              />
+            )}
+            {/* Crop overlay: square white border + dark shadow outside the
+                crop region. Pointer events disabled so the underlying image
+                receives the drag. */}
+            <div className="pointer-events-none absolute inset-0">
+              <div
+                className="absolute"
+                style={{
+                  left: '50%',
+                  top: '50%',
+                  width: CROP_CONTAINER_SIZE,
+                  height: CROP_CONTAINER_SIZE,
+                  transform: 'translate(-50%, -50%)',
+                  boxShadow: '0 0 0 9999px rgba(0,0,0,0.5)',
+                  border: '2px solid white',
+                }}
+              />
+            </div>
+            {!loaded && (
+              <div className="absolute inset-0 grid place-items-center">
+                <Loader2 className="animate-spin text-white/80" size={24} />
+              </div>
+            )}
+          </div>
+
+          <div className="mt-4 space-y-3">
+            <div>
+              <div className="mb-1 flex items-center justify-between text-xs text-muted-foreground">
+                <span>Zoom</span>
+                <span>{zoom.toFixed(1)}×</span>
+              </div>
+              <Slider
+                value={[Math.round(zoom * 100)]}
+                min={100}
+                max={300}
+                step={1}
+                onValueChange={onZoomChange}
+                disabled={!loaded}
+              />
+            </div>
+            <p className="text-[11px] leading-relaxed text-muted-foreground">
+              Drag to reposition. The crop is always square — what you see in
+              the box is what becomes your photo.
+            </p>
+          </div>
+        </div>
+        <DialogFooter className="flex-row justify-end gap-2 border-t border-border px-4 py-3">
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={onClose}
+            disabled={applying}
+          >
+            <X size={16} className="mr-1" />
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={apply}
+            disabled={!loaded || applying}
+          >
+            {applying ? (
+              <Loader2 size={16} className="mr-1 animate-spin" />
+            ) : (
+              <Check size={16} className="mr-1" />
+            )}
+            Apply
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

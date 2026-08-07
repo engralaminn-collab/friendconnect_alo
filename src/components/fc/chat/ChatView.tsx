@@ -42,6 +42,7 @@ import {
   CheckCheck,
   Clock,
   FileText,
+  FileJson,
   Download,
   Maximize2,
   Search,
@@ -2599,7 +2600,7 @@ function ChatRoom({
         onSave={handleEditSave}
       />
 
-      {/* chat settings sheet (disappearing + wallpaper + starred + scheduled) */}
+      {/* chat settings sheet (disappearing + wallpaper + starred + scheduled + export) */}
       <ChatSettingsSheet
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
@@ -2610,6 +2611,9 @@ function ChatRoom({
         onCustomWallpaperUpload={handleCustomWallpaperUpload}
         onOpenStarred={() => setStarredDialogOpen(true)}
         onOpenScheduled={() => setScheduledViewerOpen(true)}
+        mode={mode}
+        peerId={peerId}
+        peerName={peerInfo?.name}
       />
 
       {/* starred messages viewer */}
@@ -3353,6 +3357,12 @@ function ChatSettingsSheet({
   // Round 8: opens the ScheduledMessagesDialog (lists scheduled messages
   // for this conversation + supports cancellation).
   onOpenScheduled: () => void
+  // Round 9: chat export — `mode` + `peerId` build the export URL
+  // (?userId= for direct, ?groupId= for group). `peerName` is used for
+  // the downloaded filename.
+  mode: 'direct' | 'group'
+  peerId: string
+  peerName?: string
 }) {
   const disappearingOptions: { value: 'OFF' | '24H' | '7D'; label: string; description: string }[] = [
     { value: 'OFF', label: 'Off', description: 'Messages stay in the chat' },
@@ -3361,9 +3371,64 @@ function ChatSettingsSheet({
   ]
 
   const [uploading, setUploading] = useState(false)
+  // Round 9: which export format is currently in flight (null = idle).
+  // Disables both buttons while a download is being prepared.
+  const [exporting, setExporting] = useState<'json' | 'txt' | null>(null)
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   // True when the active wallpaper is a custom-uploaded image (url('...') value).
   const isCustomWallpaper = !!wallpaper && /^url\(/i.test(wallpaper)
+
+  // Round 9: triggers a chat export download. Both formats are fetched as a
+  // Blob (so we can detect errors and surface them via toast) and then
+  // downloaded via a temporary <a download> element. The backend sets
+  // content-disposition for txt, but using a Blob gives us a consistent
+  // client-side filename and lets us show success/error toasts.
+  const handleExport = async (format: 'json' | 'txt') => {
+    if (exporting) return
+    setExporting(format)
+    const toastId = 'chat-export'
+    toast.loading('Exporting chat…', { id: toastId })
+    try {
+      const q =
+        mode === 'direct'
+          ? `userId=${encodeURIComponent(peerId)}`
+          : `groupId=${encodeURIComponent(peerId)}`
+      const url = `/api/messages/export?${q}&format=${format}`
+      const res = await fetch(url, { credentials: 'include' })
+      if (!res.ok) {
+        let msg = `Export failed (${res.status})`
+        try {
+          const d = await res.json()
+          msg = d?.error || msg
+        } catch {
+          /* ignore JSON parse error */
+        }
+        throw new Error(msg)
+      }
+      const safeName =
+        (peerName || 'chat')
+          .replace(/[^a-z0-9]/gi, '_')
+          .replace(/_+/g, '_')
+          .replace(/^_|_$/g, '') || 'chat'
+      const blob =
+        format === 'txt'
+          ? await res.blob()
+          : new Blob([JSON.stringify(await res.json(), null, 2)], { type: 'application/json' })
+      const objUrl = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = objUrl
+      a.download = `${safeName}_chat.${format === 'txt' ? 'txt' : 'json'}`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(objUrl)
+      toast.success('Chat exported', { id: toastId })
+    } catch (e: any) {
+      toast.error(e?.message || 'Export failed', { id: toastId })
+    } finally {
+      setExporting(null)
+    }
+  }
 
   const handleCustomPick = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
@@ -3436,6 +3501,58 @@ function ChatSettingsSheet({
                 </div>
               </div>
             </button>
+          </section>
+
+          {/* Round 9: Export chat — downloads a JSON or TXT transcript via
+              /api/messages/export. The backend already filters out scheduled
+              + deleted-for-everyone messages and sets content-disposition for
+              txt; we wrap the request so we can surface errors via toast and
+              use a consistent client-side filename. */}
+          <section className="mb-6">
+            <SectionTitle>Export</SectionTitle>
+            <div className="mt-2 flex items-center gap-3 rounded-xl border border-border bg-card p-3">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
+                <Download size={16} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium">Export chat</div>
+                <div className="text-[11px] text-muted-foreground">
+                  Download a copy of this conversation
+                </div>
+              </div>
+              <div className="flex shrink-0 gap-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={exporting !== null}
+                  onClick={() => handleExport('txt')}
+                  className="h-8 gap-1 px-2.5"
+                >
+                  {exporting === 'txt' ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    <FileText size={12} />
+                  )}
+                  TXT
+                </Button>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={exporting !== null}
+                  onClick={() => handleExport('json')}
+                  className="h-8 gap-1 px-2.5"
+                >
+                  {exporting === 'json' ? (
+                    <Loader2 size={12} className="animate-spin" />
+                  ) : (
+                    <FileJson size={12} />
+                  )}
+                  JSON
+                </Button>
+              </div>
+            </div>
           </section>
 
           {/* Disappearing messages */}

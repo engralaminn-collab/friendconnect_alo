@@ -53,6 +53,18 @@ export interface StoryReaction {
   createdAt: string
 }
 
+// Round 9: a single story view entry (returned by GET /api/stories/[id]/views).
+// Owner-only — used to populate the "view who viewed" popover shown on the
+// user's OWN story. Mirrors the StoryReaction shape (minus the emoji).
+export interface StoryViewEntry {
+  id: string
+  userId: string
+  userName: string
+  username: string
+  userPhoto: string | null
+  viewedAt: string
+}
+
 // Round 8: quick-reaction emojis offered above the reply input on someone
 // else's story. Matches the spec list exactly (❤️😂🔥👏😮😢).
 const STORY_QUICK_REACTIONS = ['❤️', '😂', '🔥', '👏', '😮', '😢'] as const
@@ -109,6 +121,14 @@ export function StoryViewer({ stories, user, onClose, startIndex, onHighlightCha
   const [reactionsOpen, setReactionsOpen] = useState(false)
   const [loadingReactions, setLoadingReactions] = useState(false)
   const [reacting, setReacting] = useState(false)
+  // Round 9: story views list (own story only). `views` is the fresh list of
+  // viewers (with avatars + viewedAt) fetched from
+  // GET /api/stories/[id]/views so the owner can see exactly who viewed the
+  // active story. `viewsOpen` toggles the popover anchored under the views
+  // pill in the header.
+  const [views, setViews] = useState<StoryViewEntry[]>([])
+  const [viewsOpen, setViewsOpen] = useState(false)
+  const [loadingViews, setLoadingViews] = useState(false)
   const viewedRef = useRef<Set<string>>(new Set())
   const touchStartX = useRef<number | null>(null)
   const progressBarRef = useRef<HTMLDivElement | null>(null)
@@ -199,6 +219,13 @@ export function StoryViewer({ stories, user, onClose, startIndex, onHighlightCha
     setReactionsOpen(false)
   }, [index, stories])
 
+  // Round 9: collapse the views popover when the active story changes so a
+  // stale popover doesn't bleed into the next story. Mirrors the
+  // reactions/replies reset-on-change pattern above.
+  useEffect(() => {
+    setViewsOpen(false)
+  }, [index])
+
   // Round 8: fetch the full reactions list (with avatars + emoji) for the
   // user's OWN story so they can see who reacted. Mirrors the replies fetch
   // above. For other users' stories we don't fetch (their reactions are
@@ -221,6 +248,33 @@ export function StoryViewer({ stories, user, onClose, startIndex, onHighlightCha
       })
       .finally(() => {
         if (!cancelled) setLoadingReactions(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [index, user.isMe, stories])
+
+  // Round 9: fetch the full views list (with avatars + viewedAt) for the
+  // user's OWN story so they can see exactly who viewed it. Mirrors the
+  // reactions fetch above (owner-only — backend returns 403 for non-owners).
+  useEffect(() => {
+    if (!user.isMe) {
+      setViews([])
+      return
+    }
+    const story = stories[index]
+    if (!story) return
+    let cancelled = false
+    setLoadingViews(true)
+    api<{ views: StoryViewEntry[] }>(`/api/stories/${story.id}/views`)
+      .then((data) => {
+        if (!cancelled) setViews(data.views || [])
+      })
+      .catch(() => {
+        if (!cancelled) setViews([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingViews(false)
       })
     return () => {
       cancelled = true
@@ -424,6 +478,15 @@ export function StoryViewer({ stories, user, onClose, startIndex, onHighlightCha
     ? Math.max(reactionList.length, current.reactionCount || 0)
     : (current.reactionCount || 0) + (myReaction && !current.myReaction ? 1 : 0)
 
+  // Round 9: derived views count for the header pill (own story only).
+  // Prefers the fresh views-list length (from GET /api/stories/[id]/views)
+  // over the API count embedded in the story object so the pill is accurate
+  // even if the parent's stories prop is stale. Declared here (BEFORE the
+  // JSX) to avoid a temporal-dead-zone warning.
+  const headerViewsCount = user.isMe
+    ? Math.max(views.length, current.viewCount || 0)
+    : current.viewCount || 0
+
   return (
     <motion.div
       initial={{ opacity: 0 }}
@@ -524,11 +587,68 @@ export function StoryViewer({ stories, user, onClose, startIndex, onHighlightCha
             <span className="truncate text-sm font-semibold text-white drop-shadow-sm">
               {user.name}
             </span>
+            {/* Round 9: views pill (own story only). Made tappable to open a
+                popover listing every viewer with their avatar + timeAgo.
+                Anchored under the pill so it never overlaps the bottom-area
+                replies/reactions popovers (which sit above the reply bar). */}
             {user.isMe && (
-              <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm">
-                <Eye size={11} />
-                {current.viewCount} {current.viewCount === 1 ? 'view' : 'views'}
-              </span>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setViewsOpen((v) => !v)}
+                  aria-expanded={viewsOpen}
+                  aria-label="View story viewers"
+                  className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm transition hover:bg-white/25"
+                >
+                  <Eye size={11} />
+                  {headerViewsCount} {headerViewsCount === 1 ? 'view' : 'views'}
+                  {viewsOpen ? <X size={11} /> : null}
+                </button>
+                <AnimatePresence>
+                  {viewsOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -8 }}
+                      transition={{ duration: 0.2 }}
+                      className="fc-scroll absolute left-0 top-full z-40 mt-2 max-h-72 w-64 max-w-[80vw] overflow-y-auto rounded-xl bg-black/80 p-2 backdrop-blur"
+                    >
+                      {loadingViews && views.length === 0 ? (
+                        <div className="grid place-items-center py-8">
+                          <Loader2 size={20} className="animate-spin text-white/70" />
+                        </div>
+                      ) : views.length === 0 ? (
+                        <div className="grid place-items-center gap-2 py-8 text-center text-sm text-white/60">
+                          <Eye size={24} className="opacity-50" />
+                          No views yet
+                        </div>
+                      ) : (
+                        <ul className="space-y-0.5">
+                          {views.map((v) => (
+                            <li
+                              key={v.id}
+                              className="flex items-center gap-2 rounded-lg p-1.5 transition hover:bg-white/5"
+                            >
+                              <UserAvatar name={v.userName} src={v.userPhoto} size={32} />
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-xs font-semibold text-white">
+                                  {v.userName}
+                                </div>
+                                <div className="truncate text-[10px] text-white/60">
+                                  @{v.username}
+                                </div>
+                              </div>
+                              <span className="shrink-0 text-[10px] text-white/50">
+                                {timeAgo(v.viewedAt)}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
             )}
             {/* Round 8: small reaction-count pill next to the views pill.
                 Shown to everyone when there's at least one reaction. */}

@@ -39,6 +39,10 @@ model User {
   storyReplies  StoryReply[]
   drafts        MessageDraft[]
   storyReactions StoryReaction[]
+  broadcastLists BroadcastList[]
+  // Round 9 fix: back-relation for BroadcastMember.recipient (see comment on
+  // BroadcastMember). Additive — no existing fields changed.
+  broadcastMemberships BroadcastMember[]
 }
 
 model Profile {
@@ -314,4 +318,35 @@ model StoryReaction {
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([storyId, userId])
+}
+
+// ---- Additive (round 9): broadcast lists (send one message to many 1:1 chats) ----
+model BroadcastList {
+  id        String   @id @default(cuid())
+  ownerId   String
+  name      String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  owner   User             @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  members BroadcastMember[]
+
+  @@index([ownerId])
+}
+
+model BroadcastMember {
+  id            String   @id @default(cuid())
+  broadcastId   String
+  recipientId   String   // the friend's userId to receive the broadcast
+  createdAt     DateTime @default(now())
+
+  broadcast BroadcastList @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
+  // Round 9 fix: the GET /api/broadcasts route does
+  // `include: { members: { include: { recipient: ... } } }` to populate each
+  // member's name + username. The relation was missing from the original
+  // round-9 schema (backend route returned 500). Adding it is purely additive
+  // (no existing fields or constraints changed).
+  recipient User @relation(fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@unique([broadcastId, recipientId])
 }

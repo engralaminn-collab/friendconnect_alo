@@ -1,11 +1,12 @@
 'use client'
 
+import { useState } from 'react'
 import { useApp, View } from '@/lib/store'
 import { useAuth } from '@/hooks/use-auth'
 import { useNotifications } from '@/hooks/use-notifications'
 import { FCLogo, UserAvatar } from '@/components/fc/ui'
 import { cn } from '@/lib/utils'
-import { Home, Users, MessageCircle, Phone, Bell, User as UserIcon, Settings, Menu, Moon, Sun } from 'lucide-react'
+import { Home, Users, MessageCircle, Phone, Bell, User as UserIcon, Settings, Menu, Moon, Sun, Megaphone } from 'lucide-react'
 import { useTheme } from 'next-themes'
 import {
   DropdownMenu,
@@ -15,6 +16,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { BroadcastsView } from '@/components/fc/broadcasts/BroadcastsView'
 import { toast } from 'sonner'
 
 const TABS: { view: View; label: string; icon: typeof Home }[] = [
@@ -67,6 +69,7 @@ export function TopBar() {
   const { user, logout } = useAuth()
   const { unread } = useNotifications()
   const { theme, setTheme } = useTheme()
+  const [broadcastsOpen, setBroadcastsOpen] = useState(false)
 
   return (
     <header className="fc-safe-top sticky top-0 z-30 border-b border-border bg-background/90 backdrop-blur-xl">
@@ -113,6 +116,9 @@ export function TopBar() {
               <DropdownMenuItem onClick={() => setView('profile')}>
                 <UserIcon size={16} className="mr-2" /> My Profile
               </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setBroadcastsOpen(true)}>
+                <Megaphone size={16} className="mr-2" /> Broadcasts
+              </DropdownMenuItem>
               <DropdownMenuItem onClick={() => setView('settings')}>
                 <Settings size={16} className="mr-2" /> Settings
               </DropdownMenuItem>
@@ -130,6 +136,7 @@ export function TopBar() {
           </DropdownMenu>
         </div>
       </div>
+      <BroadcastsView open={broadcastsOpen} onOpenChange={setBroadcastsOpen} />
     </header>
   )
 }
