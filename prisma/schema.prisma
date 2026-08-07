@@ -38,6 +38,7 @@ model User {
   starredMessages MessageStar[]
   storyReplies  StoryReply[]
   drafts        MessageDraft[]
+  storyReactions StoryReaction[]
 }
 
 model Profile {
@@ -78,6 +79,10 @@ model Friendship {
   receiverId  String
   status      String   @default("PENDING") // PENDING | ACCEPTED | DECLINED | BLOCKED
   blockerId   String?
+  // Additive (round 8): close friends — marks this friendship as a "close friend"
+  isCloseFriend Boolean @default(false)
+  // Additive (round 8): mute their stories
+  storiesMuted Boolean @default(false)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -114,6 +119,8 @@ model Message {
   pinnedBy  String?  
   // Additive (round 7): reply-to (quote) — stores the id of the message being replied to
   replyToId String?
+  // Additive (round 8): scheduled messages — when set, message is delivered at this future time
+  scheduledFor DateTime?
 
   sender   User   @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
   receiver User?  @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
@@ -237,6 +244,7 @@ model Story {
   user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   views  StoryView[]
   replies StoryReply[]
+  reactions StoryReaction[]
 
   @@index([userId])
 }
@@ -292,4 +300,18 @@ model MessageDraft {
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, peerId, isGroup])
+}
+
+// ---- Additive (round 8): story reactions ----
+model StoryReaction {
+  id        String   @id @default(cuid())
+  storyId   String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([storyId, userId])
 }

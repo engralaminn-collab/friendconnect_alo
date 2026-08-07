@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Eye, ChevronLeft, ChevronRight, Send, MessageCircle, Loader2, Bookmark } from 'lucide-react'
+import { X, Eye, ChevronLeft, ChevronRight, Send, MessageCircle, Loader2, Bookmark, Heart } from 'lucide-react'
 import { api, timeAgo } from '@/lib/api'
 import { UserAvatar } from '@/components/fc/ui'
 import { toast } from 'sonner'
@@ -18,6 +18,11 @@ export interface StoryItem {
   viewedByMe: boolean
   viewCount: number
   isHighlight: boolean
+  // Round 8: reaction count + the emoji the current user reacted with
+  // (null when the user hasn't reacted). Both come from the GET /api/stories
+  // response — see the round-8 backend worklog entry.
+  reactionCount?: number
+  myReaction?: string | null
 }
 
 export interface StoryViewerUser {
@@ -35,6 +40,22 @@ export interface StoryReply {
   content: string
   createdAt: string
 }
+
+// Round 8: a single emoji reaction on a story (returned by
+// GET /api/stories/[id]/reactions). Used to populate the "view who reacted"
+// popover shown on the user's OWN story.
+export interface StoryReaction {
+  id: string
+  userId: string
+  userName: string
+  userPhoto: string | null
+  emoji: string
+  createdAt: string
+}
+
+// Round 8: quick-reaction emojis offered above the reply input on someone
+// else's story. Matches the spec list exactly (❤️😂🔥👏😮😢).
+const STORY_QUICK_REACTIONS = ['❤️', '😂', '🔥', '👏', '😮', '😢'] as const
 
 interface StoryViewerProps {
   stories: StoryItem[]
@@ -78,6 +99,16 @@ export function StoryViewer({ stories, user, onClose, startIndex, onHighlightCha
   // after a toggle, before the parent refetches the stories list.
   const [highlightOverrides, setHighlightOverrides] = useState<Record<string, boolean>>({})
   const [highlightBusy, setHighlightBusy] = useState(false)
+  // Round 8: story reactions. `myReaction` is a local override for the
+  // active story's my-reaction emoji — set optimistically on tap and
+  // reconciled when the active story changes (via the effect below).
+  // `reactionList` is the fresh list of reactions (with avatars + emoji)
+  // fetched for the user's OWN story so they can see who reacted.
+  const [myReaction, setMyReaction] = useState<string | null>(null)
+  const [reactionList, setReactionList] = useState<StoryReaction[]>([])
+  const [reactionsOpen, setReactionsOpen] = useState(false)
+  const [loadingReactions, setLoadingReactions] = useState(false)
+  const [reacting, setReacting] = useState(false)
   const viewedRef = useRef<Set<string>>(new Set())
   const touchStartX = useRef<number | null>(null)
   const progressBarRef = useRef<HTMLDivElement | null>(null)
@@ -151,6 +182,45 @@ export function StoryViewer({ stories, user, onClose, startIndex, onHighlightCha
       })
       .finally(() => {
         if (!cancelled) setLoadingReplies(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [index, user.isMe, stories])
+
+  // Round 8: reconcile the local `myReaction` override with the active
+  // story's `myReaction` from the API whenever the active story changes.
+  // The override is set optimistically on tap and is otherwise synced from
+  // the parent's stories prop (which is the source of truth from GET /api/stories).
+  useEffect(() => {
+    const story = stories[index]
+    if (!story) return
+    setMyReaction(story.myReaction ?? null)
+    setReactionsOpen(false)
+  }, [index, stories])
+
+  // Round 8: fetch the full reactions list (with avatars + emoji) for the
+  // user's OWN story so they can see who reacted. Mirrors the replies fetch
+  // above. For other users' stories we don't fetch (their reactions are
+  // private — only the count is shown in the header pill).
+  useEffect(() => {
+    if (!user.isMe) {
+      setReactionList([])
+      return
+    }
+    const story = stories[index]
+    if (!story) return
+    let cancelled = false
+    setLoadingReactions(true)
+    api<{ reactions: StoryReaction[] }>(`/api/stories/${story.id}/reactions`)
+      .then((data) => {
+        if (!cancelled) setReactionList(data.reactions || [])
+      })
+      .catch(() => {
+        if (!cancelled) setReactionList([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingReactions(false)
       })
     return () => {
       cancelled = true
@@ -287,6 +357,54 @@ export function StoryViewer({ stories, user, onClose, startIndex, onHighlightCha
     }
   }, [stories, index, highlightOverrides, highlightBusy, onHighlightChange])
 
+  // Round 8: react to the current story with an emoji. The backend upserts
+  // (one reaction per user per story — replaces any existing reaction by me).
+  // We update the local `myReaction` state optimistically so the active emoji
+  // flips immediately; on error we revert. Tapping the same emoji again is a
+  // no-op visually but still POSTs (the backend re-creates the same reaction —
+  // harmless + idempotent). Doesn't pause the auto-advance timer (reactions
+  // are quick taps, the user has 5s to react before the story advances).
+  const handleReact = useCallback(async (emoji: string) => {
+    const story = stories[index]
+    if (!story || reacting) return
+    const prev = myReaction
+    setMyReaction(emoji)
+    setReacting(true)
+    try {
+      await api(`/api/stories/${story.id}/reactions`, {
+        method: 'POST',
+        body: JSON.stringify({ emoji }),
+      })
+      toast.success('Reacted')
+      // If we're viewing our own story, surface our own reaction in the
+      // popover list. The fresh GET /api/stories/[id]/reactions effect will
+      // reconcile on the next story change anyway, but this keeps the list
+      // in sync immediately so the count + popover are accurate right now.
+      if (user.isMe) {
+        setReactionList((prevList) => {
+          // Remove any existing reaction by me, then add the new one.
+          const filtered = prevList.filter((r) => r.userId !== user.userId)
+          return [
+            ...filtered,
+            {
+              id: `local-${story.id}-${user.userId}`,
+              userId: user.userId,
+              userName: user.name,
+              userPhoto: user.photoUrl,
+              emoji,
+              createdAt: new Date().toISOString(),
+            },
+          ]
+        })
+      }
+    } catch (e: any) {
+      setMyReaction(prev)
+      toast.error(e?.message || 'Failed to react')
+    } finally {
+      setReacting(false)
+    }
+  }, [stories, index, reacting, myReaction, user.isMe, user.userId, user.name, user.photoUrl])
+
   if (!stories.length) {
     return null
   }
@@ -296,6 +414,15 @@ export function StoryViewer({ stories, user, onClose, startIndex, onHighlightCha
 
   const bgStyle = current.bg || 'linear-gradient(135deg, var(--color-primary), var(--color-accent))'
   const isHighlighted = highlightOverrides[current.id] ?? current.isHighlight
+
+  // Round 8: derived reaction count for the header pill. For own stories we
+  // prefer the fresh reactions-list length (the GET /api/stories/[id]/reactions
+  // fetch); for other users' stories we adjust the API count for the local
+  // myReaction override so the pill flips to N+1 immediately on first react.
+  // Declared here (BEFORE the JSX) to avoid a temporal-dead-zone warning.
+  const headerReactionCount = user.isMe
+    ? Math.max(reactionList.length, current.reactionCount || 0)
+    : (current.reactionCount || 0) + (myReaction && !current.myReaction ? 1 : 0)
 
   return (
     <motion.div
@@ -387,7 +514,7 @@ export function StoryViewer({ stories, user, onClose, startIndex, onHighlightCha
         ))}
       </div>
 
-      {/* Header: avatar + name + views (if me) + time + close */}
+      {/* Header: avatar + name + views (if me) + reactions + time + close */}
       <div className="fc-safe-top pointer-events-none absolute inset-x-0 top-0 z-30 flex items-center gap-3 px-4 pt-7">
         <div className="pointer-events-auto">
           <UserAvatar name={user.name} src={user.photoUrl} size={38} />
@@ -401,6 +528,14 @@ export function StoryViewer({ stories, user, onClose, startIndex, onHighlightCha
               <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm">
                 <Eye size={11} />
                 {current.viewCount} {current.viewCount === 1 ? 'view' : 'views'}
+              </span>
+            )}
+            {/* Round 8: small reaction-count pill next to the views pill.
+                Shown to everyone when there's at least one reaction. */}
+            {headerReactionCount > 0 && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-medium text-white backdrop-blur-sm">
+                <Heart size={11} className="fill-current" />
+                {headerReactionCount}
               </span>
             )}
             <span className="text-xs text-white/70 drop-shadow-sm">
@@ -464,10 +599,97 @@ export function StoryViewer({ stories, user, onClose, startIndex, onHighlightCha
       {/* Subtle bottom gradient for legibility on image stories */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-24 bg-gradient-to-t from-black/50 to-transparent" />
 
+      {/* Round 8: story reaction bar (others' stories only). Renders a pill of
+          6 quick-reaction emojis ABOVE the reply input. Tapping one POSTs to
+          /api/stories/[id]/reactions { emoji } and flips the local myReaction
+          optimistically. The active emoji (matching myReaction) gets a primary
+          ring so the user can see what they reacted with + tap again to swap
+          (the backend replaces). */}
+      {!user.isMe && (
+        <div className="absolute bottom-20 left-1/2 z-10 flex -translate-x-1/2 gap-1 rounded-full border border-white/20 bg-black/40 px-2 py-1.5 backdrop-blur">
+          {STORY_QUICK_REACTIONS.map((emoji) => {
+            const active = myReaction === emoji
+            return (
+              <button
+                key={emoji}
+                type="button"
+                onClick={() => handleReact(emoji)}
+                disabled={reacting}
+                aria-label={`React with ${emoji}`}
+                aria-pressed={active}
+                className={cn(
+                  'grid h-9 w-9 place-items-center rounded-full text-xl transition hover:scale-125 disabled:opacity-50',
+                  active && 'ring-2 ring-primary'
+                )}
+              >
+                {emoji}
+              </button>
+            )
+          })}
+        </div>
+      )}
+
       {/* Reply input bar (others) OR Replies button + popover (own story) */}
       <div className="absolute bottom-4 left-4 right-4 z-10">
         {user.isMe ? (
           <div className="relative">
+            {/* Round 8: reactions button + popover (own story only, when
+                there's at least one reaction). Sits above the Replies button
+                so the user can see who reacted at a glance. Fetches the full
+                reactions list (with avatars + emoji) from
+                GET /api/stories/[id]/reactions. */}
+            {headerReactionCount > 0 && (
+              <div className="relative mb-2 flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => setReactionsOpen((v) => !v)}
+                  aria-expanded={reactionsOpen}
+                  aria-label="View story reactions"
+                  className="inline-flex items-center gap-1.5 rounded-full border border-white/20 bg-black/40 px-3 py-1.5 text-xs font-medium text-white backdrop-blur transition hover:bg-black/60"
+                >
+                  <Heart size={12} className="fill-current text-primary" />
+                  {headerReactionCount} {headerReactionCount === 1 ? 'reaction' : 'reactions'}
+                  {reactionsOpen ? <X size={12} /> : null}
+                </button>
+                <AnimatePresence>
+                  {reactionsOpen && (
+                    <motion.div
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: 8 }}
+                      transition={{ duration: 0.2 }}
+                      className="fc-scroll absolute bottom-full left-1/2 mb-2 max-h-72 w-64 max-w-[90vw] -translate-x-1/2 overflow-y-auto rounded-xl bg-black/80 p-2 backdrop-blur"
+                    >
+                      {loadingReactions && reactionList.length === 0 ? (
+                        <div className="grid place-items-center py-8">
+                          <Loader2 size={20} className="animate-spin text-white/70" />
+                        </div>
+                      ) : reactionList.length === 0 ? (
+                        <div className="grid place-items-center gap-2 py-8 text-center text-sm text-white/60">
+                          <Heart size={24} className="opacity-50" />
+                          No reactions yet
+                        </div>
+                      ) : (
+                        <ul className="space-y-0.5">
+                          {reactionList.map((r) => (
+                            <li
+                              key={r.id}
+                              className="flex items-center gap-2 rounded-lg p-1.5 transition hover:bg-white/5"
+                            >
+                              <UserAvatar name={r.userName} src={r.userPhoto} size={28} />
+                              <span className="min-w-0 flex-1 truncate text-xs font-semibold text-white">
+                                {r.userName}
+                              </span>
+                              <span className="text-lg">{r.emoji}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            )}
             <button
               type="button"
               onClick={() => setRepliesOpen((v) => !v)}

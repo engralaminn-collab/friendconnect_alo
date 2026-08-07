@@ -8,12 +8,12 @@ import { UserAvatar, EmptyState, SectionTitle } from '@/components/fc/ui'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { Search, UserPlus, Check, X, MessageCircle, Phone, Video, Ban, UserMinus, Clock, Users, ShieldOff, MapPin, Sparkles, Loader2 } from 'lucide-react'
+import { Search, UserPlus, Check, X, MessageCircle, Phone, Video, Ban, UserMinus, Clock, Users, ShieldOff, MapPin, Sparkles, Loader2, Star, StarOff } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
 interface UserLite { id: string; username: string; name: string; photoUrl: string | null; relation: string }
-interface Friend { id: string; username: string; name: string; photoUrl: string | null; since: string; lastSeen: string | null }
+interface Friend { id: string; username: string; name: string; photoUrl: string | null; since: string; lastSeen: string | null; isCloseFriend?: boolean }
 interface Req { id: string; username: string; name: string; photoUrl: string | null; createdAt: string }
 interface Blocked { id: string; username: string; name: string; photoUrl: string | null; blockedAt: string }
 interface Suggestion { id: string; username: string; name: string; photoUrl: string | null; bio: string | null; location: string | null; mutualFriends: number }
@@ -33,12 +33,14 @@ export function FriendsView() {
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({})
 
   const loadFriends = useCallback(async () => {
-    const [f, r, b] = await Promise.all([
+    const [f, r, b, c] = await Promise.all([
       api<{ friends: Friend[] }>('/api/friends'),
       api<{ incoming: Req[]; outgoing: Req[] }>('/api/friends/requests'),
       api<{ blocked: Blocked[] }>('/api/friends/blocked'),
+      api<{ closeFriends: { id: string }[] }>('/api/friends/close').catch(() => ({ closeFriends: [] as { id: string }[] })),
     ])
-    setFriends(f.friends)
+    const closeIds = new Set(c.closeFriends.map((cf) => cf.id))
+    setFriends(f.friends.map((fr) => ({ ...fr, isCloseFriend: closeIds.has(fr.id) })))
     setIncoming(r.incoming)
     setOutgoing(r.outgoing)
     setBlocked(b.blocked)
@@ -105,6 +107,22 @@ export function FriendsView() {
     }
   }
 
+  const toggleCloseFriend = async (targetId: string, current: boolean) => {
+    setActionLoading((s) => ({ ...s, [targetId + 'closeFriend']: true }))
+    try {
+      await api('/api/friends/close', {
+        method: 'POST',
+        body: JSON.stringify({ targetId, action: 'closeFriend', value: !current }),
+      })
+      toast.success(!current ? 'Added to close friends' : 'Removed from close friends')
+      await loadFriends()
+    } catch (e: any) {
+      toast.error(e.message || 'Failed')
+    } finally {
+      setActionLoading((s) => ({ ...s, [targetId + 'closeFriend']: false }))
+    }
+  }
+
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-border px-4 py-3">
@@ -157,7 +175,18 @@ export function FriendsView() {
           ) : (
             <div className="space-y-1">
               {friends.map((f) => (
-                <FriendRow key={f.id} friend={f} online={isOnline(f.id)} onChat={() => openChat(f.id)} onProfile={() => openProfile(f.id)} onRemove={() => doAction(f.id, 'remove', 'Friend removed')} onBlock={() => doAction(f.id, 'block', 'User blocked')} loadingRemove={actionLoading[f.id + 'remove']} />
+                <FriendRow
+                  key={f.id}
+                  friend={f}
+                  online={isOnline(f.id)}
+                  onChat={() => openChat(f.id)}
+                  onProfile={() => openProfile(f.id)}
+                  onRemove={() => doAction(f.id, 'remove', 'Friend removed')}
+                  onBlock={() => doAction(f.id, 'block', 'User blocked')}
+                  onToggleClose={() => toggleCloseFriend(f.id, !!f.isCloseFriend)}
+                  loadingRemove={actionLoading[f.id + 'remove']}
+                  loadingClose={actionLoading[f.id + 'closeFriend']}
+                />
               ))}
             </div>
           )}
@@ -252,14 +281,22 @@ export function FriendsView() {
   )
 }
 
-function FriendRow({ friend, online, onChat, onProfile, onRemove, onBlock, loadingRemove }: { friend: Friend; online: boolean; onChat: () => void; onProfile: () => void; onRemove: () => void; onBlock: () => void; loadingRemove: boolean }) {
+function FriendRow({ friend, online, onChat, onProfile, onRemove, onBlock, onToggleClose, loadingRemove, loadingClose }: { friend: Friend; online: boolean; onChat: () => void; onProfile: () => void; onRemove: () => void; onBlock: () => void; onToggleClose: () => void; loadingRemove: boolean; loadingClose: boolean }) {
   const [menu, setMenu] = useState(false)
+  const isClose = !!friend.isCloseFriend
   return (
     <div className="group relative flex items-center gap-3 rounded-xl p-2 hover:bg-accent/40">
       <button onClick={onProfile} className="flex flex-1 items-center gap-3 text-left">
         <UserAvatar name={friend.name} src={friend.photoUrl} size={44} online={online} />
         <div className="min-w-0">
-          <div className="truncate text-sm font-semibold">{friend.name}</div>
+          <div className="flex items-center gap-1.5">
+            <span className="truncate text-sm font-semibold">{friend.name}</span>
+            {isClose && (
+              <span title="Close friend" aria-label="Close friend" className="inline-flex shrink-0 items-center">
+                <Star size={11} className="fill-primary text-primary" />
+              </span>
+            )}
+          </div>
           <div className={cn('text-xs', online ? 'text-primary' : 'text-muted-foreground')}>{online ? 'online' : `last seen ${timeAgo(friend.lastSeen)} ago`}</div>
         </div>
       </button>
@@ -272,8 +309,12 @@ function FriendRow({ friend, online, onChat, onProfile, onRemove, onBlock, loadi
       {menu && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setMenu(false)} />
-          <div className="absolute right-2 top-12 z-20 w-40 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg">
+          <div className="absolute right-2 top-12 z-20 w-48 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-lg">
             <button onClick={() => { onProfile(); setMenu(false) }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-accent"><UserPlus size={14} />View profile</button>
+            <button onClick={() => { onToggleClose(); setMenu(false) }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-accent" disabled={loadingClose}>
+              {isClose ? <StarOff size={14} /> : <Star size={14} />}
+              {isClose ? 'Remove from close' : 'Add to close friends'}
+            </button>
             <button onClick={() => { onBlock(); setMenu(false) }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-destructive hover:bg-accent"><Ban size={14} />Block</button>
             <button onClick={() => { onRemove(); setMenu(false) }} className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-destructive hover:bg-accent" disabled={loadingRemove}><UserMinus size={14} />Remove</button>
           </div>

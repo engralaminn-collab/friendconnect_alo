@@ -92,8 +92,8 @@ export async function GET(req: NextRequest) {
         starredBy: { where: { userId: me.id }, select: { userId: true } },
       },
     })
-    // filter out expired disappearing messages in JS (can't combine OR clauses in Prisma where)
-    const filtered = messages.filter((m) => !m.expiresAt || m.expiresAt > now)
+    // filter out expired disappearing messages + not-yet-due scheduled messages in JS
+    const filtered = messages.filter((m) => (!m.expiresAt || m.expiresAt > now) && (!m.scheduledFor || m.scheduledFor <= now))
     // mark incoming as seen (only when not searching)
     if (!q) {
       await db.message.updateMany({

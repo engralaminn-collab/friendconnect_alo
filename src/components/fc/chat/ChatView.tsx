@@ -71,6 +71,7 @@ import {
   Camera,
   Image as ImageIcon,
   CornerUpLeft,
+  Calendar,
 } from 'lucide-react'
 
 // ---------------- types ----------------
@@ -249,6 +250,28 @@ function toISO(d: any): string {
 
 function newTempId(): string {
   return `t_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+// Round 8: format an ISO date for the scheduled-messages viewer/list,
+// e.g. "Jan 5, 3:42 PM". Used by the toast + the ScheduledMessagesDialog rows.
+function formatScheduledTime(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (isNaN(d.getTime())) return ''
+  return d.toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+}
+
+// Round 8: convert a Date to the YYYY-MM-DDTHH:MM format required by
+// <input type="datetime-local">. The value is in the user's local timezone
+// (the browser interprets datetime-local values as local time, not UTC).
+function toLocalDateTimeInput(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
 function normalizeMessage(raw: any): Message {
@@ -1142,6 +1165,14 @@ function ChatRoom({
   // on X-tap, and on peerId-change (so a stale reply target from a previous
   // chat doesn't bleed across).
   const [replyTo, setReplyTo] = useState<Message | null>(null)
+  // Round 8: scheduled-message composer + viewer state. The composer opens
+  // via the clock icon in the input bar (prefilled with the current draft
+  // text) and POSTs to /api/messages/scheduled with scheduledFor in the
+  // future (stored but NOT delivered — a future cron enhancement will emit
+  // the message when its time arrives). The viewer lists scheduled messages
+  // for the current conversation and supports cancellation.
+  const [scheduleDialogOpen, setScheduleDialogOpen] = useState(false)
+  const [scheduledViewerOpen, setScheduledViewerOpen] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [starredDialogOpen, setStarredDialogOpen] = useState(false)
   const [disappearing, setDisappearing] = useState<'OFF' | '24H' | '7D'>('OFF')
@@ -2488,6 +2519,17 @@ function ChatRoom({
             >
               {uploading ? <Loader2 className="animate-spin" size={20} /> : <Paperclip size={20} />}
             </button>
+            {/* Round 8: schedule a message for future delivery. Opens the
+                ScheduleMessageDialog with the current draft text prefilled. */}
+            <button
+              onClick={() => setScheduleDialogOpen(true)}
+              disabled={uploading || recording}
+              className="grid h-10 w-10 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-primary disabled:opacity-50"
+              aria-label="Schedule message"
+              title="Schedule message"
+            >
+              <Clock size={20} />
+            </button>
             <Textarea
               value={text}
               onChange={handleTextInput}
@@ -2557,7 +2599,7 @@ function ChatRoom({
         onSave={handleEditSave}
       />
 
-      {/* chat settings sheet (disappearing + wallpaper + starred) */}
+      {/* chat settings sheet (disappearing + wallpaper + starred + scheduled) */}
       <ChatSettingsSheet
         open={settingsOpen}
         onOpenChange={setSettingsOpen}
@@ -2567,12 +2609,31 @@ function ChatRoom({
         onWallpaperChange={handleWallpaperChange}
         onCustomWallpaperUpload={handleCustomWallpaperUpload}
         onOpenStarred={() => setStarredDialogOpen(true)}
+        onOpenScheduled={() => setScheduledViewerOpen(true)}
       />
 
       {/* starred messages viewer */}
       <StarredMessagesDialog
         open={starredDialogOpen}
         onOpenChange={setStarredDialogOpen}
+      />
+
+      {/* Round 8: schedule a message for future delivery */}
+      <ScheduleMessageDialog
+        open={scheduleDialogOpen}
+        onOpenChange={setScheduleDialogOpen}
+        mode={mode}
+        peerId={peerId}
+        peerName={peerInfo?.name}
+        initialContent={text}
+      />
+
+      {/* Round 8: scheduled messages viewer (cancel upcoming messages) */}
+      <ScheduledMessagesDialog
+        open={scheduledViewerOpen}
+        onOpenChange={setScheduledViewerOpen}
+        mode={mode}
+        peerId={peerId}
       />
     </div>
   )
@@ -3279,6 +3340,7 @@ function ChatSettingsSheet({
   onWallpaperChange,
   onCustomWallpaperUpload,
   onOpenStarred,
+  onOpenScheduled,
 }: {
   open: boolean
   onOpenChange: (o: boolean) => void
@@ -3288,6 +3350,9 @@ function ChatSettingsSheet({
   onWallpaperChange: (v: string) => void
   onCustomWallpaperUpload?: (file: File) => Promise<void>
   onOpenStarred: () => void
+  // Round 8: opens the ScheduledMessagesDialog (lists scheduled messages
+  // for this conversation + supports cancellation).
+  onOpenScheduled: () => void
 }) {
   const disappearingOptions: { value: 'OFF' | '24H' | '7D'; label: string; description: string }[] = [
     { value: 'OFF', label: 'Off', description: 'Messages stay in the chat' },
@@ -3343,6 +3408,31 @@ function ChatSettingsSheet({
                 <div className="text-sm font-medium">Starred messages</div>
                 <div className="text-[11px] text-muted-foreground">
                   View all messages you&rsquo;ve starred across chats
+                </div>
+              </div>
+            </button>
+          </section>
+
+          {/* Round 8: Scheduled messages — opens the ScheduledMessagesDialog
+              which lists upcoming scheduled messages for THIS conversation
+              (filtered by receiverId/groupId) with a Cancel button each. */}
+          <section className="mb-6">
+            <SectionTitle>Scheduled</SectionTitle>
+            <button
+              type="button"
+              onClick={() => {
+                onOpenScheduled()
+                onOpenChange(false)
+              }}
+              className="mt-2 flex w-full items-center gap-3 rounded-xl border border-border bg-card p-3 text-left transition hover:bg-accent"
+            >
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
+                <Clock size={16} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="text-sm font-medium">Scheduled messages</div>
+                <div className="text-[11px] text-muted-foreground">
+                  View + cancel messages scheduled for later in this chat
                 </div>
               </div>
             </button>
@@ -3716,6 +3806,280 @@ function EditMessageDialog({
             Save
           </Button>
         </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------------- Round 8: schedule message dialog ----------------
+// Composer for scheduling a message for future delivery. The Textarea is
+// prefilled with the current draft text (passed via `initialContent`) so the
+// user can convert a half-typed message into a scheduled one. The datetime-
+// local input defaults to one hour from now. The Schedule button is disabled
+// until the content is non-empty AND scheduledFor is a valid future timestamp.
+//
+// Backend: POST /api/messages/scheduled { content, scheduledFor, receiverId |
+// groupId } — the message is stored with scheduledFor in the future + NOT
+// delivered immediately. A future cron enhancement will emit message:new when
+// the scheduled time arrives (not yet implemented — for now they're stored +
+// listed + cancellable).
+function ScheduleMessageDialog({
+  open,
+  onOpenChange,
+  mode,
+  peerId,
+  peerName,
+  initialContent,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  mode: 'direct' | 'group'
+  peerId: string
+  peerName?: string
+  initialContent?: string
+}) {
+  const [content, setContent] = useState('')
+  const [scheduledFor, setScheduledFor] = useState('')
+  const [sending, setSending] = useState(false)
+
+  // Prefill the content with the draft text + reset the time picker to one
+  // hour from now whenever the dialog opens. We intentionally depend on
+  // `open` only — re-running on `initialContent` changes would clobber the
+  // user's in-progress edits if the parent re-renders for an unrelated reason
+  // (the dialog is modal so initialContent can't actually change while open).
+  useEffect(() => {
+    if (open) {
+      setContent(initialContent || '')
+      const soon = new Date(Date.now() + 60 * 60 * 1000)
+      setScheduledFor(toLocalDateTimeInput(soon))
+      setSending(false)
+    }
+  }, [open, initialContent])
+
+  const trimmed = content.trim()
+  const scheduledDate = scheduledFor ? new Date(scheduledFor) : null
+  const isFuture =
+    !!scheduledDate &&
+    !isNaN(scheduledDate.getTime()) &&
+    scheduledDate.getTime() > Date.now()
+  const canSubmit = !!trimmed && isFuture && !sending
+
+  const handleSubmit = async () => {
+    if (!canSubmit || !scheduledDate) return
+    setSending(true)
+    try {
+      const body: { content: string; scheduledFor: string; receiverId?: string; groupId?: string } = {
+        content: trimmed,
+        scheduledFor: scheduledDate.toISOString(),
+      }
+      if (mode === 'direct') body.receiverId = peerId
+      else body.groupId = peerId
+      await api<{ message: { id: string; scheduledFor: string } }>(
+        '/api/messages/scheduled',
+        { method: 'POST', body: JSON.stringify(body) }
+      )
+      toast.success(`Message scheduled for ${formatScheduledTime(scheduledDate.toISOString())}`)
+      onOpenChange(false)
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to schedule message')
+    } finally {
+      setSending(false)
+    }
+  }
+
+  const targetLabel = peerName || (mode === 'group' ? 'this group' : 'this contact')
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md gap-0 p-0">
+        <DialogHeader className="border-b border-border px-4 py-3">
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <Clock size={16} className="text-primary" />
+            Schedule message
+          </DialogTitle>
+        </DialogHeader>
+        <div className="px-4 py-3">
+          <Textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            autoFocus
+            maxLength={5000}
+            rows={4}
+            className="resize-none"
+            placeholder="Message to send later…"
+            onKeyDown={(e) => {
+              // Ctrl/Cmd+Enter submits (matches the EditMessageDialog pattern).
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey) && canSubmit) {
+                e.preventDefault()
+                handleSubmit()
+              }
+            }}
+          />
+          <label className="mt-3 flex flex-col gap-1.5 text-xs font-medium text-muted-foreground">
+            <span className="flex items-center gap-1.5">
+              <Calendar size={12} />
+              Send at
+            </span>
+            <input
+              type="datetime-local"
+              value={scheduledFor}
+              onChange={(e) => setScheduledFor(e.target.value)}
+              min={toLocalDateTimeInput(new Date())}
+              className="rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/30"
+            />
+          </label>
+          <div className="mt-1.5 flex items-center justify-between text-[10px] text-muted-foreground">
+            <span>
+              To: <span className="font-medium text-foreground">{targetLabel}</span>
+            </span>
+            <span>{content.length} / 5000</span>
+          </div>
+          {scheduledFor && !isFuture && (
+            <p className="mt-1.5 text-[11px] text-destructive">
+              Pick a time in the future.
+            </p>
+          )}
+        </div>
+        <DialogFooter className="flex-row items-center justify-end gap-2 border-t border-border px-4 py-3 sm:justify-end">
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={sending}>
+            Cancel
+          </Button>
+          <Button onClick={handleSubmit} disabled={!canSubmit}>
+            {sending ? <Loader2 className="animate-spin" size={14} /> : <Clock size={14} />}
+            Schedule
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// ---------------- Round 8: scheduled messages dialog ----------------
+// Lists scheduled messages for the CURRENT conversation only (filtered from
+// the global /api/messages/scheduled response by receiverId === peerId for
+// 1:1 or groupId === peerId for groups). Each row shows the truncated
+// content + the formatted scheduled time + a destructive Cancel button that
+// DELETEs the scheduled message via /api/messages/scheduled?id=MSG_ID.
+//
+// Note: the backend stores scheduled messages with status=SENT +
+// scheduledFor in the future. The GET /api/messages endpoint already filters
+// them out (they don't appear in normal history until their time arrives).
+// A future cron enhancement will emit message:new when the scheduled time
+// arrives — for now they're stored + listed + cancellable.
+interface ScheduledMessageLite {
+  id: string
+  content: string
+  type: string
+  scheduledFor: string
+  receiverId?: string | null
+  receiverName?: string | null
+  groupId?: string | null
+  groupName?: string | null
+}
+
+function ScheduledMessagesDialog({
+  open,
+  onOpenChange,
+  mode,
+  peerId,
+}: {
+  open: boolean
+  onOpenChange: (o: boolean) => void
+  mode: 'direct' | 'group'
+  peerId: string
+}) {
+  const [loading, setLoading] = useState(false)
+  const [scheduled, setScheduled] = useState<ScheduledMessageLite[]>([])
+  const [cancellingId, setCancellingId] = useState<string | null>(null)
+
+  // Filter the global scheduled list down to messages targeted at THIS
+  // conversation. The backend returns all of the user's scheduled messages
+  // (across every chat); we narrow it client-side so the dialog stays
+  // focused on the active chat.
+  const filtered = scheduled.filter((m) =>
+    mode === 'direct' ? m.receiverId === peerId : m.groupId === peerId
+  )
+
+  useEffect(() => {
+    if (!open) return
+    setLoading(true)
+    api<{ scheduled: ScheduledMessageLite[] }>('/api/messages/scheduled')
+      .then((d) => setScheduled(d.scheduled || []))
+      .catch((e: any) => toast.error(e?.message || 'Failed to load scheduled messages'))
+      .finally(() => setLoading(false))
+  }, [open])
+
+  const handleCancel = async (id: string) => {
+    setCancellingId(id)
+    try {
+      await api(`/api/messages/scheduled?id=${encodeURIComponent(id)}`, { method: 'DELETE' })
+      setScheduled((prev) => prev.filter((m) => m.id !== id))
+      toast.success('Scheduled message cancelled')
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to cancel')
+    } finally {
+      setCancellingId(null)
+    }
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-md gap-0 p-0">
+        <DialogHeader className="border-b border-border px-4 py-3">
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <Clock size={16} className="text-primary" />
+            Scheduled messages
+          </DialogTitle>
+        </DialogHeader>
+        <div className="fc-scroll max-h-[70vh] overflow-y-auto p-2">
+          {loading ? (
+            <div className="flex justify-center py-8">
+              <Loader2 className="animate-spin text-muted-foreground" size={20} />
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">
+              No scheduled messages for this {mode === 'direct' ? 'chat' : 'group'}.
+            </div>
+          ) : (
+            <div className="space-y-0.5">
+              {filtered.map((m) => (
+                <div
+                  key={m.id}
+                  className="rounded-xl p-2 hover:bg-accent/40"
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary/15 text-primary">
+                      <Clock size={16} />
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="line-clamp-2 break-words text-sm">
+                        {m.content || '(empty message)'}
+                      </div>
+                      <div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground">
+                        <Calendar size={10} />
+                        <span>{formatScheduledTime(m.scheduledFor)}</span>
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleCancel(m.id)}
+                      disabled={cancellingId === m.id}
+                      className="flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11px] font-medium text-destructive transition hover:bg-destructive/10 disabled:opacity-50"
+                      aria-label="Cancel scheduled message"
+                    >
+                      {cancellingId === m.id ? (
+                        <Loader2 size={12} className="animate-spin" />
+                      ) : (
+                        <Trash2 size={12} />
+                      )}
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   )

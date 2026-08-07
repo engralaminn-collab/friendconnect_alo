@@ -16,7 +16,7 @@ import {
   DialogTitle,
   DialogDescription,
 } from '@/components/ui/dialog'
-import { Plus, Camera, Type, Loader2, ImageIcon, Bookmark } from 'lucide-react'
+import { Plus, Camera, Type, Loader2, ImageIcon, Bookmark, Star, BellOff, Bell } from 'lucide-react'
 import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 import { StoryViewer, type StoryItem, type StoryViewerUser } from './StoryViewer'
@@ -27,6 +27,7 @@ interface StoryUser {
   username: string
   photoUrl: string | null
   isMe: boolean
+  storiesMuted?: boolean
   stories: StoryItem[]
   highlights: StoryItem[]
 }
@@ -58,6 +59,12 @@ export function StoriesBar() {
     startIndex?: number
   } | null>(null)
   const [createOpen, setCreateOpen] = useState(false)
+  // Close-friends filter (off by default — shows all friends' stories)
+  const [closeOnly, setCloseOnly] = useState(false)
+  const [closeFriendIds, setCloseFriendIds] = useState<Set<string>>(new Set())
+  // Per-ring long-press menu (mute stories toggle)
+  const [menuFor, setMenuFor] = useState<string | null>(null)
+  const [muteLoading, setMuteLoading] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     try {
@@ -73,10 +80,38 @@ export function StoriesBar() {
     }
   }, [])
 
+  const loadCloseFriends = useCallback(async () => {
+    try {
+      const data = await api<{ closeFriends: { id: string }[] }>('/api/friends/close')
+      setCloseFriendIds(new Set(data.closeFriends.map((cf) => cf.id)))
+    } catch {
+      // ignore — close-friends filter just stays empty
+    }
+  }, [])
+
   useEffect(() => {
     load()
+    loadCloseFriends()
     const t = setInterval(load, 30000)
     return () => clearInterval(t)
+  }, [load, loadCloseFriends])
+
+  const toggleMute = useCallback(async (userId: string, currentMuted: boolean) => {
+    setMuteLoading(userId)
+    setMenuFor(null)
+    try {
+      await api('/api/friends/close', {
+        method: 'POST',
+        body: JSON.stringify({ targetId: userId, action: 'muteStories', value: !currentMuted }),
+      })
+      toast.success(!currentMuted ? 'Stories muted' : 'Stories unmuted')
+      // Backend filters out active stories from muted users on next fetch.
+      await load()
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to update')
+    } finally {
+      setMuteLoading(null)
+    }
   }, [load])
 
   // Build the "me" entry (real or synthetic so user can always add a story)
@@ -98,9 +133,10 @@ export function StoriesBar() {
   // Main stories row — only show users that have at least one active story, or
   // the current user (so they can always add a story). Friends with only
   // highlights appear exclusively in the highlights section below.
+  // When the "Close friends" filter is on, restrict to me + close friends only.
   const ordered = (myGroup ? [myGroup, ...groups.filter((g) => !g.isMe)] : groups).filter(
     (g) => g.isMe || g.stories.length > 0
-  )
+  ).filter((g) => g.isMe || !closeOnly || closeFriendIds.has(g.userId))
   const hasAny = groups.length > 0
 
   // Flatten all highlights across users (me first, then friends) for the
@@ -162,69 +198,174 @@ export function StoriesBar() {
 
   return (
     <>
-      <div className="fc-no-scroll -mx-1 flex gap-1 overflow-x-auto px-1 pb-1">
-        {ordered.map((g) => {
-          const isMe = g.isMe
-          const hasStories = g.stories.length > 0
-          const unviewed = !isMe && g.stories.some((s) => !s.viewedByMe)
-          const firstName = (g.name || g.username || 'User').split(' ')[0]
-          const label = isMe ? (hasStories ? 'Your story' : 'Add story') : firstName
+      {/* Close-friends filter pill + stories row */}
+      <div className="flex items-center gap-2 pb-1">
+        <button
+          type="button"
+          onClick={() => setCloseOnly((v) => !v)}
+          aria-pressed={closeOnly}
+          title="Show only close friends' stories"
+          className={cn(
+            'inline-flex shrink-0 items-center gap-1 rounded-full px-3 py-1 text-xs font-medium transition',
+            closeOnly
+              ? 'bg-primary/10 text-primary'
+              : 'bg-muted text-muted-foreground hover:bg-accent'
+          )}
+        >
+          <Star size={11} className={closeOnly ? 'fill-primary text-primary' : ''} />
+          Close friends
+        </button>
+        <div className="fc-no-scroll -mx-1 flex flex-1 gap-1 overflow-x-auto px-1">
+          {ordered.length === 0 ? (
+            <span className="py-3 text-xs text-muted-foreground">
+              No close friends with active stories.
+            </span>
+          ) : (
+            ordered.map((g) => {
+              const isMe = g.isMe
+              const hasStories = g.stories.length > 0
+              const unviewed = !isMe && g.stories.some((s) => !s.viewedByMe)
+              const muted = !!g.storiesMuted
+              const firstName = (g.name || g.username || 'User').split(' ')[0]
+              const label = isMe ? (hasStories ? 'Your story' : 'Add story') : firstName
 
-          return (
-            <div
-              key={g.userId}
-              className="flex w-[72px] flex-shrink-0 flex-col items-center gap-1.5"
-            >
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={() => openViewerFor(g)}
-                  className="relative block rounded-full transition active:scale-95"
-                  aria-label={isMe ? 'Your story' : `${g.name}'s story`}
+              return (
+                <div
+                  key={g.userId}
+                  className="flex w-[72px] flex-shrink-0 flex-col items-center gap-1.5"
                 >
-                  {/* Gradient ring */}
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => openViewerFor(g)}
+                      onContextMenu={(e) => {
+                        if (isMe) return
+                        e.preventDefault()
+                        setMenuFor(g.userId)
+                      }}
+                      onPointerDown={(e) => {
+                        if (isMe) return
+                        // Long-press to open mute menu on touch devices.
+                        const target = e.currentTarget
+                        const timer = window.setTimeout(() => {
+                          setMenuFor(g.userId)
+                          // Prevent the click that fires after pointerup.
+                          target.dataset.longPressed = '1'
+                          setTimeout(() => { delete target.dataset.longPressed }, 400)
+                        }, 500)
+                        const clear = () => {
+                          window.clearTimeout(timer)
+                          target.removeEventListener('pointerup', clear)
+                          target.removeEventListener('pointerleave', clear)
+                          target.removeEventListener('pointercancel', clear)
+                        }
+                        target.addEventListener('pointerup', clear, { once: true })
+                        target.addEventListener('pointerleave', clear, { once: true })
+                        target.addEventListener('pointercancel', clear, { once: true })
+                      }}
+                      onClickCapture={(e) => {
+                        const t = e.currentTarget as HTMLButtonElement
+                        if (t.dataset.longPressed === '1') {
+                          e.preventDefault()
+                          e.stopPropagation()
+                        }
+                      }}
+                      className="relative block rounded-full transition active:scale-95"
+                      aria-label={isMe ? 'Your story' : `${g.name}'s story — long-press for options`}
+                    >
+                      {/* Gradient ring */}
+                      <span
+                        className={cn(
+                          'block rounded-full p-[2.5px] transition-colors',
+                          isMe
+                            ? 'bg-muted'
+                            : muted
+                            ? 'bg-muted'
+                            : unviewed
+                            ? 'bg-gradient-to-tr from-primary via-primary to-accent'
+                            : 'bg-muted'
+                        )}
+                      >
+                        {/* Inner border (background-colored gap) */}
+                        <span className="block rounded-full bg-background p-[2px]">
+                          <UserAvatar name={g.name} src={g.photoUrl} size={60} />
+                        </span>
+                      </span>
+                    </button>
+
+                    {/* "+" add overlay for current user */}
+                    {isMe && (
+                      <button
+                        type="button"
+                        onClick={() => setCreateOpen(true)}
+                        aria-label="Add a new story"
+                        className="absolute -bottom-0.5 -right-0.5 grid h-6 w-6 place-items-center rounded-full border-[3px] border-background bg-primary text-primary-foreground shadow-md transition hover:bg-primary/90 active:scale-90"
+                      >
+                        <Plus size={13} strokeWidth={2.75} />
+                      </button>
+                    )}
+
+                    {/* Close-friend badge */}
+                    {!isMe && closeFriendIds.has(g.userId) && (
+                      <span
+                        title="Close friend"
+                        aria-label="Close friend"
+                        className="absolute -left-1 -top-1 grid h-4 w-4 place-items-center rounded-full border-2 border-background bg-primary text-primary-foreground"
+                      >
+                        <Star size={8} className="fill-current" />
+                      </span>
+                    )}
+
+                    {/* Muted indicator */}
+                    {!isMe && muted && (
+                      <span
+                        title="Stories muted"
+                        aria-label="Stories muted"
+                        className="absolute -bottom-0.5 -left-0.5 grid h-4 w-4 place-items-center rounded-full border-2 border-background bg-popover text-muted-foreground"
+                      >
+                        <BellOff size={10} />
+                      </span>
+                    )}
+
+                    {/* Long-press menu for mute/unmute */}
+                    {!isMe && menuFor === g.userId && (
+                      <>
+                        <div className="fixed inset-0 z-20" onClick={() => setMenuFor(null)} />
+                        <div className="fc-rise absolute left-1/2 top-full z-30 mt-2 w-40 -translate-x-1/2 overflow-hidden rounded-xl border border-border bg-popover p-1 shadow-xl">
+                          <button
+                            type="button"
+                            disabled={muteLoading === g.userId}
+                            onClick={() => toggleMute(g.userId, muted)}
+                            className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-accent disabled:opacity-50"
+                          >
+                            {muteLoading === g.userId ? (
+                              <Loader2 size={14} className="animate-spin" />
+                            ) : muted ? (
+                              <Bell size={14} />
+                            ) : (
+                              <BellOff size={14} />
+                            )}
+                            {muted ? 'Unmute stories' : 'Mute stories'}
+                          </button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+
                   <span
                     className={cn(
-                      'block rounded-full p-[2.5px] transition-colors',
-                      isMe
-                        ? 'bg-muted'
-                        : unviewed
-                        ? 'bg-gradient-to-tr from-primary via-primary to-accent'
-                        : 'bg-muted'
+                      'max-w-[68px] truncate text-center text-[10px] font-medium',
+                      unviewed ? 'text-foreground' : 'text-muted-foreground'
                     )}
+                    title={label}
                   >
-                    {/* Inner border (background-colored gap) */}
-                    <span className="block rounded-full bg-background p-[2px]">
-                      <UserAvatar name={g.name} src={g.photoUrl} size={60} />
-                    </span>
+                    {label}
                   </span>
-                </button>
-
-                {/* "+" add overlay for current user */}
-                {isMe && (
-                  <button
-                    type="button"
-                    onClick={() => setCreateOpen(true)}
-                    aria-label="Add a new story"
-                    className="absolute -bottom-0.5 -right-0.5 grid h-6 w-6 place-items-center rounded-full border-[3px] border-background bg-primary text-primary-foreground shadow-md transition hover:bg-primary/90 active:scale-90"
-                  >
-                    <Plus size={13} strokeWidth={2.75} />
-                  </button>
-                )}
-              </div>
-
-              <span
-                className={cn(
-                  'max-w-[68px] truncate text-center text-[10px] font-medium',
-                  unviewed ? 'text-foreground' : 'text-muted-foreground'
-                )}
-                title={label}
-              >
-                {label}
-              </span>
-            </div>
-          )
-        })}
+                </div>
+              )
+            })
+          )}
+        </div>
       </div>
 
       {/* Highlights section — saved stories from me + friends that don't expire */}
