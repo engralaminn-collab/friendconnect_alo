@@ -43,6 +43,7 @@ import {
   Clock,
   FileText,
   Download,
+  Maximize2,
   Search,
   Users,
   MessageCircle,
@@ -126,6 +127,8 @@ interface Message {
   forwardedFrom?: string | null
   starred?: boolean
   expiresAt?: string | null
+  edited?: boolean
+  editedAt?: string | null
 }
 
 interface Friend {
@@ -178,6 +181,14 @@ function fileTypeFromMime(mime: string | null | undefined): MessageType {
   return 'document'
 }
 
+// Detect PDF documents by mimeType or .pdf file extension — used to decide
+// whether to render an inline <iframe> preview vs. the simple download card.
+function isPdfMessage(msg: Message): boolean {
+  if (msg.mimeType && msg.mimeType.toLowerCase() === 'application/pdf') return true
+  if (msg.fileName && msg.fileName.toLowerCase().endsWith('.pdf')) return true
+  return false
+}
+
 function linkify(text: string): React.ReactNode[] {
   const parts = text.split(/(https?:\/\/[^\s]+)/g)
   return parts.map((part, i) => {
@@ -228,6 +239,8 @@ function normalizeMessage(raw: any): Message {
     forwardedFrom: raw.forwardedFrom ?? null,
     starred: !!raw.starred,
     expiresAt: raw.expiresAt ?? null,
+    edited: !!raw.edited,
+    editedAt: raw.editedAt ?? null,
   }
 }
 
@@ -771,10 +784,21 @@ function ChatRoom({
   const [recordSecs, setRecordSecs] = useState(0)
   const [deleteTarget, setDeleteTarget] = useState<Message | null>(null)
   const [forwardTarget, setForwardTarget] = useState<Message | null>(null)
+  const [editTarget, setEditTarget] = useState<Message | null>(null)
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [starredDialogOpen, setStarredDialogOpen] = useState(false)
   const [disappearing, setDisappearing] = useState<'OFF' | '24H' | '7D'>('OFF')
   const [wallpaper, setWallpaper] = useState<string | null>(null)
+  // Group typing (sender-aware): set of userIds currently typing in this group
+  // chat (excludes me — the realtime service emits to everyone *but* the typer,
+  // and we filter again here for safety). Reset to empty when peerId changes.
+  const [groupTypingUsers, setGroupTypingUsers] = useState<Set<string>>(new Set())
+  // Member names lookup for the group typing indicator ("Aria is typing…").
+  // Built once per group chat open via GET /api/groups/:id.
+  const [groupMembers, setGroupMembers] = useState<Map<string, string>>(new Map())
+  // Derived count of group members currently typing (defined here so the
+  // auto-scroll effect below can reference it without a temporal-dead-zone error).
+  const groupTypingCount = groupTypingUsers.size
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -807,6 +831,9 @@ function ChatRoom({
     setHasMore(true)
     setPeerTyping(false)
     setPeerInfo(null)
+    // Reset group typing state for the new conversation (so a stale "X is
+    // typing…" indicator doesn't bleed across chats when switching rooms).
+    setGroupTypingUsers(new Set())
     // Reset the input for the new conversation; the draft (if any) is restored
     // below.
     setText('')
@@ -929,6 +956,38 @@ function ChatRoom({
     }
   }, [peerId])
 
+  // ---- fetch group members (userId → name) once on entering a group chat ----
+  // Used by the sender-aware group typing indicator to show "Aria is typing…"
+  // instead of a generic "Someone is typing…".
+  useEffect(() => {
+    if (mode !== 'group') {
+      setGroupMembers(new Map())
+      return
+    }
+    let cancelled = false
+    api<{
+      group: {
+        id: string
+        name: string
+        members: Array<{ id: string; name: string; username: string }>
+      }
+    }>(`/api/groups/${encodeURIComponent(peerId)}`)
+      .then((d) => {
+        if (cancelled) return
+        const map = new Map<string, string>()
+        for (const m of d.group?.members || []) {
+          map.set(m.id, m.name || m.username || 'Someone')
+        }
+        setGroupMembers(map)
+      })
+      .catch(() => {
+        // Non-fatal: typing indicator falls back to "Someone is typing…".
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [mode, peerId])
+
   // ---- jump to bottom after first load ----
   useEffect(() => {
     if (loading) return
@@ -951,7 +1010,7 @@ function ChatRoom({
       bottomRef.current?.scrollIntoView({ block: 'end', behavior: 'smooth' })
     })
     return () => cancelAnimationFrame(id)
-  }, [messages.length, peerTyping, loading, loadingOlder])
+  }, [messages.length, peerTyping, groupTypingCount, loading, loadingOlder])
 
   // ---- socket subscriptions ----
   useEffect(() => {
@@ -1034,12 +1093,65 @@ function ChatRoom({
       )
     }
 
+    // Realtime message edit: server emits message:edited { messageId, content,
+    // editedAt } to sender + receiver + group members. We update the matching
+    // local message in place. Safe to receive for a message we just edited
+    // (idempotent — same content + editedAt we set optimistically).
+    const onEdited = ({
+      messageId,
+      content,
+      editedAt,
+    }: {
+      messageId: string
+      content: string
+      editedAt?: string
+    }) => {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === messageId
+            ? {
+                ...m,
+                content,
+                edited: true,
+                editedAt: editedAt || m.editedAt || new Date().toISOString(),
+              }
+            : m
+        )
+      )
+    }
+
+    // Group typing (sender-aware): server emits group:typing:indicator
+    // { groupId, userId, isTyping } to all other group members (excludes the
+    // typer). We filter by groupId + ignore our own id (defensive) and track
+    // the set of userIds currently typing so the indicator can show "Aria is
+    // typing…" or "3 people are typing…".
+    const onGroupTyping = ({
+      groupId,
+      userId,
+      isTyping,
+    }: {
+      groupId: string
+      userId: string
+      isTyping: boolean
+    }) => {
+      if (mode !== 'group' || groupId !== peerId) return
+      if (userId === meId) return
+      setGroupTypingUsers((prev) => {
+        const next = new Set(prev)
+        if (isTyping) next.add(userId)
+        else next.delete(userId)
+        return next
+      })
+    }
+
     socket.on(RT.MESSAGE_NEW, onNew)
     socket.on(RT.GROUP_MESSAGE_NEW, onNew)
     socket.on(RT.MESSAGE_STATUS, onStatus)
     socket.on(RT.TYPING_INDICATOR, onTyping)
     socket.on(RT.REACTION_UPDATE, onReaction)
     socket.on(RT.MESSAGE_DELETED, onDeleted)
+    socket.on(RT.MESSAGE_EDITED, onEdited)
+    socket.on(RT.GROUP_TYPING_INDICATOR, onGroupTyping)
 
     return () => {
       socket.off(RT.MESSAGE_NEW, onNew)
@@ -1048,8 +1160,13 @@ function ChatRoom({
       socket.off(RT.TYPING_INDICATOR, onTyping)
       socket.off(RT.REACTION_UPDATE, onReaction)
       socket.off(RT.MESSAGE_DELETED, onDeleted)
+      socket.off(RT.MESSAGE_EDITED, onEdited)
+      socket.off(RT.GROUP_TYPING_INDICATOR, onGroupTyping)
       if (mode === 'direct') {
         socket.emit(RT.TYPING, { receiverId: peerId, isTyping: false })
+      }
+      if (mode === 'group') {
+        socket.emit(RT.GROUP_TYPING, { groupId: peerId, isTyping: false })
       }
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current)
     }
@@ -1146,6 +1263,67 @@ function ChatRoom({
       toast.error(e?.message || 'Failed to update star')
     }
   }, [])
+
+  // ---- edit a message (sender only, within 15-min window) ----
+  // Tries realtime first (socket.emit with ack) for instant propagation to
+  // other participants; falls back to POST /api/messages/[id]/edit if the
+  // socket is unavailable or didn't ack. On success, updates the local
+  // message in place (content + edited=true + editedAt) and toasts. Throws
+  // on error so the dialog can keep open + show the error toast.
+  const handleEditSave = useCallback(
+    async (msg: Message, content: string): Promise<void> => {
+      if (!meId) throw new Error('Not authenticated')
+
+      let realtimeOk = false
+      if (socket) {
+        const ack = await new Promise<any>((resolve) => {
+          // Socket.io v4+ ack: third arg is the callback. We wrap it in a
+          // promise for cleaner async flow + a 10s timeout guard so a
+          // missing ack doesn't hang the dialog forever.
+          const timer = setTimeout(() => resolve({ ok: false, error: 'timeout' }), 10000)
+          socket.emit(
+            RT.MESSAGE_EDIT,
+            { messageId: msg.id, content },
+            (ack: any) => {
+              clearTimeout(timer)
+              resolve(ack)
+            }
+          )
+        })
+        if (ack?.ok) {
+          realtimeOk = true
+        } else if (ack?.error) {
+          // Surface server-side errors (e.g. "edit window expired",
+          // "forbidden", "empty") to the user.
+          throw new Error(String(ack.error))
+        }
+      }
+
+      let editedAt: string | null = null
+      if (!realtimeOk) {
+        // REST fallback — uses the authoritative editedAt from the server.
+        const res = await api<{
+          message: { id: string; content: string; edited: boolean; editedAt: string | null }
+        }>(`/api/messages/${msg.id}/edit`, {
+          method: 'POST',
+          body: JSON.stringify({ content }),
+        })
+        editedAt = res.message?.editedAt ?? null
+      } else {
+        editedAt = new Date().toISOString()
+      }
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msg.id
+            ? { ...m, content, edited: true, editedAt: editedAt || new Date().toISOString() }
+            : m
+        )
+      )
+      toast.success('Message edited')
+    },
+    [socket, meId]
+  )
 
   // ---- update disappearing messages preference ----
   const handleDisappearingChange = useCallback(
@@ -1307,6 +1485,12 @@ function ChatRoom({
       socket.emit(RT.TYPING, { receiverId: peerId, isTyping: false })
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current)
     }
+    if (socket && mode === 'group') {
+      // Stop the typing indicator on send so other group members see the
+      // message arrive instead of a lingering "X is typing…" bubble.
+      socket.emit(RT.GROUP_TYPING, { groupId: peerId, isTyping: false })
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current)
+    }
   }, [text, sendMessage, socket, mode, peerId])
 
   // ---- send file ----
@@ -1432,6 +1616,17 @@ function ChatRoom({
         socket.emit(RT.TYPING, { receiverId: peerId, isTyping: false })
       }, 1500)
     }
+    if (socket && mode === 'group') {
+      // Sender-aware group typing: emit isTyping:true on input, then debounce
+      // a reset to false after 1.5s idle (same pattern as the 1:1 typing
+      // indicator above). The server broadcasts group:typing:indicator to all
+      // other members (excludes us — we never show our own typing indicator).
+      socket.emit(RT.GROUP_TYPING, { groupId: peerId, isTyping: true })
+      if (typingTimerRef.current) clearTimeout(typingTimerRef.current)
+      typingTimerRef.current = setTimeout(() => {
+        socket.emit(RT.GROUP_TYPING, { groupId: peerId, isTyping: false })
+      }, 1500)
+    }
     // Debounced draft auto-save (500ms idle). The backend deletes empty
     // drafts so we still POST when the user clears the field — this keeps
     // the conversation list "Draft: …" indicator in sync.
@@ -1460,11 +1655,25 @@ function ChatRoom({
   }
 
   const online = mode === 'direct' ? isOnline(peerId) : false
+  // Group typing label for header + bubble — computed inline (cheap; runs
+  // only when this ChatRoom re-renders, and the only changing deps are
+  // groupTypingUsers and groupMembers which are both state).
+  // (groupTypingCount is defined near the state declaration above so the
+  // auto-scroll effect can reference it without a temporal-dead-zone error.)
+  const groupTypingLabel = (() => {
+    if (groupTypingCount === 0) return ''
+    if (groupTypingCount === 1) {
+      const userId = Array.from(groupTypingUsers)[0]
+      const name = groupMembers.get(userId) || 'Someone'
+      return `${name} is typing…`
+    }
+    return `${groupTypingCount} people are typing…`
+  })()
   const headerStatus = mode === 'direct'
     ? peerTyping
       ? 'typing…'
       : lastSeenText(online, peerInfo?.lastSeen)
-    : `${peerInfo?.memberCount ?? 0} members`
+    : groupTypingLabel || `${peerInfo?.memberCount ?? 0} members`
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -1496,7 +1705,7 @@ function ChatRoom({
             <div
               className={cn(
                 'flex items-center gap-1 truncate text-xs leading-tight',
-                peerTyping ? 'text-primary' : 'text-muted-foreground'
+                peerTyping || groupTypingCount > 0 ? 'text-primary' : 'text-muted-foreground'
               )}
             >
               {disappearing !== 'OFF' && (
@@ -1629,25 +1838,36 @@ function ChatRoom({
                     onForward={(msg) => setForwardTarget(msg)}
                     onDelete={(msg) => setDeleteTarget(msg)}
                     onStar={toggleStar}
+                    onEdit={(msg) => setEditTarget(msg)}
                   />
                 )
               })}
-              {peerTyping && (
+              {/* Typing indicator: 1:1 uses peerTyping; groups track a Set of
+                  currently-typing userIds (excludes me) and show the sender-
+                  aware label "Aria is typing…" or "N people are typing…". */}
+              {(peerTyping || (mode === 'group' && groupTypingCount > 0)) && (
                 <div className="flex items-center gap-2 pl-1">
                   {mode === 'group' && <div className="w-7 shrink-0" />}
-                  <div className="fc-bubble-them fc-rise flex items-center gap-1 px-3 py-3">
-                    <span
-                      className="fc-typing-dot h-1.5 w-1.5 rounded-full bg-current"
-                      style={{ animationDelay: '0ms' }}
-                    />
-                    <span
-                      className="fc-typing-dot h-1.5 w-1.5 rounded-full bg-current"
-                      style={{ animationDelay: '150ms' }}
-                    />
-                    <span
-                      className="fc-typing-dot h-1.5 w-1.5 rounded-full bg-current"
-                      style={{ animationDelay: '300ms' }}
-                    />
+                  <div className="fc-bubble-them fc-rise flex flex-col gap-1 px-3 py-2">
+                    {mode === 'group' && groupTypingCount > 0 && (
+                      <span className="text-xs text-muted-foreground">
+                        {groupTypingLabel}
+                      </span>
+                    )}
+                    <div className="flex items-center gap-1">
+                      <span
+                        className="fc-typing-dot h-1.5 w-1.5 rounded-full bg-current"
+                        style={{ animationDelay: '0ms' }}
+                      />
+                      <span
+                        className="fc-typing-dot h-1.5 w-1.5 rounded-full bg-current"
+                        style={{ animationDelay: '150ms' }}
+                      />
+                      <span
+                        className="fc-typing-dot h-1.5 w-1.5 rounded-full bg-current"
+                        style={{ animationDelay: '300ms' }}
+                      />
+                    </div>
                   </div>
                 </div>
               )}
@@ -1767,6 +1987,13 @@ function ChatRoom({
         onConfirm={confirmDelete}
       />
 
+      {/* edit message dialog */}
+      <EditMessageDialog
+        message={editTarget}
+        onClose={() => setEditTarget(null)}
+        onSave={handleEditSave}
+      />
+
       {/* chat settings sheet (disappearing + wallpaper + starred) */}
       <ChatSettingsSheet
         open={settingsOpen}
@@ -1860,6 +2087,7 @@ function MessageBubble({
   onForward,
   onDelete,
   onStar,
+  onEdit,
 }: {
   msg: Message
   mine: boolean
@@ -1873,14 +2101,23 @@ function MessageBubble({
   onForward: (msg: Message) => void
   onDelete: (msg: Message) => void
   onStar: (msg: Message) => void
+  onEdit: (msg: Message) => void
 }) {
   const bubbleClass = mine ? 'fc-bubble-me' : 'fc-bubble-them'
-  const isMedia = msg.type === 'image' || msg.type === 'video'
   const [menuOpen, setMenuOpen] = useState(false)
+  const [pdfFailed, setPdfFailed] = useState(false)
+  const isPdf =
+    msg.type === 'document' && !!msg.fileUrl && isPdfMessage(msg) && !pdfFailed
+  const isMedia = msg.type === 'image' || msg.type === 'video' || isPdf
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const deleted = isDeletedForMe(msg, meId)
   const forwarded = !!msg.forwardedFrom
+  // Edit is only allowed for my own non-deleted text messages within the
+  // 15-minute edit window (matches backend rule in /api/messages/[id]/edit).
+  const withinEditWindow =
+    !!msg.createdAt && (Date.now() - new Date(msg.createdAt).getTime()) / 60000 < 15
+  const canEdit = mine && !deleted && msg.type === 'text' && withinEditWindow
 
   const startPress = () => {
     if (deleted) return
@@ -1918,6 +2155,9 @@ function MessageBubble({
       )}
     >
       <span>{clockTime(msg.createdAt)}</span>
+      {msg.edited && (
+        <span className="text-[9px] italic text-muted-foreground">edited</span>
+      )}
       {mine && <StatusTick status={msg.status} />}
     </div>
   )
@@ -1994,12 +2234,20 @@ function MessageBubble({
           )}
           {msg.type === 'image' && msg.fileUrl && (
             <>
-              <button type="button" onClick={() => onImageClick(msg.fileUrl!)} className="block">
+              <button
+                type="button"
+                onClick={() => onImageClick(msg.fileUrl!)}
+                className="group relative block"
+                aria-label={`View image${msg.fileName ? ': ' + msg.fileName : ''}`}
+              >
                 <img
                   src={msg.fileUrl}
                   alt={msg.fileName || 'image'}
                   className="max-h-72 max-w-[260px] rounded-lg object-cover"
                 />
+                <span className="pointer-events-none absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full bg-black/55 text-white opacity-0 backdrop-blur-sm transition-opacity duration-150 group-hover:opacity-100">
+                  <Maximize2 size={12} />
+                </span>
               </button>
               <div className="px-1 pb-0.5 pt-1">{meta}</div>
             </>
@@ -2009,40 +2257,77 @@ function MessageBubble({
               <video
                 src={msg.fileUrl}
                 controls
-                className="max-h-72 max-w-[260px] rounded-lg bg-black"
+                className="max-h-72 max-w-[260px] rounded-lg border border-border bg-black"
               />
               <div className="px-1 pb-0.5 pt-1">{meta}</div>
             </>
           )}
           {msg.type === 'audio' && msg.fileUrl && (
             <>
-              <div className="flex items-center gap-2 py-0.5">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary/20 text-primary">
-                  <Mic size={16} />
+              <div className="flex items-center gap-2.5 rounded-2xl bg-gradient-to-br from-primary/10 to-accent/20 p-3">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-primary/25 text-primary">
+                  <Mic size={18} />
                 </span>
-                <audio src={msg.fileUrl} controls className="w-48 max-w-full" />
+                <audio
+                  src={msg.fileUrl}
+                  controls
+                  className="h-9 w-48 max-w-full"
+                />
               </div>
               {meta}
             </>
           )}
           {msg.type === 'document' && msg.fileUrl && (
             <>
-              <a
-                href={msg.fileUrl}
-                target="_blank"
-                rel="noreferrer"
-                download={msg.fileName || undefined}
-                className="flex items-center gap-2.5 rounded-lg bg-black/5 px-2.5 py-2 transition hover:bg-black/10 dark:bg-white/10 dark:hover:bg-white/15"
-              >
-                <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-primary/15 text-primary">
-                  <FileText size={18} />
+              {isPdf ? (
+                <div className="overflow-hidden rounded-lg border border-border bg-card">
+                  <div className="flex items-center justify-between gap-2 rounded-t-lg bg-muted/40 px-3 py-1.5">
+                    <div className="flex min-w-0 items-center gap-1.5">
+                      <FileText size={14} className="shrink-0 text-primary" />
+                      <span className="truncate text-xs font-medium" title={msg.fileName || 'document.pdf'}>
+                        {msg.fileName || 'document.pdf'}
+                      </span>
+                      {msg.fileSize ? (
+                        <span className="shrink-0 text-[10px] text-muted-foreground">
+                          {formatBytes(msg.fileSize)}
+                        </span>
+                      ) : null}
+                    </div>
+                    <a
+                      href={msg.fileUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      download={msg.fileName || undefined}
+                      className="flex shrink-0 items-center gap-1 rounded-md bg-primary/15 px-2 py-1 text-[11px] font-medium text-primary transition hover:bg-primary/25"
+                    >
+                      <Download size={12} /> Open
+                    </a>
+                  </div>
+                  <iframe
+                    src={msg.fileUrl}
+                    title={msg.fileName || 'PDF preview'}
+                    className="h-96 w-full border-0"
+                    onError={() => setPdfFailed(true)}
+                  />
                 </div>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-xs font-medium">{msg.fileName || 'Document'}</div>
-                  <div className="text-[10px] opacity-70">{formatBytes(msg.fileSize)}</div>
-                </div>
-                <Download size={16} className="shrink-0 opacity-70" />
-              </a>
+              ) : (
+                <a
+                  href={msg.fileUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  download={msg.fileName || undefined}
+                  className="flex items-center gap-2.5 rounded-lg bg-black/5 px-2.5 py-2 transition hover:bg-black/10 dark:bg-white/10 dark:hover:bg-white/15"
+                >
+                  <div className="grid h-9 w-9 shrink-0 place-items-center rounded-md bg-primary/15 text-primary">
+                    <FileText size={18} />
+                  </div>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-xs font-medium">{msg.fileName || 'Document'}</div>
+                    <div className="text-[10px] opacity-70">{formatBytes(msg.fileSize)}</div>
+                  </div>
+                  <Download size={16} className="shrink-0 opacity-70" />
+                </a>
+              )}
               {meta}
             </>
           )}
@@ -2074,6 +2359,14 @@ function MessageBubble({
                 >
                   <Reply size={14} className="text-muted-foreground" /> Reply
                 </button>
+                {canEdit && (
+                  <button
+                    onClick={() => { onEdit(msg); setMenuOpen(false) }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition hover:bg-accent"
+                  >
+                    <Pencil size={14} className="text-muted-foreground" /> Edit
+                  </button>
+                )}
                 <button
                   onClick={() => { onForward(msg); setMenuOpen(false) }}
                   className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition hover:bg-accent"
@@ -2623,5 +2916,93 @@ function DeleteConfirmDialog({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
+  )
+}
+
+// ---------------- edit message dialog ----------------
+function EditMessageDialog({
+  message,
+  onClose,
+  onSave,
+}: {
+  message: Message | null
+  onClose: () => void
+  onSave: (msg: Message, content: string) => Promise<void>
+}) {
+  const [content, setContent] = useState('')
+  const [saving, setSaving] = useState(false)
+
+  useEffect(() => {
+    if (message) {
+      // Prefill with the current message content + reset saving state.
+      setContent(message.content)
+      setSaving(false)
+    }
+  }, [message])
+
+  const trimmed = content.trim()
+  const canSave =
+    !!message && trimmed.length > 0 && trimmed !== message.content.trim() && !saving
+
+  const handleSave = async () => {
+    if (!message || !canSave) return
+    setSaving(true)
+    try {
+      await onSave(message, trimmed)
+      // Close on success — the parent already toasts + updates local state.
+      onClose()
+    } catch (e: any) {
+      // Surface server errors (e.g. "edit window expired", "forbidden") to the
+      // user via toast; keep the dialog open so they can adjust + retry.
+      toast.error(e?.message || 'Failed to edit message')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <Dialog open={!!message} onOpenChange={(o) => !o && onClose()}>
+      <DialogContent className="max-w-md gap-0 p-0">
+        <DialogHeader className="border-b border-border px-4 py-3">
+          <DialogTitle className="flex items-center gap-2 text-base">
+            <Pencil size={16} className="text-primary" />
+            Edit message
+          </DialogTitle>
+        </DialogHeader>
+        <div className="px-4 py-3">
+          <Textarea
+            value={content}
+            onChange={(e) => setContent(e.target.value)}
+            autoFocus
+            maxLength={5000}
+            rows={4}
+            className="resize-none"
+            placeholder="Edit your message…"
+            onKeyDown={(e) => {
+              // Ctrl/Cmd+Enter to save (Enter still inserts newline in edit mode
+              // — different from the send box, since editing is a deliberate
+              // multi-line affordance).
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault()
+                handleSave()
+              }
+            }}
+          />
+          <div className="mt-1 flex items-center justify-between text-[10px] text-muted-foreground">
+            <span>Press Ctrl+Enter to save</span>
+            <span>{content.length} / 5000</span>
+          </div>
+        </div>
+        <DialogFooter className="flex-row items-center justify-end gap-2 border-t border-border px-4 py-3 sm:justify-end">
+          <Button variant="ghost" onClick={onClose} disabled={saving}>
+            Cancel
+          </Button>
+          <Button onClick={handleSave} disabled={!canSave}>
+            {saving ? <Loader2 className="animate-spin" size={14} /> : <Check size={14} />}
+            Save
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   )
 }

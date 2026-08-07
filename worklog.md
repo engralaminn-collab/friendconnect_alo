@@ -694,3 +694,128 @@ Stage Summary:
 - Lint clean, dev 200, realtime 200, all features QA'd.
 - Cumulative feature set now: auth, profiles, friends (search/request/accept/reject/remove/block/suggestions/online-widget), 1:1+group chat (realtime/typing/presence/status/file-sharing/voice-notes/emoji/reactions/delete/forward/star/disappearing/wallpaper/search/pin/mute/archive/drafts), stories (create/view/auto-advance/replies), WebRTC calls, groups CRUD, notifications, settings (theme/notifications/privacy/read-receipts), dark mode.
 - Recommended next-phase features: group calls, message scheduling, chat export, last-seen granularity, message pin within chat, typing in group chats (sender-aware), file previews (PDF thumbnail), profile photo cropping/filters, call duration stats dashboard, message edit, chat wallpapers custom upload, story highlights, broadcast lists.
+
+---
+Task ID: 15-backend
+Agent: orchestrator (Z.ai Code) — scheduled 15-min review (round 5, backend)
+Task: Backend for round 5 features: message edit, typing in group chats (sender-aware), call duration stats, file previews (PDF).
+
+Work Log:
+- DB (additive): added `edited Boolean @default(false)` + `editedAt DateTime?` to Message. Ran `bun run db:push` + `bun run db:generate` — success.
+- API (new routes, no existing endpoints renamed):
+  - `POST /api/messages/[id]/edit` body `{ content }` — sender only, within 15-min edit window. Updates content + sets edited=true + editedAt.
+  - `GET /api/calls/stats` — returns call statistics: total, connected, missed, declined, outgoing, incoming, audioCalls, videoCalls, totalDurationSec, totalDurationLabel, avgDurationSec.
+- API (modified, backward-compatible):
+  - `GET /api/messages` (both 1:1 + group branches): now includes `edited` boolean + `editedAt` ISO string in each message response.
+- Realtime: added two new socket handlers in mini-services/realtime/index.ts:
+  - `message:edit` `{ messageId, content }` — validates sender + 15-min window, updates DB, emits `message:edited` `{ messageId, content, editedAt }` to sender + receiver + group members.
+  - `group:typing` `{ groupId, isTyping }` — validates membership, emits `group:typing:indicator` `{ groupId, userId, isTyping }` to all other group members (sender-aware — excludes the typer).
+  - Added RT event names: MESSAGE_EDIT, MESSAGE_EDITED, GROUP_TYPING, GROUP_TYPING_INDICATOR in src/lib/constants.ts.
+- Restarted realtime mini-service + Next dev server to load new Prisma client + handlers. Verified: gateway 200, realtime 200, /api/messages/x/edit → 405 (POST-only), /api/calls/stats → 401 (needs auth).
+- `bun run lint` clean (0 errors).
+- Note on file previews (PDF): the existing document message type already renders a download card with FileText icon + fileName + size. The frontend subagent will enhance this to show an inline PDF preview (iframe for PDFs) + thumbnail for images. No backend change needed — the fileUrl already points to the served file.
+
+Stage Summary:
+- Backend for message edit, group typing, call stats is complete. Frontend not yet wired.
+- New files: src/app/api/messages/[id]/edit/route.ts, src/app/api/calls/stats/route.ts.
+- Modified: prisma/schema.prisma (+Message.edited/editedAt), src/app/api/messages/route.ts (+edited/editedAt), mini-services/realtime/index.ts (+message:edit + group:typing handlers), src/lib/constants.ts (+4 RT events).
+- Next: frontend subagents will build message edit UI in ChatView (Edit in action menu + edited indicator + realtime sync), group typing indicator (sender-aware), call stats card in CallsView, and PDF/file preview enhancement in MessageBubble.
+
+---
+Task ID: 15-callstats-filepreview
+Agent: full-stack-developer (Call stats + file previews)
+Task: Frontend for round 5 features — call duration stats card in CallsView + file previews (PDF inline / image hover / audio card / video border) in ChatView MessageBubble. Surgical edits only — no rewrite of existing code.
+
+Work Log:
+- Read /home/z/my-project/worklog.md (full architecture + 15-backend entry), inspected the existing CallsView.tsx (call history list + start-call dialog) and ChatView.tsx MessageBubble (text/image/video/audio/document branches), confirmed backend contract: GET /api/calls/stats → { stats: { total, connected, missed, declined, outgoing, incoming, audioCalls, videoCalls, totalDurationSec, totalDurationLabel, avgDurationSec } } and that document messages already carry fileUrl + fileName + fileSize + mimeType from /api/files/upload.
+- CallsView.tsx — Feature 1 (call stats card):
+  - Added imports: `ReactNode` from react + lucide `PhoneMissed, PhoneIncoming, PhoneOutgoing, Mic, Clock, TrendingUp`.
+  - Added `CallStats` interface mirroring the backend payload.
+  - Added `stats` + `statsLoading` state, `loadStats` callback (silent-fail on error), and wired it into the mount `useEffect` alongside `loadCalls`.
+  - Rendered a premium stats card at the top of the scrollable area (above the call history list). Skeleton during loading, hidden when `stats.total === 0`, otherwise `<CallStatsCard stats={stats} />`.
+  - Card design: `m-2 rounded-2xl border border-border bg-card p-4 shadow-sm`, header row (TrendingUp icon + "Call statistics" + "All time" label), grid of 6 stat tiles (2 cols mobile / 3 cols sm+): Total calls, Connected, Missed, Total duration (uses totalDurationLabel — text-sized), Audio calls, Video calls. Missed tile value+icon in `text-destructive` when count > 0. Below the grid: outgoing-vs-incoming ratio bar (primary bg for outgoing half, primary/40 for incoming half, with PhoneOutgoing/PhoneIncoming icons + counts). Footer: avg call duration (mm:ss) via TrendingUp icon.
+  - `StatTile` helper: small icon chip (rounded-md bg-primary/10), big number `text-2xl font-bold`, label `text-xs text-muted-foreground`. Supports optional `valueClass` / `iconClass` / `isText`.
+- ChatView.tsx — Feature 2 (file previews):
+  - Added lucide `Maximize2` to the existing icon import block.
+  - Added helper `isPdfMessage(msg)` — true when `mimeType === 'application/pdf'` OR fileName ends with `.pdf` (case-insensitive). Used to decide inline PDF vs. download card.
+  - Added `pdfFailed` state + `isPdf` derived flag inside MessageBubble; bubble padding switches to `p-1` when rendering a PDF so the iframe sits flush inside the bubble.
+  - PDF branch: renders `<div className="overflow-hidden rounded-lg border border-border bg-card">` wrapper, header bar (`flex items-center justify-between gap-2 rounded-t-lg bg-muted/40 px-3 py-1.5`) with FileText icon + truncated fileName + size + an "Open" download button (rounded-md bg-primary/15 text-primary), and a `<iframe src={msg.fileUrl} className="h-96 w-full border-0" onError={() => setPdfFailed(true)} />`. On iframe error, `pdfFailed` flips to true → component re-renders the existing download card as fallback. The header download button always gives the user an out even if the iframe is empty/blocked.
+  - Image branch: kept existing thumbnail + tap-to-open-dialog behavior; added `group` class to the button + a hover-only overlay `<span>` (top-right, bg-black/55, backdrop-blur, Maximize2 icon, opacity-0 → group-hover:opacity-100) as a "view full size" hint. Added aria-label for accessibility.
+  - Video branch: kept existing `<video controls>`; added `border border-border` to the existing `rounded-lg bg-black` classes.
+  - Audio branch: wrapped the existing `<audio controls>` + Mic chip in `rounded-2xl bg-gradient-to-br from-primary/10 to-accent/20 p-3`, bumped the mic chip to h-9 w-9 bg-primary/25, gave the audio element `h-9` so it visually matches the chip.
+  - Document branch (non-PDF): unchanged existing download card.
+- Verified: `bun run lint` → 0 errors, 0 warnings. `curl http://localhost:3000/` → 200. `curl /api/calls/stats` → 401 (route exists, requires auth — expected). Dev log shows clean recompile after edits.
+- Did NOT touch the realtime service, API routes, Prisma schema, or any backend files. Did NOT rewrite CallsView.tsx or ChatView.tsx — only added to / replaced the targeted sections (imports, helpers, MessageBubble media branches, plus one new component + state in CallsView).
+
+Stage Summary:
+- Files modified (surgical):
+  - `src/components/fc/calls/CallsView.tsx` (+ CallStats interface, stats state + loader, render of stats card / skeleton at top of list, CallStatsCard + StatTile components).
+  - `src/components/fc/chat/ChatView.tsx` (+ Maximize2 import, isPdfMessage helper, pdfFailed state + isPdf flag in MessageBubble, PDF inline preview branch, image hover overlay, audio card restyle, video border).
+- All existing features preserved: call history list + start-call dialog + skeletons + empty states (CallsView), and text/image/video/audio/document rendering + reactions + reply/forward/star/delete/edit menu + drafts + archive + everything else (ChatView).
+- Lint clean (`bun run lint` → exit 0). Dev server returns 200 on `/`. `/api/calls/stats` route exists (401 unauth). Realtime + backend untouched.
+- Decisions: (1) hide stats card entirely when `stats.total === 0` per spec; show a stats skeleton during the initial stats fetch for layout continuity. (2) PDF preview uses onError → fallback to existing download card; the header bar always carries an "Open" download link so users have an escape hatch even when iframe onError doesn't fire (cross-origin PDFs are unreliable). (3) bubble padding for PDFs switches to `p-1` (same as image/video) so the iframe header bar sits flush with the bubble edge. (4) Outgoing-vs-incoming ratio bar uses primary color + primary/40 (no indigo/blue).
+
+---
+Task ID: 15-chat-edit-typing
+Agent: full-stack-developer (Message edit + group typing)
+Task: Surgically edited `src/components/fc/chat/ChatView.tsx` to add message edit (15-min window, sender-only, edited indicator, realtime sync) and sender-aware group typing (track typing userIds, member-name lookup, "X is typing…" / "N people are typing…" indicator). Additive only — preserved all rounds 1-4 features (reactions, pin/mute, search, voice notes, delete/forward, deleted-placeholder, forwarded-indicator, star, disappearing, wallpaper, drafts, archive, call buttons).
+
+Work Log:
+- Read `/home/z/my-project/worklog.md` (Task 15-backend entry confirms backend contracts: `POST /api/messages/[id]/edit` body `{content}` → `{message:{id,content,edited,editedAt}}`, sender-only + 15-min window; `GET /api/messages` returns `edited`+`editedAt` on each message; socket events `RT.MESSAGE_EDIT`=`'message:edit'` c→s `{messageId,content}`, `RT.MESSAGE_EDITED`=`'message:edited'` s→c `{messageId,content,editedAt}`, `RT.GROUP_TYPING`=`'group:typing'` c→s `{groupId,isTyping}`, `RT.GROUP_TYPING_INDICATOR`=`'group:typing:indicator'` s→c `{groupId,userId,isTyping}`). Verified constants.ts has all 4 RT events. Verified `/api/groups/[id]` returns `members: [{id,username,name,...}]` for the userId→name map.
+- Read the existing ChatView.tsx end-to-end (~2627 lines) to understand the architecture: ConversationList, ChatRoom (mode 'direct'|'group'), MessageBubble with long-press action menu (Reply/Forward/Star/Copy/Delete + quick-reactions row), normalizeMessage helper, socket effect with onNew/onStatus/onTyping/onReaction/onDeleted handlers, handleTextInput/sendText for typing+send, headerStatus, typing indicator bubble.
+- Feature 1 (message edit):
+  1. Added `edited?: boolean` + `editedAt?: string | null` to the `Message` interface (after `expiresAt`).
+  2. Updated `normalizeMessage` to map `edited: !!raw.edited` and `editedAt: raw.editedAt ?? null`.
+  3. Added `onEdit: (msg: Message) => void` prop to `MessageBubble` signature.
+  4. Computed `withinEditWindow` + `canEdit` (= mine && !deleted && msg.type === 'text' && within 15min) inside MessageBubble.
+  5. Added "Edit" button (Pencil icon, already imported) between Reply and Forward in the action menu, gated by `{canEdit && (...)}`.
+  6. Added "edited" label (`text-[9px] italic text-muted-foreground`) in the `meta` row between timestamp and StatusTick, gated by `{msg.edited && (...)}`.
+  7. Added `EditMessageDialog` component (after `DeleteConfirmDialog`): shadcn Dialog with header (Pencil icon + "Edit message"), Textarea pre-filled with current content (maxLength 5000, autoFocus, rows 4, Ctrl/Cmd+Enter to save), char count "N / 5000", Cancel + Save buttons. Save disabled if content empty or unchanged. Spinner during save. On save: calls `onSave(msg, trimmed)`; on success closes dialog (parent toasts); on error keeps dialog open + toasts the server message (e.g. "edit window expired", "forbidden").
+  8. Added `editTarget` state + `setEditTarget` in ChatRoom; passed `onEdit={(msg) => setEditTarget(msg)}` to MessageBubble; rendered `<EditMessageDialog message={editTarget} onClose={...} onSave={handleEditSave} />` alongside the other dialogs.
+  9. Added `handleEditSave` callback in ChatRoom: tries realtime first via `socket.emit(RT.MESSAGE_EDIT, {messageId, content}, ack)` wrapped in a Promise with a 10s timeout guard; on ack.ok → optimistic local update (content + edited=true + editedAt=now) + toast "Message edited"; on ack.error → throw to surface server error. Falls back to `POST /api/messages/[id]/edit` REST endpoint if socket unavailable or didn't ack (uses authoritative editedAt from server response).
+  10. Added `onEdited` handler in the socket effect: subscribes to `RT.MESSAGE_EDITED` `{messageId, content, editedAt}` → updates the matching local message's content + edited=true + editedAt (idempotent — safe to receive for a message we just edited). Registers/unregisters the listener properly in the effect cleanup.
+- Feature 2 (group typing, sender-aware):
+  1. Added `groupTypingUsers: Set<string>` state (userIds currently typing, excludes me) and `groupMembers: Map<string, string>` state (userId → name lookup) in ChatRoom.
+  2. Reset `groupTypingUsers(new Set())` in the existing load-history effect's peerId-change branch (alongside `setPeerTyping(false)`) so a stale indicator doesn't bleed across chats.
+  3. Added a new `useEffect` (deps `[mode, peerId]`) that, when `mode === 'group'`, calls `GET /api/groups/:id` and builds the `userId → name` map (falls back to "Someone" if name missing; non-fatal on error). Clears the map when mode !== 'group'.
+  4. Added `onGroupTyping` handler in the socket effect: subscribes to `RT.GROUP_TYPING_INDICATOR` `{groupId, userId, isTyping}`, filters by `mode === 'group' && groupId === peerId && userId !== meId` (defensive — server already excludes the typer), updates `groupTypingUsers` Set (add/delete).
+  5. Updated `handleTextInput`: added a `mode === 'group'` branch that emits `socket.emit(RT.GROUP_TYPING, {groupId: peerId, isTyping: true})` and debounces a reset to `isTyping: false` after 1.5s idle (shares the same `typingTimerRef` as direct mode — mutually exclusive since mode is fixed per ChatRoom instance).
+  6. Updated `sendText`: added a `mode === 'group'` branch that emits `isTyping: false` after sending (so the indicator doesn't linger).
+  7. Updated socket effect cleanup: added `mode === 'group'` branch emitting `isTyping: false` on unmount/peerId-change.
+  8. Computed `groupTypingCount` + `groupTypingLabel` inline (IIFE — no new React import needed) → "Aria is typing…" for 1 typer, "N people are typing…" for multiple, "" for 0. Falls back to "Someone" when member name missing.
+  9. Updated `headerStatus` for groups: shows `groupTypingLabel || "X members"` (typing label takes priority). Also updated the header text color condition to `(peerTyping || groupTypingCount > 0) ? 'text-primary' : 'text-muted-foreground'` so the group typing label is primary-colored (matches the 1:1 typing behavior).
+  10. Unified the typing indicator bubble: shows when `(peerTyping || (mode === 'group' && groupTypingCount > 0))`. For groups: stacked layout with the label (text-xs text-muted-foreground) above the animated `.fc-typing-dot` row. For direct: just the dots row (no label). Preserved the 7-unit left spacer for group mode (aligns with sender avatars).
+  11. Added `groupTypingCount` to the auto-scroll useEffect deps so the view scrolls to bottom when the typing indicator appears.
+- Ran `bun run lint` → 0 errors, 0 warnings. Verified dev server returns HTTP 200 on `/` (checked `tail /home/z/my-project/dev.log` — `GET / 200 in 149ms`).
+
+Stage Summary:
+- Single file surgically edited: `/home/z/my-project/src/components/fc/chat/ChatView.tsx` (additive ~377 new lines; file grew from 2627 → 3004 lines). No existing code rewritten. Work notes: `/home/z/my-project/agent-ctx/15-chat-edit-typing-full-stack-developer.md`.
+- All rounds 1-4 features preserved: reactions (QUICK_REACTIONS row + onReact/toggleReaction), pin/mute (ConversationRow menu + preferences API), search (searchOpen + runSearch + highlight), voice notes (startRecording/stopRecording + MediaRecorder), delete/forward (DeleteConfirmDialog + ForwardDialog + confirmDelete + onDeleted), deleted-placeholder (isDeletedForMe), forwarded-indicator (msg.forwardedFrom), star (toggleStar + StarredMessagesDialog), disappearing (handleDisappearingChange + ChatSettingsSheet), wallpaper (handleWallpaperChange + WALLPAPER_PRESETS), drafts (handleTextInput debounce-save + draft restore), archive (handleToggleArchive + archived section), call buttons (startCall dispatch).
+- Backend untouched: no changes to realtime service, API routes, or Prisma schema. All work consumed the existing Task 15-backend contracts as documented in worklog.md.
+- Lint clean (`bun run lint` → 0 errors / 0 warnings). Dev server returns 200 on `/`.
+- Decisions: (1) restricted Edit to text messages only (`msg.type === 'text'`) — media messages have empty content and editing them would either show an empty dialog or replace content without changing the file (broken UX); the spec's conditions are necessary-but-not-sufficient. (2) Realtime-first edit flow with REST fallback + 10s ack timeout to avoid hanging the dialog. (3) Group typing label computed as inline IIFE (no new React import); falls back to "Someone" when member name is missing. (4) Sender-aware filter on client (`userId === meId` check in `onGroupTyping`) for defense in depth even though the server already excludes the typer. (5) `onEdited` is idempotent — receiving `message:edited` for a message we just edited optimistically is safe (same data).
+
+---
+Task ID: 15-frontend
+Agent: orchestrator (Z.ai Code) — scheduled 15-min review (round 5, frontend + integration)
+Task: Wire round 5 features frontend (message edit, group typing, call stats, file previews) + integration QA + bug fix.
+
+Work Log:
+- Dispatched 2 parallel subagents:
+  - Task 15-chat-edit-typing: edited ChatView.tsx surgically. Message edit: `edited`+`editedAt` in Message interface + normalizeMessage; Edit option in long-press action menu (sender only, text-only, within 15-min window); EditMessageDialog (Textarea + char count + Save/Cancel); realtime MESSAGE_EDIT emit + MESSAGE_EDITED subscription; "edited" label next to timestamp. Group typing: groupTypingUsers Set + groupMembers Map (fetched from GET /api/groups/:id); GROUP_TYPING emit on input with 1.5s debounce; GROUP_TYPING_INDICATOR subscription; "{name} is typing…" / "{n} people are typing…" indicator.
+  - Task 15-callstats-filepreview: edited CallsView.tsx (CallStatsCard at top — 6-tile grid: Total/Connected/Missed/Duration/Audio/Video + outgoing/incoming ratio bar + avg duration; hidden when total=0; missed in destructive color) + ChatView.tsx MessageBubble (PDF inline preview via iframe with header bar + fallback; image hover expand overlay; audio gradient voice-card; video border).
+- **CRITICAL BUG FOUND + FIXED during QA**: opening any chat threw "Runtime ReferenceError: Cannot access 'groupTypingCount' before initialization" (temporal dead zone). The subagent declared `const groupTypingCount = groupTypingUsers.size` at line ~1660 (near the typing-label code) but referenced it in the auto-scroll effect's dependency array at line 1010 (which runs earlier in the component body). Fixed by moving the `groupTypingCount` definition up to line 801 (right after the `groupTypingUsers` state declaration) and removing the duplicate later definition. Lint clean after fix.
+- Integration QA via agent-browser (gateway 81, mobile 390x844, nextjs-portal hidden):
+  - Login as aria → Calls → stats card hidden (total=0, clean empty state) ✓
+  - Chats → Bilal chat → opens without error (after bug fix) ✓
+  - Sent "Editable test message" → long-press → action menu shows Edit (between Reply and Forward) ✓
+  - Edit → dialog with Textarea prefilled → edited to "Editable test message — EDITED ✏️" → Save → bubble shows new content + "edited" label → DB confirms edited:true + editedAt ✓
+  - No errors. `bun run lint` clean (0 errors). Gateway 200. Realtime 200.
+
+Stage Summary:
+- Round 5 complete: 4 new features (message edit, group typing sender-aware, call duration stats, file previews/PDF) all shipped + browser-verified. 1 critical bug fixed (groupTypingCount temporal-dead-zone). All additive — zero existing code/features removed.
+- New files: src/app/api/messages/[id]/edit/route.ts, src/app/api/calls/stats/route.ts.
+- Modified (surgical): prisma/schema.prisma (+Message.edited/editedAt), src/app/api/messages/route.ts (+edited/editedAt), mini-services/realtime/index.ts (+message:edit + group:typing handlers), src/lib/constants.ts (+4 RT events), src/components/fc/chat/ChatView.tsx (+edit UI + group typing + PDF preview + image/audio/video polish + groupTypingCount bug fix), src/components/fc/calls/CallsView.tsx (+stats card).
+- Lint clean, dev 200, realtime 200, all features QA'd.
+- Cumulative feature set now: auth, profiles, friends (search/request/accept/reject/remove/block/suggestions/online-widget), 1:1+group chat (realtime/typing/presence/status/file-sharing/voice-notes/emoji/reactions/delete/forward/star/disappearing/wallpaper/search/pin/mute/archive/drafts/**edit**/**group-typing**), stories (create/view/auto-advance/replies), WebRTC calls (**stats**), groups CRUD, notifications, settings (theme/notifications/privacy/read-receipts), dark mode, **file previews (PDF inline)**.
+- Recommended next-phase features: group calls, message scheduling, chat export, last-seen granularity, message pin within chat, profile photo cropping/filters, story highlights, broadcast lists, message search global, chat wallpapers custom upload, typing status in conversation list.

@@ -305,6 +305,58 @@ io.on('connection', (socket) => {
     }
   })
 
+  // ---------- Message edit (realtime propagation) ----------
+  socket.on('message:edit', async (data: { messageId: string; content: string }, ack?: (r: any) => void) => {
+    if (!userId) return ack?.({ ok: false, error: 'unauth' })
+    try {
+      const msg = await db.message.findUnique({ where: { id: data.messageId } })
+      if (!msg) return ack?.({ ok: false, error: 'not found' })
+      if (msg.senderId !== userId) return ack?.({ ok: false, error: 'forbidden' })
+      const ageMin = (Date.now() - msg.createdAt.getTime()) / 60000
+      if (ageMin > 15) return ack?.({ ok: false, error: 'edit window expired' })
+      const content = String(data.content || '').slice(0, 5000)
+      if (!content) return ack?.({ ok: false, error: 'empty' })
+      const updated = await db.message.update({
+        where: { id: data.messageId },
+        data: { content, edited: true, editedAt: new Date() },
+      })
+      const payload = {
+        messageId: data.messageId,
+        content: updated.content,
+        editedAt: updated.editedAt?.toISOString(),
+      }
+      io.to(room(msg.senderId)).emit('message:edited', payload)
+      if (msg.receiverId) io.to(room(msg.receiverId)).emit('message:edited', payload)
+      if (msg.groupId) {
+        const members = await db.groupMember.findMany({ where: { groupId: msg.groupId } })
+        for (const m of members) io.to(room(m.userId)).emit('message:edited', payload)
+      }
+      ack?.({ ok: true })
+    } catch (e: any) {
+      ack?.({ ok: false, error: e?.message })
+    }
+  })
+
+  // ---------- Group typing (sender-aware) ----------
+  socket.on('group:typing', async (data: { groupId: string; isTyping: boolean }, ack?: (r: any) => void) => {
+    if (!userId) return ack?.({ ok: false, error: 'unauth' })
+    try {
+      const membership = await db.groupMember.findUnique({
+        where: { groupId_userId: { groupId: data.groupId, userId } },
+      }).catch(() => null)
+      if (!membership) return ack?.({ ok: false, error: 'not a member' })
+      const members = await db.groupMember.findMany({ where: { groupId: data.groupId } })
+      for (const m of members) {
+        if (m.userId !== userId) {
+          io.to(room(m.userId)).emit('group:typing:indicator', { groupId: data.groupId, userId, isTyping: data.isTyping })
+        }
+      }
+      ack?.({ ok: true })
+    } catch (e: any) {
+      ack?.({ ok: false, error: e?.message })
+    }
+  })
+
   socket.on('group:message:send', async (data: GroupSendPayload, ack?: (r: any) => void) => {
     if (!userId) return ack?.({ ok: false, error: 'unauth' })
     try {

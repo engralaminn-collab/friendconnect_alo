@@ -105,6 +105,9 @@ model Message {
   forwardedFrom String? // userId of original sender if forwarded
   // Additive (round 3): disappearing messages — when set, message auto-deletes after expiresAt
   expiresAt DateTime?
+  // Additive (round 5): message edit tracking
+  editedAt  DateTime?
+  edited    Boolean  @default(false)
 
   sender   User   @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
   receiver User?  @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
