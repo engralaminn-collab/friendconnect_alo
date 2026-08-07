@@ -10,17 +10,22 @@ export function UserAvatar({
   size = 40,
   online,
   className,
+  filter,
 }: {
   name: string
   src?: string | null
   size?: number
   online?: boolean
   className?: string
+  /** Optional CSS filter (e.g. "grayscale(1)", "sepia(0.6)") applied to the AvatarImage only. */
+  filter?: string | null
 }) {
+  // Normalize: null/undefined/''/'none' all mean "no filter".
+  const activeFilter = filter && filter !== 'none' ? filter : undefined
   return (
     <div className="relative shrink-0" style={{ width: size, height: size }}>
       <Avatar style={{ width: size, height: size }} className={cn('ring-1 ring-border', className)}>
-        {src ? <AvatarImage src={src} alt={name} /> : null}
+        {src ? <AvatarImage src={src} alt={name} style={activeFilter ? { filter: activeFilter } : undefined} /> : null}
         <AvatarFallback className="bg-primary/15 text-primary font-semibold" style={{ fontSize: size * 0.36 }}>
           {initials(name) || '?'}
         </AvatarFallback>

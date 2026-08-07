@@ -66,6 +66,8 @@ import {
   Pencil,
   ChevronDown,
   ChevronRight,
+  PinOff,
+  MessageSquare,
 } from 'lucide-react'
 
 // ---------------- types ----------------
@@ -129,6 +131,10 @@ interface Message {
   expiresAt?: string | null
   edited?: boolean
   editedAt?: string | null
+  // Round 6: per-user message pin within a 1:1 chat. Holds the userId that
+  // pinned this message (me.id when pinned by me, otherwise null). Only one
+  // pinned message per 1:1 conversation is allowed by the backend.
+  pinnedBy?: string | null
 }
 
 interface Friend {
@@ -145,6 +151,26 @@ interface PeerInfo {
   username?: string
   lastSeen?: string | null
   memberCount?: number
+}
+
+// Round 6: global message search result shape returned by
+// GET /api/messages/search?q=QUERY. Each result carries the conversation
+// context (peerId/peerName for direct, groupId/groupName for group) so the
+// UI can route the tap to the right chat.
+interface GlobalSearchResult {
+  messageId: string
+  content: string
+  type: string
+  createdAt: string
+  senderId: string
+  senderName: string
+  conversationType: 'direct' | 'group'
+  peerId?: string
+  peerName?: string
+  peerUsername?: string
+  peerPhoto?: string | null
+  groupId?: string
+  groupName?: string
 }
 
 const EMOJIS = [
@@ -241,6 +267,7 @@ function normalizeMessage(raw: any): Message {
     expiresAt: raw.expiresAt ?? null,
     edited: !!raw.edited,
     editedAt: raw.editedAt ?? null,
+    pinnedBy: raw.pinnedBy ?? null,
   }
 }
 
@@ -296,6 +323,12 @@ function ConversationList() {
   const [archivedExpanded, setArchivedExpanded] = useState(false)
   const [groups, setGroups] = useState<GroupLite[]>([])
   const [loading, setLoading] = useState(true)
+  // Round 6: global message search state — fires debounced (400ms) when the
+  // search box has text. Results render in the search dropdown alongside the
+  // local conversation filter.
+  const [globalResults, setGlobalResults] = useState<GlobalSearchResult[]>([])
+  const [globalLoading, setGlobalLoading] = useState(false)
+  const globalSearchTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const { openChat, openGroupChat } = useApp()
   const { socket, isOnline } = useSocket()
   const { user: me } = useAuth()
@@ -386,6 +419,43 @@ function ConversationList() {
     }
   }, [socket, meId, load])
 
+  // Round 6: global message search — debounced 400ms after the user stops
+  // typing. Fires GET /api/messages/search?q=QUERY and renders the results in
+  // the search dropdown alongside the local conversation filter. The effect
+  // cleanup clears the timer on every query change so only the latest query
+  // triggers a request. Empty query → empty results (no API call).
+  useEffect(() => {
+    const qq = query.trim()
+    if (!qq) {
+      setGlobalResults([])
+      setGlobalLoading(false)
+      return
+    }
+    setGlobalLoading(true)
+    if (globalSearchTimerRef.current) {
+      clearTimeout(globalSearchTimerRef.current)
+      globalSearchTimerRef.current = null
+    }
+    globalSearchTimerRef.current = setTimeout(async () => {
+      try {
+        const d = await api<{ results: GlobalSearchResult[] }>(
+          `/api/messages/search?q=${encodeURIComponent(qq)}`
+        )
+        setGlobalResults(d.results || [])
+      } catch {
+        setGlobalResults([])
+      } finally {
+        setGlobalLoading(false)
+      }
+    }, 400)
+    return () => {
+      if (globalSearchTimerRef.current) {
+        clearTimeout(globalSearchTimerRef.current)
+        globalSearchTimerRef.current = null
+      }
+    }
+  }, [query])
+
   const q = query.trim().toLowerCase()
   const filteredConvs = q
     ? conversations.filter((c) => c.name.toLowerCase().includes(q) || c.username.toLowerCase().includes(q))
@@ -441,12 +511,147 @@ function ConversationList() {
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search chats and groups"
-            className="rounded-xl pl-9"
+            placeholder="Search chats and messages"
+            className="rounded-xl pl-9 pr-9"
           />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery('')}
+              className="absolute right-2 top-1/2 grid h-6 w-6 -translate-y-1/2 place-items-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-foreground"
+              aria-label="Clear search"
+            >
+              <X size={14} />
+            </button>
+          )}
         </div>
       </div>
 
+      {/* Round 6: when the search box has text, replace the chat/group tabs
+          with a unified search dropdown that shows TWO sections — the local
+          conversation filter (chats + groups whose name matches) AND global
+          message search results (GET /api/messages/search?q=...). Each result
+          row is tappable and routes the user into the right conversation. */}
+      {query.trim() ? (
+        <div className="fc-scroll flex-1 overflow-y-auto p-2">
+          {/* Conversations section */}
+          {(filteredConvs.length > 0 || filteredGroups.length > 0) && (
+            <div className="mb-2">
+              <div className="px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Conversations
+              </div>
+              {filteredConvs.slice(0, 5).map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => {
+                    openChat(c.id)
+                    setQuery('')
+                  }}
+                  className="flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition hover:bg-accent/40"
+                >
+                  <UserAvatar name={c.name} src={c.photoUrl} size={40} online={isOnline(c.id)} />
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">{c.name}</div>
+                    <div className="truncate text-xs text-muted-foreground">@{c.username}</div>
+                  </div>
+                </button>
+              ))}
+              {filteredGroups.slice(0, 5).map((g) => (
+                <button
+                  key={g.id}
+                  type="button"
+                  onClick={() => {
+                    openGroupChat(g.id)
+                    setQuery('')
+                  }}
+                  className="flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition hover:bg-accent/40"
+                >
+                  {g.photoUrl ? (
+                    <div className="h-10 w-10 shrink-0 overflow-hidden rounded-full ring-1 ring-border">
+                      <img src={g.photoUrl} alt={g.name} className="h-full w-full object-cover" />
+                    </div>
+                  ) : (
+                    <div className="grid h-10 w-10 shrink-0 place-items-center rounded-full bg-primary/15 text-primary ring-1 ring-border">
+                      <Users size={18} />
+                    </div>
+                  )}
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm font-medium">{g.name}</div>
+                    <div className="truncate text-xs text-muted-foreground">
+                      {g.memberCount} {g.memberCount === 1 ? 'member' : 'members'}
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Messages section (global search) */}
+          <div>
+            <div className="flex items-center gap-1.5 px-2 py-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+              <MessageSquare size={11} />
+              Messages
+            </div>
+            {globalLoading ? (
+              <div className="flex justify-center py-4">
+                <Loader2 className="animate-spin text-muted-foreground" size={16} />
+              </div>
+            ) : globalResults.length === 0 ? (
+              <div className="px-2 py-3 text-center text-xs text-muted-foreground">
+                No messages found
+              </div>
+            ) : (
+              globalResults.map((r) => (
+                <button
+                  key={r.messageId}
+                  type="button"
+                  onClick={() => {
+                    if (r.conversationType === 'direct' && r.peerId) {
+                      openChat(r.peerId)
+                    } else if (r.conversationType === 'group' && r.groupId) {
+                      openGroupChat(r.groupId)
+                    }
+                    setQuery('')
+                  }}
+                  className="flex w-full items-start gap-2.5 rounded-xl p-2.5 text-left transition hover:bg-accent/40"
+                >
+                  <MessageSquare size={14} className="mt-0.5 shrink-0 text-muted-foreground" />
+                  <div className="min-w-0 flex-1">
+                    <div className="line-clamp-2 text-sm">
+                      {highlight(r.content || '', query.trim())}
+                    </div>
+                    <div className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
+                      <span className="truncate">{r.senderName || 'Unknown'}</span>
+                      <span className="shrink-0">·</span>
+                      <span className="truncate">
+                        {r.conversationType === 'direct' ? r.peerName || 'Direct' : r.groupName || 'Group'}
+                      </span>
+                      <span className="shrink-0">·</span>
+                      <span className="shrink-0">{timeAgo(r.createdAt)}</span>
+                    </div>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+
+          {/* Empty state when nothing matches at all */}
+          {!loading &&
+            filteredConvs.length === 0 &&
+            filteredGroups.length === 0 &&
+            !globalLoading &&
+            globalResults.length === 0 && (
+              <div className="py-8">
+                <EmptyState
+                  icon={<Search size={36} />}
+                  title="No results"
+                  description={`Nothing matches "${query.trim()}" in your chats or messages.`}
+                />
+              </div>
+            )}
+        </div>
+      ) : (
       <Tabs value={tab} onValueChange={(v) => setTab(v as 'chats' | 'groups')} className="flex flex-1 flex-col overflow-hidden">
         <TabsList className="mx-4 mt-3 grid grid-cols-2 rounded-xl">
           <TabsTrigger value="chats" className="text-xs">
@@ -573,6 +778,7 @@ function ConversationList() {
           )}
         </TabsContent>
       </Tabs>
+      )}
     </div>
   )
 }
@@ -799,6 +1005,14 @@ function ChatRoom({
   // Derived count of group members currently typing (defined here so the
   // auto-scroll effect below can reference it without a temporal-dead-zone error).
   const groupTypingCount = groupTypingUsers.size
+  // Round 6: per-user message pin (1:1 only). Derived here — BEFORE the
+  // auto-scroll effect below — so any effect/handler that references it is
+  // safe from temporal-dead-zone errors. The backend enforces "only one
+  // pinned message per 1:1 conversation per user", so we find the first
+  // (only) message pinned by me in the current conversation, excluding
+  // deleted-for-me/everyone messages (a deleted pinned message shouldn't
+  // surface in the pin bar). null in group mode or when nothing is pinned.
+  // NOTE: pinnedMessage is defined AFTER meId below to avoid a temporal-dead-zone error.
 
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -817,6 +1031,13 @@ function ChatRoom({
   const textRef = useRef('')
   const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const meId = me?.id
+
+  // Round 6: per-user message pin (1:1 only). Defined AFTER meId to avoid a
+  // temporal-dead-zone error. Finds the message pinned by me in this conversation.
+  const pinnedMessage =
+    mode === 'direct' && meId
+      ? messages.find((m) => m.pinnedBy === meId && !isDeletedForMe(m, meId)) || null
+      : null
 
   // keep textRef in sync with `text` (so cleanup reads the latest typed value)
   useEffect(() => {
@@ -1261,6 +1482,57 @@ function ChatRoom({
       // revert on failure
       setMessages((prev) => prev.map((m) => (m.id === msg.id ? { ...m, starred: !next } : m)))
       toast.error(e?.message || 'Failed to update star')
+    }
+  }, [])
+
+  // ---- toggle pin on a message (1:1 only, per-user) ----
+  // Round 6: the backend enforces "only one pinned message per 1:1 conversation
+  // per user". On pin: server unpins any previously pinned message by me in
+  // the same conversation, then sets pinnedBy=me.id on the new one. We mirror
+  // that optimistically on the client: clear pinnedBy on any message I had
+  // pinned in this conversation, then set/clear pinnedBy on the target. On
+  // error we revert the target's pinnedBy only (the previous-pin clear is
+  // idempotent + the server is the source of truth on next reload).
+  const togglePin = useCallback(
+    async (msg: Message) => {
+      if (!meId || mode !== 'direct') return
+      const isCurrentlyPinned = msg.pinnedBy === meId
+      const nextPinned = !isCurrentlyPinned
+      setMessages((prev) =>
+        prev
+          .map((m) => (m.pinnedBy === meId ? { ...m, pinnedBy: null } : m))
+          .map((m) => (m.id === msg.id ? { ...m, pinnedBy: nextPinned ? meId : null } : m))
+      )
+      try {
+        await api(`/api/messages/${msg.id}/pin`, {
+          method: 'POST',
+          body: JSON.stringify({ pinned: nextPinned }),
+        })
+        toast.success(nextPinned ? 'Message pinned' : 'Message unpinned')
+      } catch (e: any) {
+        // Revert the target's pinnedBy to its prior state. The previous-pin
+        // clear is left as-is (a subsequent reload will reconcile).
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === msg.id ? { ...m, pinnedBy: isCurrentlyPinned ? meId : null } : m
+          )
+        )
+        toast.error(e?.message || 'Failed to update pin')
+      }
+    },
+    [meId, mode]
+  )
+
+  // ---- scroll to a specific message in the messages list (used by the
+  // pinned-message bar so the user can jump back to the pinned bubble) ----
+  // Looks up the message element via its `data-msg-id` attribute and uses
+  // scrollIntoView({ block: 'center' }) so the browser handles the nearest
+  // scroll container (the messages scroll area). No-op if the element isn't
+  // mounted (e.g. the pinned message is older than the loaded page).
+  const scrollToMessage = useCallback((msgId: string) => {
+    const el = scrollRef.current?.querySelector(`[data-msg-id="${CSS.escape(msgId)}"]`) as HTMLElement | null
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }
   }, [])
 
@@ -1780,6 +2052,50 @@ function ChatRoom({
         </div>
       )}
 
+      {/* Round 6: pinned-message bar — shown at the top of the messages area
+          (below the header / search bar, above the messages scroll) when there
+          is a message pinned by me in this 1:1 conversation. The bar shows a
+          Pin icon, the truncated message content, the sender name, and a small
+          X to unpin. Tapping the bar (minus the X) scrolls the messages list
+          to the pinned bubble so the user can re-read it in context. */}
+      {pinnedMessage && mode === 'direct' && (
+        <div className="mx-3 mt-2 flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2">
+          <button
+            type="button"
+            onClick={() => scrollToMessage(pinnedMessage.id)}
+            className="flex min-w-0 flex-1 items-center gap-2 text-left"
+            aria-label="Jump to pinned message"
+          >
+            <Pin size={14} className="shrink-0 text-primary" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm">
+                {pinnedMessage.content ||
+                  (pinnedMessage.type === 'image'
+                    ? '📷 Photo'
+                    : pinnedMessage.type === 'video'
+                      ? '🎥 Video'
+                      : pinnedMessage.type === 'audio'
+                        ? '🎤 Audio'
+                        : pinnedMessage.fileName || '📄 Document')}
+              </div>
+              <div className="truncate text-[10px] text-muted-foreground">
+                {pinnedMessage.senderId === meId
+                  ? 'You'
+                  : pinnedMessage.senderName || 'Unknown'}
+              </div>
+            </div>
+          </button>
+          <button
+            type="button"
+            onClick={() => togglePin(pinnedMessage)}
+            className="grid h-6 w-6 shrink-0 place-items-center rounded-full text-muted-foreground transition hover:bg-accent hover:text-foreground"
+            aria-label="Unpin message"
+          >
+            <X size={14} />
+          </button>
+        </div>
+      )}
+
       {/* messages */}
       <div
         ref={scrollRef}
@@ -1824,22 +2140,24 @@ function ChatRoom({
                 const showSender =
                   mode === 'group' && !mine && (idx === 0 || prev?.senderId !== m.senderId)
                 return (
-                  <MessageBubble
-                    key={m.id}
-                    msg={m}
-                    mine={mine}
-                    isGroup={mode === 'group'}
-                    showSender={showSender}
-                    meId={meId}
-                    searchQuery={searchQuery}
-                    onImageClick={(url) => setImagePreview(url)}
-                    onReact={toggleReaction}
-                    onReply={handleReply}
-                    onForward={(msg) => setForwardTarget(msg)}
-                    onDelete={(msg) => setDeleteTarget(msg)}
-                    onStar={toggleStar}
-                    onEdit={(msg) => setEditTarget(msg)}
-                  />
+                  <div key={m.id} data-msg-id={m.id}>
+                    <MessageBubble
+                      msg={m}
+                      mine={mine}
+                      isGroup={mode === 'group'}
+                      showSender={showSender}
+                      meId={meId}
+                      searchQuery={searchQuery}
+                      onImageClick={(url) => setImagePreview(url)}
+                      onReact={toggleReaction}
+                      onReply={handleReply}
+                      onForward={(msg) => setForwardTarget(msg)}
+                      onDelete={(msg) => setDeleteTarget(msg)}
+                      onStar={toggleStar}
+                      onEdit={(msg) => setEditTarget(msg)}
+                      onPin={togglePin}
+                    />
+                  </div>
                 )
               })}
               {/* Typing indicator: 1:1 uses peerTyping; groups track a Set of
@@ -2088,6 +2406,7 @@ function MessageBubble({
   onDelete,
   onStar,
   onEdit,
+  onPin,
 }: {
   msg: Message
   mine: boolean
@@ -2102,6 +2421,7 @@ function MessageBubble({
   onDelete: (msg: Message) => void
   onStar: (msg: Message) => void
   onEdit: (msg: Message) => void
+  onPin?: (msg: Message) => void
 }) {
   const bubbleClass = mine ? 'fc-bubble-me' : 'fc-bubble-them'
   const [menuOpen, setMenuOpen] = useState(false)
@@ -2218,6 +2538,17 @@ function MessageBubble({
           onDoubleClick={() => onReact(msg.id, '❤️')}
           className={cn('relative text-sm shadow-sm', bubbleClass, isMedia ? 'p-1' : 'px-2.5 py-1.5')}
         >
+          {/* Round 6: pinned-by-me indicator at top-left of the bubble
+              (mirrors the Star indicator at top-right). Only shown when this
+              specific message is the one I have pinned in this 1:1 chat. */}
+          {msg.pinnedBy === meId && (
+            <span
+              className="absolute -top-1.5 -left-1.5 z-10 grid h-4 w-4 place-items-center rounded-full bg-card shadow-sm ring-1 ring-border"
+              aria-label="Pinned message"
+            >
+              <Pin size={11} className="text-primary" />
+            </span>
+          )}
           {msg.starred && (
             <span
               className="absolute -top-1.5 -right-1.5 z-10 grid h-4 w-4 place-items-center rounded-full bg-card shadow-sm ring-1 ring-border"
@@ -2359,6 +2690,24 @@ function MessageBubble({
                 >
                   <Reply size={14} className="text-muted-foreground" /> Reply
                 </button>
+                {/* Round 6: pin/unpin message — only available in 1:1 chats
+                    (the backend restricts pinning to direct conversations).
+                    Shows "Unpin" if I currently have this message pinned,
+                    otherwise "Pin". Pinning a new message automatically
+                    unpins the previous one (handled by the backend). */}
+                {!isGroup && onPin && (
+                  <button
+                    onClick={() => { onPin(msg); setMenuOpen(false) }}
+                    className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-sm transition hover:bg-accent"
+                  >
+                    {msg.pinnedBy === meId ? (
+                      <PinOff size={14} className="text-muted-foreground" />
+                    ) : (
+                      <Pin size={14} className="text-muted-foreground" />
+                    )}{' '}
+                    {msg.pinnedBy === meId ? 'Unpin' : 'Pin'}
+                  </button>
+                )}
                 {canEdit && (
                   <button
                     onClick={() => { onEdit(msg); setMenuOpen(false) }}

@@ -819,3 +819,119 @@ Stage Summary:
 - Lint clean, dev 200, realtime 200, all features QA'd.
 - Cumulative feature set now: auth, profiles, friends (search/request/accept/reject/remove/block/suggestions/online-widget), 1:1+group chat (realtime/typing/presence/status/file-sharing/voice-notes/emoji/reactions/delete/forward/star/disappearing/wallpaper/search/pin/mute/archive/drafts/**edit**/**group-typing**), stories (create/view/auto-advance/replies), WebRTC calls (**stats**), groups CRUD, notifications, settings (theme/notifications/privacy/read-receipts), dark mode, **file previews (PDF inline)**.
 - Recommended next-phase features: group calls, message scheduling, chat export, last-seen granularity, message pin within chat, profile photo cropping/filters, story highlights, broadcast lists, message search global, chat wallpapers custom upload, typing status in conversation list.
+
+---
+Task ID: 16-backend
+Agent: orchestrator (Z.ai Code) — scheduled 15-min review (round 6, backend)
+Task: Backend for round 6 features: global message search, message pin within chat, last-seen granularity, profile photo filters.
+
+Work Log:
+- DB (additive): added `photoFilter String?` to Profile (CSS filter value like "grayscale(1)"). Added `pinnedBy String?` to Message (userId who pinned it within a 1:1 chat). Ran `bun run db:push` + `bun run db:generate` — success.
+- API (new routes, no existing endpoints renamed):
+  - `GET /api/messages/search?q=QUERY` — global search across all my 1:1 + group conversations. Searches message content (contains), excludes deleted-for-everyone + deleted-for-me, returns up to 50 results sorted by recency, each with conversation context (peerId/peerName for direct, groupId/groupName for group).
+  - `POST /api/messages/[id]/pin` body `{ pinned: true|false }` — pin/unpin a message within a 1:1 chat (per-user). On pin: unpins any previously pinned message by me in the same conversation, then sets pinnedBy=me.id. On unpin: clears pinnedBy if I pinned it.
+- API (modified, backward-compatible):
+  - `GET /api/messages` (both 1:1 + group): now includes `pinnedBy` (userId or null) in each message response.
+  - `GET /api/auth/me` + `PUT /api/users/me` + response: now include `photoFilter` (string or null). users/me PUT accepts `photoFilter` in the string-fields loop.
+  - `GET /api/users/[id]`: now includes `photoFilter` so other users' filtered photos render correctly.
+- Updated `ProfileData` type in src/hooks/use-auth.tsx to include `photoFilter: string | null`.
+- Restarted realtime mini-service + Next dev server to load new Prisma client. Verified: gateway 200, realtime 200, /api/messages/search → 401 (needs auth), /api/messages/x/pin → 405 (POST only).
+- `bun run lint` clean (0 errors).
+- Note on last-seen granularity: the existing `lastSeen` field on Profile is already updated on socket disconnect + by the realtime service. The frontend will implement a `formatLastSeen` helper that shows "online"/"last seen just now"/"last seen 5m ago"/"last seen 2h ago"/"last seen yesterday"/"last seen Jan 5" with finer granularity than the current `timeAgo` helper. No backend change needed.
+
+Stage Summary:
+- Backend for global search, message pin, profile photo filters is complete. Last-seen granularity is frontend-only. Frontend not yet wired.
+- New files: src/app/api/messages/search/route.ts, src/app/api/messages/[id]/pin/route.ts.
+- Modified: prisma/schema.prisma (+Profile.photoFilter, +Message.pinnedBy), src/app/api/messages/route.ts (+pinnedBy), src/app/api/auth/me/route.ts (+photoFilter), src/app/api/users/me/route.ts (+photoFilter accept+return), src/app/api/users/[id]/route.ts (+photoFilter), src/hooks/use-auth.tsx (+photoFilter in ProfileData).
+- Next: frontend subagents will build global search UI (in Chats tab header), message pin UI (pin bar at top of chat + pin option in action menu), last-seen granularity helper, and profile photo filters in the Edit Profile dialog.
+
+---
+Task ID: 16-search-pin
+Agent: full-stack-developer (Global search + message pin)
+Task: Surgically edited `src/components/fc/chat/ChatView.tsx` to add two round-6 features — global message search (in the ConversationList search bar) and message pin within 1:1 chats (pin bar + pin option in action menu + pinned indicator on bubble). Additive only — preserved all rounds 1-5 features (reactions, pin/mute-chat, search-within-chat, voice notes, delete/forward, star, disappearing, wallpaper, drafts, archive, message edit, group typing, PDF preview).
+
+Work Log:
+- Read `/home/z/my-project/worklog.md` (full architecture + 16-backend entry confirms backend contracts: `GET /api/messages/search?q=QUERY` → `{ results: [{ messageId, content, type, createdAt, senderId, senderName, conversationType, peerId?, peerName?, peerUsername?, peerPhoto?, groupId?, groupName? }] }`; `POST /api/messages/[id]/pin` body `{ pinned: true|false }` → `{ ok, pinned }` (per-user, 1:1 only, auto-unpins previous); `GET /api/messages` now returns `pinnedBy` (userId or null) on each message). Verified the route files + the `pinnedBy: m.pinnedBy` line in `src/app/api/messages/route.ts` (both direct + group branches).
+- Read the existing ChatView.tsx end-to-end (~3008 lines) to map the ConversationList search bar + Tabs structure, MessageBubble long-press action menu (Reply/Edit/Forward/Star/Copy/Delete + quick-reactions row), `highlight` helper (top-level function — hoisted, so usable from ConversationList despite being declared later in the file), `normalizeMessage` helper, ChatRoom state/effect layout, and the round-5 `groupTypingCount` derivation pattern (defined near the state decls to avoid temporal-dead-zone in the auto-scroll effect).
+- Feature 1 (global message search):
+  1. Added `GlobalSearchResult` interface (after `PeerInfo`) mirroring the backend payload.
+  2. Added `globalResults`/`globalLoading` state + `globalSearchTimerRef` ref in `ConversationList`.
+  3. Added a debounced `useEffect` (400ms) watching `query` — clears results on empty query, otherwise schedules `GET /api/messages/search?q=...`, parses `results`, sets loading state. Cleanup clears the timer on every query change so only the latest query triggers a request.
+  4. Modified the search bar: updated placeholder to "Search chats and messages", added `pr-9` to the input + a clear-button (`X`) that appears when `query` is non-empty and clears it.
+  5. Replaced the conditional render: when `query.trim()` is non-empty, the chat/group Tabs are replaced with a unified search dropdown containing TWO sections — "Conversations" (top 5 filtered chats + top 5 filtered groups, each a tappable row with avatar + name + meta) and "Messages" (global search results, each with `MessageSquare` icon + `<mark>`-highlighted content via the existing `highlight` helper + sender name + conversation name + `timeAgo`). Tapping any row opens the chat (`openChat` for direct, `openGroupChat` for group) and clears the query. Loading state shows a spinner; empty Messages section shows "No messages found"; total-empty shows an `EmptyState` with "No results".
+- Feature 2 (message pin within chat):
+  1. Added `pinnedBy?: string | null` to the `Message` interface (after `editedAt`).
+  2. Updated `normalizeMessage` to map `pinnedBy: raw.pinnedBy ?? null`.
+  3. Added `pinnedMessage` derivation in `ChatRoom` — defined RIGHT AFTER `groupTypingCount` (which itself was placed before the auto-scroll effect to avoid the round-5 temporal-dead-zone bug). Finds the first message where `pinnedBy === meId && !isDeletedForMe(m, meId)` (only one allowed by backend). null in group mode or when nothing is pinned.
+  4. Added `togglePin` callback (1:1 only, gated by `mode === 'direct'`): optimistic update clears `pinnedBy` on any message I had pinned, then sets/clears on the target. POSTs `/api/messages/[id]/pin { pinned }`. Reverts target on error. Toasts success/error.
+  5. Added `scrollToMessage` callback: looks up `[data-msg-id="ID"]` (CSS.escape'd) inside `scrollRef` and calls `scrollIntoView({ behavior: 'smooth', block: 'center' })`.
+  6. Wrapped each `<MessageBubble>` in `<div key={m.id} data-msg-id={m.id}>` so the pin bar can find the bubble to scroll to. Visually identical wrapper (flex child of `flex flex-col gap-1`).
+  7. Added `onPin?: (msg: Message) => void` prop to `MessageBubble` and passed `onPin={togglePin}` from `ChatRoom`.
+  8. Added Pin/Unpin button in the MessageBubble action menu — placed AFTER Reply, BEFORE Edit. Only shown when `!isGroup && onPin` (1:1 chats only). Shows `PinOff` icon + "Unpin" when `msg.pinnedBy === meId`, otherwise `Pin` icon + "Pin".
+  9. Added a pinned-message bar ABOVE the messages scroll area (below the header/search bar) — visible when `pinnedMessage && mode === 'direct'`. Styling: `mx-3 mt-2 flex items-center gap-2 rounded-xl border border-primary/30 bg-primary/5 px-3 py-2`. Shows `Pin` icon (primary), truncated content (single line, with media fallbacks `📷 Photo`/`🎥 Video`/`🎤 Audio`/`📄 Document`), sender name ("You" if mine), and an `X` button to unpin. The bar body (minus X) is a button calling `scrollToMessage(pinnedMessage.id)` to jump back to the pinned bubble.
+  10. Added a pinned-by-me indicator at top-LEFT of the bubble (`Pin size={11} text-primary` in a `bg-card` chip with `ring-1 ring-border`) — mirrors the existing Star indicator at top-right. Same styling pattern, just left-aligned.
+- Imports: added `PinOff, MessageSquare` to the lucide-react import block (Pin was already imported from earlier rounds).
+- Verified: `bun run lint` → exit 0 (0 errors, 0 warnings). `curl http://localhost:3000/` → 200. Dev log shows clean recompile after edits.
+
+Stage Summary:
+- Single file surgically edited: `/home/z/my-project/src/components/fc/chat/ChatView.tsx` (additive ~280 new lines; file grew from 3008 → 3354 lines). No existing code rewritten. Work notes: `/home/z/my-project/agent-ctx/16-search-pin-full-stack-developer.md`.
+- All rounds 1-5 features preserved: reactions (QUICK_REACTIONS row + onReact/toggleReaction), pin/mute-chat (ConversationRow menu + preferences API), search-within-chat (searchOpen + runSearch + highlight), voice notes (startRecording/stopRecording + MediaRecorder), delete/forward (DeleteConfirmDialog + ForwardDialog + confirmDelete + onDeleted), star (toggleStar + StarredMessagesDialog), disappearing (handleDisappearingChange + ChatSettingsSheet), wallpaper (handleWallpaperChange + WALLPAPER_PRESETS), drafts (handleTextInput debounce-save + draft restore), archive (handleToggleArchive + archived section), message edit (handleEditSave + EditMessageDialog + onEdited realtime handler), group typing (groupTypingUsers Set + groupMembers Map + onGroupTyping handler + sender-aware label), PDF preview (isPdf + iframe + fallback). The new global search + pin features compose cleanly with all of the above.
+- Backend untouched: no changes to realtime service, API routes, or Prisma schema. All work consumed the existing Task 16-backend contracts as documented in worklog.md.
+- Lint clean (`bun run lint` → 0 errors / 0 warnings). Dev server returns 200 on `/`.
+- Decisions: (1) Search dropdown REPLACES the Tabs when query is non-empty (instead of overlaying) — cleaner UX, avoids z-index/scroll fighting, and the user can simply clear the query to return to the normal chat list. (2) Global search uses the existing `highlight` helper (function declaration — hoisted) for `<mark>` highlighting so the visual matches the within-chat search. (3) `pinnedMessage` derived once near the top of ChatRoom (right after `groupTypingCount`) so any downstream effect/handler is safe from temporal-dead-zone (the exact bug that bit round 5). (4) Optimistic pin update mirrors the backend's "unpin previous, pin new" behavior — clear any pinned-by-me in the conversation, then set the target — so the pin bar updates instantly without waiting for the round-trip. (5) `scrollToMessage` uses `CSS.escape` on the message id for safety (Prisma cuids are alphanumeric so it's not strictly necessary, but defensive). (6) Pin option gated by `!isGroup && onPin` — `onPin` is only passed from `ChatRoom` (which is 1:1-only when pinning), so the gate is belt-and-suspenders. (7) Pinned indicator at top-LEFT mirrors the Star indicator at top-RIGHT — symmetric, doesn't visually clash.
+
+---
+Task ID: 16-lastseen-filters
+Agent: full-stack-developer (Last-seen + photo filters)
+Task: Implement two frontend features described in Task 16-backend: (1) granular last-seen labels + a precise detail helper in src/lib/api.ts, consumed by ChatView (auto-pickup) and ProfileView (richer display); (2) profile photo filters — `UserAvatar` gains an optional `filter` CSS-filter prop, ProfileView shows a Sparkles filter-picker popover (9 presets) next to the camera button and applies the chosen filter live to both MyProfile and other-user profile avatars. Backend untouched.
+
+Work Log:
+- Read /home/z/my-project/worklog.md end-to-end (Tasks 0 → 16-backend). Confirmed Task 16-backend added Profile.photoFilter + exposed it in /api/auth/me, /api/users/me, /api/users/[id]; updated ProfileData type to include photoFilter. Verified PUT /api/users/me treats photoFilter as a string field with empty-string → null. Verified AvatarImage passes `style` through to the underlying <img> (filter applies cleanly).
+- Feature 1 — src/lib/api.ts:
+  - Added private `isYesterday(d, now)` (calendar-day comparison, not 24h-window — handles 11:55pm/12:05am case) and `shortMonthDay(iso)`.
+  - Rewrote `lastSeenText(online, lastSeen)` with the exact spec tier list: online → "online"; null/invalid → "offline"; future (clock skew) → "online"; <1m → "last seen just now"; <1h → "last seen {n}m ago"; <24h → "last seen {n}h ago"; calendar yesterday → "last seen yesterday"; <7d → "last seen {n}d ago"; older → "last seen {MMM d}". Same name + signature — backward compatible. ChatView header + ProfileView other-user status auto-pickup the new granularity.
+  - Added `formatLastSeenPrecise(lastSeen): { label, detail }`. label = "online"/"offline"/"now"/"5m"/"2h"/"yesterday"/"Jan 5"; detail = "last seen 5 minutes ago at 3:42 PM". Treats lastSeen within 30s as effectively online (realtime service writes lastSeen on disconnect).
+- Feature 2 — src/components/fc/ui.tsx:
+  - Added `filter?: string | null` to `UserAvatar`. Normalizes null/undefined/"" /"none" → no filter. Applies `style={{ filter }}` to `<AvatarImage>` only — fallback (initials) and presence dot untouched.
+- Feature 2 — src/components/fc/profile/ProfileView.tsx:
+  - Added imports: `Popover, PopoverContent, PopoverTrigger`; `Sparkles, Loader2` to lucide; `formatLastSeenPrecise` to api; `cn` from `@/lib/utils`; `AuthUser` from `@/hooks/use-auth` (picker prop type).
+  - Extended `ProfileResult.user` interface with `photoFilter: string | null` and `lastSeen?: string | null`.
+  - Other-user profile header: `UserAvatar` now passes `filter={u.photoFilter}`; status `<p>` uses `lastSeenText(online, u.lastSeen)` (was `null`) and carries a `title` tooltip with `formatLastSeenPrecise(u.lastSeen).detail`.
+  - MyProfile header: `UserAvatar` now passes `filter={p?.photoFilter}`; added a small `Active now` / last-active line below the email using `formatLastSeenPrecise(p?.lastSeen)` combined with `useSocket().isOnline(user.id)` (live socket presence wins over timestamp). Line hidden when both offline + lastSeen is null.
+  - Added `PhotoFilterPicker` component + `PHOTO_FILTERS` preset array (9 presets: None, Grayscale, Sepia, Saturate, Contrast, Bright, Vintage, Cool, Warm). Sparkles button (`bg-primary/15 text-primary`, 8×8 round) sits next to the camera button in a flex cluster at the avatar bottom-right. Popover shows a 3-column grid of 48px avatar previews with the filter applied + name (`text-[10px]`); selected tile gets `ring-2 ring-primary` + sr-only "Selected" marker. Click: `PUT /api/users/me { photoFilter: '' | '<css-value>' }` → `await refresh()` → `toast.success('Photo filter updated')` → close popover. Loader2 spinner overlays the in-flight tile; all tiles disable during the request.
+- Verified end-to-end with curl + demo accounts: login aria → PUT photoFilter "grayscale(1)" → GET /api/auth/me returns it ✓; PUT photoFilter "" → clears to null ✓; login bilal → GET /api/users/<aria-id> returns aria's photoFilter "sepia(0.6)" ✓ (cross-user visibility). Boundary tests for the helper logic: 5s → "online"; 45s → "now"; 5m → "5m" + "last seen 5 minutes ago at HH:MM PM"; 2h → "2h"; yesterday (26h) → "yesterday"; 10d → "Jan 5"-style date. All pass.
+- `bun run lint` → 0 errors, 0 warnings. Dev server: `GET /` returns HTTP 200; recent dev.log shows `PUT /api/users/me 200` and `GET /api/users/<id> 200` from my test runs. No backend files touched.
+
+Stage Summary:
+- Files edited (3, surgical): `src/lib/api.ts` (+79 lines: isYesterday + shortMonthDay + new lastSeenText + formatLastSeenPrecise), `src/components/fc/ui.tsx` (+4 lines: filter prop + apply to AvatarImage), `src/components/fc/profile/ProfileView.tsx` (~120 new lines: PhotoFilterPicker + PHOTO_FILTERS + filter prop wiring + last-active line + lastSeen threading). Work notes: `/home/z/my-project/agent-ctx/16-lastseen-filters-full-stack-developer.md`.
+- All existing ProfileView features preserved (edit dialog, photo upload, privacy, details, friend actions, block/unblock) and UserAvatar unchanged for all existing callers (filter prop is optional + defaults to no filter).
+- Backend untouched: no changes to realtime service, API routes, or Prisma schema. All work consumed the existing Task 16-backend contracts.
+- Lint clean, dev 200, API smoke-tested end-to-end.
+- Decisions: (1) `filter` prop normalized so "none" + "" + null + undefined all mean "no filter" — PHOTO_FILTERS uses "none" as the None-tile sentinel but the backend stores null (sent as ""). (2) "Yesterday" is a calendar-day check (not 24h-window) so 11:55pm-last-seen at 12:05am-today correctly says "yesterday" rather than "5m ago". (3) `formatLastSeenPrecise` treats lastSeen within 30s as "online" (realtime service writes lastSeen on disconnect, so a fresh timestamp implies socket alive); call sites can override with useSocket().isOnline() — MyProfile does. (4) Did NOT thread photoFilter through conversation-list / friends-list / HomeView endpoints — kept scoped to (a) current user via useAuth and (b) other-user profile via GET /api/users/[id], per task spec. Future agents can extend `UserAvatar filter={...}` to other surfaces trivially since the prop is now in place.
+
+---
+Task ID: 16-frontend
+Agent: orchestrator (Z.ai Code) — scheduled 15-min review (round 6, frontend + integration)
+Task: Wire round 6 features frontend (global message search, message pin, last-seen granularity, profile photo filters) + integration QA + bug fix.
+
+Work Log:
+- Dispatched 2 parallel subagents:
+  - Task 16-search-pin: edited ChatView.tsx surgically. Global search: `globalResults`/`globalLoading` state + 400ms debounced search in ConversationList; when search box has text, shows unified dropdown with Conversations + Messages sections (each result tappable → opens conversation); uses existing `highlight` helper for `<mark>`. Message pin: `pinnedBy` in Message interface + normalizeMessage; Pin/Unpin in long-press action menu (1:1 only); pin bar at top of messages area (Pin icon + truncated content + sender + X unpin + tap-to-scroll); pin indicator on bubble; `togglePin` callback (optimistic, mirrors backend unpin-previous-pin-new); `scrollToMessage` via data-msg-id.
+  - Task 16-lastseen-filters: edited api.ts (rewrote `lastSeenText` with tier ladder: online/just now/Nm/Nh/yesterday/Nd/MMM d; added `formatLastSeenPrecise` returning {label, detail}) + ui.tsx (UserAvatar gains optional `filter` prop applied to AvatarImage via style) + ProfileView.tsx (MyProfile: filter button next to camera opens Popover with 9 presets — None/Grayscale/Sepia/Saturate/Contrast/Bright/Vintage/Cool/Warm — each a 48px preview tile; PUT /api/users/me { photoFilter } → refresh → toast; other-user profile passes filter + precise last-seen tooltip).
+- **CRITICAL BUG FOUND + FIXED during QA**: opening any chat threw "Runtime ReferenceError: Cannot access 'meId' before initialization" (temporal dead zone — same pattern as round 5). The subagent placed `const pinnedMessage = mode === 'direct' && meId ? ... : null` at line 1015, but the ChatRoom's `meId` is declared at line 1033 (after it). Fixed by moving `pinnedMessage` definition to after `meId` (line 1037) and leaving a comment noting the TDZ constraint. Lint clean after fix.
+- Integration QA via agent-browser (gateway 81, mobile 390x844, nextjs-portal hidden):
+  - Login as aria → Chats → typed "test" in search → MESSAGES section shows global results (Editable test message, Reaction test message, Live realtime cross-user test, etc. with sender + conversation + time) ✓
+  - Cleared search → opened Bilal chat → opens without error (after bug fix) ✓
+  - Chat header shows "last seen 2h ago" (granular last-seen) ✓
+  - Long-press last message → action menu shows Pin (between Reply and Edit) ✓
+  - Clicked Pin → DB confirms pinnedBy:"el7v" (Aria) → pin bar appears at top with message content + "You" → 2 pin icons render (bar + bubble) ✓
+  - Profile → "Photo filters" button → picker shows 9 presets with "None Selected" → picked Grayscale → API confirms photoFilter:"grayscale(1)" persisted ✓
+  - No errors. `bun run lint` clean (0 errors). Gateway 200. Realtime 200.
+
+Stage Summary:
+- Round 6 complete: 4 new features (global message search, message pin within chat, last-seen granularity, profile photo filters) all shipped + browser-verified. 1 critical bug fixed (meId temporal-dead-zone in pinnedMessage). All additive — zero existing code/features removed.
+- New files: src/app/api/messages/search/route.ts, src/app/api/messages/[id]/pin/route.ts.
+- Modified (surgical): prisma/schema.prisma (+Profile.photoFilter, +Message.pinnedBy), src/app/api/messages/route.ts (+pinnedBy), src/app/api/auth/me/route.ts (+photoFilter), src/app/api/users/me/route.ts (+photoFilter), src/app/api/users/[id]/route.ts (+photoFilter), src/hooks/use-auth.tsx (+photoFilter in ProfileData), src/lib/api.ts (rewrote lastSeenText + added formatLastSeenPrecise), src/components/fc/ui.tsx (UserAvatar +filter prop), src/components/fc/profile/ProfileView.tsx (+photo filter picker), src/components/fc/chat/ChatView.tsx (+global search + message pin + meId TDZ fix).
+- Lint clean, dev 200, realtime 200, all features QA'd.
+- Cumulative feature set now: auth, profiles (view/edit/privacy/**photo-filters**), friends (search/request/accept/reject/remove/block/suggestions/online-widget), 1:1+group chat (realtime/typing/presence/**granular-last-seen**/status/file-sharing/voice-notes/emoji/reactions/delete/forward/star/disappearing/wallpaper/**global-search**/search-within/pin-chat/mute/archive/drafts/edit/group-typing/**message-pin**), stories (create/view/auto-advance/replies), WebRTC calls (stats), groups CRUD, notifications, settings, dark mode, file previews (PDF inline).
+- Recommended next-phase features: group calls, message scheduling, chat export, story highlights, broadcast lists, chat wallpapers custom upload, typing status in conversation list, message reply with quote, profile photo cropping, call recordings.

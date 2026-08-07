@@ -23,7 +23,7 @@ export async function PUT(req: NextRequest) {
     }
 
     const profileData: Record<string, string | null> = {}
-    for (const key of ['photoUrl', 'bio', 'phone', 'location', 'birthday', 'education', 'work', 'profileVisibility', 'messagePermission', 'callPermission']) {
+    for (const key of ['photoUrl', 'bio', 'phone', 'location', 'birthday', 'education', 'work', 'profileVisibility', 'messagePermission', 'callPermission', 'photoFilter']) {
       if (body[key] !== undefined) {
         profileData[key] = body[key] === '' ? null : String(body[key])
       }
@@ -56,6 +56,7 @@ export async function PUT(req: NextRequest) {
               messagePermission: updated!.profile.messagePermission,
               callPermission: updated!.profile.callPermission,
               readReceipts: updated!.profile.readReceipts,
+              photoFilter: updated!.profile.photoFilter,
               lastSeen: updated!.profile.lastSeen?.toISOString(),
             }
           : null,

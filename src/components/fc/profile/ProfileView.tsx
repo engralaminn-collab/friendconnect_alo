@@ -1,10 +1,10 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useAuth } from '@/hooks/use-auth'
+import { useAuth, AuthUser } from '@/hooks/use-auth'
 import { useApp } from '@/lib/store'
 import { useSocket } from '@/hooks/use-socket'
-import { api, lastSeenText } from '@/lib/api'
+import { api, lastSeenText, formatLastSeenPrecise, uploadFile } from '@/lib/api'
 import { UserAvatar, EmptyState } from '@/components/fc/ui'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -13,12 +13,13 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog'
-import { Camera, MapPin, Phone, Cake, GraduationCap, Briefcase, Pencil, MessageCircle, PhoneCall, Video, UserPlus, Check, Ban, ShieldOff, ArrowLeft, Lock } from 'lucide-react'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Camera, MapPin, Phone, Cake, GraduationCap, Briefcase, Pencil, MessageCircle, PhoneCall, Video, UserPlus, Check, Ban, ShieldOff, ArrowLeft, Lock, Sparkles, Loader2 } from 'lucide-react'
 import { toast } from 'sonner'
-import { uploadFile } from '@/lib/api'
+import { cn } from '@/lib/utils'
 
 interface ProfileResult {
-  user: { id: string; username: string; name: string; photoUrl: string | null; bio: string | null; phone: string | null; location: string | null; birthday: string | null; education: string | null; work: string | null }
+  user: { id: string; username: string; name: string; photoUrl: string | null; photoFilter: string | null; bio: string | null; phone: string | null; location: string | null; birthday: string | null; education: string | null; work: string | null; lastSeen?: string | null }
   relation: { isFriend: boolean; isBlocked: boolean; blockedByMe: boolean; status: string; incomingRequest: boolean; outgoingRequest: boolean }
   canMessage: boolean
   canCall: boolean
@@ -88,11 +89,16 @@ export function ProfileView() {
       <div className="relative px-4 pb-4">
         <div className="h-24 rounded-b-3xl bg-gradient-to-br from-primary/40 via-primary/20 to-accent" />
         <div className="-mt-12 flex items-end gap-4">
-          <UserAvatar name={u.name} src={u.photoUrl} size={96} online={online} className="border-4 border-background" />
+          <UserAvatar name={u.name} src={u.photoUrl} size={96} online={online} filter={u.photoFilter} className="border-4 border-background" />
           <div className="pb-1">
             <h1 className="text-xl font-bold">{u.name}</h1>
             <p className="text-sm text-muted-foreground">@{u.username}</p>
-            <p className={online ? 'text-xs font-medium text-primary' : 'text-xs text-muted-foreground'}>{lastSeenText(online, null)}</p>
+            <p
+              className={online ? 'text-xs font-medium text-primary' : 'text-xs text-muted-foreground'}
+              title={!online ? formatLastSeenPrecise(u.lastSeen).detail : undefined}
+            >
+              {lastSeenText(online, u.lastSeen)}
+            </p>
           </div>
         </div>
       </div>
@@ -165,9 +171,14 @@ function Detail({ icon: Icon, label, value }: { icon: typeof MapPin; label: stri
 function MyProfile() {
   const { user, refresh } = useAuth()
   const { setView } = useApp()
+  const { isOnline } = useSocket()
   const [open, setOpen] = useState(false)
   if (!user) return null
   const p = user.profile
+  const meOnline = isOnline(user.id)
+  const lastActive = meOnline
+    ? { label: 'online', detail: 'active now' }
+    : formatLastSeenPrecise(p?.lastSeen)
 
   const fields: { k: string; label: string; value: string }[] = [
     { k: 'bio', label: 'Bio', value: p?.bio || '' },
@@ -184,25 +195,36 @@ function MyProfile() {
         <div className="h-24 rounded-b-3xl bg-gradient-to-br from-primary/40 via-primary/20 to-accent" />
         <div className="-mt-12 flex items-end gap-4">
           <div className="relative">
-            <UserAvatar name={user.name} src={p?.photoUrl} size={96} className="border-4 border-background" />
-            <label className="absolute bottom-1 right-1 grid h-8 w-8 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground shadow-lg">
-              <Camera size={14} />
-              <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
-                const f = e.target.files?.[0]
-                if (!f) return
-                try {
-                  const { file } = await uploadFile(f)
-                  await api('/api/users/me', { method: 'PUT', body: JSON.stringify({ photoUrl: file.url }) })
-                  await refresh()
-                  toast.success('Photo updated')
-                } catch (e: any) { toast.error(e.message) }
-              }} />
-            </label>
+            <UserAvatar name={user.name} src={p?.photoUrl} size={96} filter={p?.photoFilter} className="border-4 border-background" />
+            <div className="absolute bottom-1 right-1 flex items-center gap-1">
+              <PhotoFilterPicker user={user} refresh={refresh} />
+              <label className="grid h-8 w-8 cursor-pointer place-items-center rounded-full bg-primary text-primary-foreground shadow-lg">
+                <Camera size={14} />
+                <input type="file" accept="image/*" className="hidden" onChange={async (e) => {
+                  const f = e.target.files?.[0]
+                  if (!f) return
+                  try {
+                    const { file } = await uploadFile(f)
+                    await api('/api/users/me', { method: 'PUT', body: JSON.stringify({ photoUrl: file.url }) })
+                    await refresh()
+                    toast.success('Photo updated')
+                  } catch (e: any) { toast.error(e.message) }
+                }} />
+              </label>
+            </div>
           </div>
           <div className="pb-1">
             <h1 className="text-xl font-bold">{user.name}</h1>
             <p className="text-sm text-muted-foreground">@{user.username}</p>
             <p className="text-xs text-muted-foreground">{user.email}</p>
+            {lastActive.label !== 'offline' && (
+              <p
+                className="text-[10px] text-muted-foreground"
+                title={lastActive.detail}
+              >
+                {lastActive.label === 'online' ? 'Active now' : lastActive.detail}
+              </p>
+            )}
           </div>
         </div>
       </div>
@@ -342,5 +364,105 @@ function SelectField({ label, value, onChange, options }: { label: string; value
         </SelectContent>
       </Select>
     </div>
+  )
+}
+
+/**
+ * Preset photo filters for the profile avatar picker.
+ * `value` is the CSS filter value sent to the backend (stored on Profile.photoFilter).
+ * "none" is the special sentinel meaning "clear the filter".
+ */
+const PHOTO_FILTERS: { id: string; name: string; value: string }[] = [
+  { id: 'none', name: 'None', value: 'none' },
+  { id: 'grayscale', name: 'Grayscale', value: 'grayscale(1)' },
+  { id: 'sepia', name: 'Sepia', value: 'sepia(0.6)' },
+  { id: 'saturate', name: 'Saturate', value: 'saturate(1.5)' },
+  { id: 'contrast', name: 'Contrast', value: 'contrast(1.2)' },
+  { id: 'brightness', name: 'Bright', value: 'brightness(1.1)' },
+  { id: 'vintage', name: 'Vintage', value: 'sepia(0.5) contrast(1.1) brightness(0.95) saturate(1.2)' },
+  { id: 'cool', name: 'Cool', value: 'hue-rotate(30deg)' },
+  { id: 'warm', name: 'Warm', value: 'hue-rotate(-30deg)' },
+]
+
+function PhotoFilterPicker({
+  user,
+  refresh,
+}: {
+  user: AuthUser
+  refresh: () => Promise<AuthUser | null>
+}) {
+  const [open, setOpen] = useState(false)
+  const [applying, setApplying] = useState<string | null>(null)
+  const profile = user.profile
+  const current = profile?.photoFilter || 'none'
+
+  const apply = async (value: string) => {
+    if (applying) return
+    setApplying(value)
+    try {
+      // Backend treats empty string as null (clears the filter).
+      const body = value === 'none' ? { photoFilter: '' } : { photoFilter: value }
+      await api('/api/users/me', { method: 'PUT', body: JSON.stringify(body) })
+      await refresh()
+      toast.success('Photo filter updated')
+      setOpen(false)
+    } catch (e: any) {
+      toast.error(e.message || 'Failed to update filter')
+    } finally {
+      setApplying(null)
+    }
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="grid h-8 w-8 place-items-center rounded-full bg-primary/15 text-primary shadow-sm transition hover:bg-primary/25"
+          aria-label="Photo filters"
+          title="Photo filters"
+        >
+          <Sparkles size={14} />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 p-3" align="end" sideOffset={8}>
+        <div className="mb-2 flex items-center gap-1.5">
+          <Sparkles size={14} className="text-primary" />
+          <span className="text-sm font-semibold">Photo filter</span>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {PHOTO_FILTERS.map((f) => {
+            const selected = current === f.value
+            const isApplying = applying === f.value
+            return (
+              <button
+                key={f.id}
+                type="button"
+                onClick={() => apply(f.value)}
+                disabled={!!applying}
+                className={cn(
+                  'relative flex flex-col items-center gap-1 rounded-xl p-2 transition hover:bg-accent',
+                  selected && 'ring-2 ring-primary'
+                )}
+              >
+                <UserAvatar
+                  name={user.name}
+                  src={profile?.photoUrl}
+                  size={48}
+                  filter={f.value === 'none' ? undefined : f.value}
+                />
+                <span className="text-[10px] font-medium text-muted-foreground">{f.name}</span>
+                {isApplying && (
+                  <span className="absolute inset-0 grid place-items-center rounded-xl bg-background/60">
+                    <Loader2 size={14} className="animate-spin text-primary" />
+                  </span>
+                )}
+                {selected && <span className="sr-only">Selected</span>}
+              </button>
+            )
+          })}
+        </div>
+      </PopoverContent>
+    </Popover>
   )
 }
