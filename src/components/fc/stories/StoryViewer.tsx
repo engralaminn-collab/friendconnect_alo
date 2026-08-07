@@ -1,11 +1,11 @@
-/* eslint-disable react-hooks/set-state-in-effect */
 'use client'
 
 import { useEffect, useState, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { X, Eye, ChevronLeft, ChevronRight } from 'lucide-react'
+import { X, Eye, ChevronLeft, ChevronRight, Send, MessageCircle, Loader2 } from 'lucide-react'
 import { api, timeAgo } from '@/lib/api'
 import { UserAvatar } from '@/components/fc/ui'
+import { toast } from 'sonner'
 import { cn } from '@/lib/utils'
 
 export interface StoryItem {
@@ -24,6 +24,15 @@ export interface StoryViewerUser {
   name: string
   photoUrl: string | null
   isMe: boolean
+}
+
+export interface StoryReply {
+  id: string
+  userId: string
+  userName: string
+  userPhoto: string | null
+  content: string
+  createdAt: string
 }
 
 interface StoryViewerProps {
@@ -49,8 +58,21 @@ const STORY_DURATION_MS = 5000
 export function StoryViewer({ stories, user, onClose }: StoryViewerProps) {
   const [index, setIndex] = useState(0)
   const [imgError, setImgError] = useState(false)
+  const [replyText, setReplyText] = useState('')
+  const [sending, setSending] = useState(false)
+  const [replies, setReplies] = useState<StoryReply[]>([])
+  const [repliesOpen, setRepliesOpen] = useState(false)
+  const [loadingReplies, setLoadingReplies] = useState(false)
+  const [paused, setPaused] = useState(false)
   const viewedRef = useRef<Set<string>>(new Set())
   const touchStartX = useRef<number | null>(null)
+  const progressBarRef = useRef<HTMLDivElement | null>(null)
+  const rafRef = useRef<number | null>(null)
+  const startRef = useRef<number>(0)
+  const pausedAtRef = useRef<number | null>(null)
+  const pausedAccRef = useRef<number>(0)
+  const pausedRef = useRef(false)
+  const goNextRef = useRef<() => void>(() => {})
 
   const goNext = useCallback(() => {
     setIndex((i) => {
@@ -71,6 +93,12 @@ export function StoryViewer({ stories, user, onClose }: StoryViewerProps) {
     setImgError(false)
   }, [index])
 
+  // Reset reply text + close replies popover when story changes
+  useEffect(() => {
+    setReplyText('')
+    setRepliesOpen(false)
+  }, [index])
+
   // Mark the active story as viewed (once per story id)
   useEffect(() => {
     const story = stories[index]
@@ -81,6 +109,78 @@ export function StoryViewer({ stories, user, onClose }: StoryViewerProps) {
       /* silent — view tracking is best-effort */
     })
   }, [index, stories])
+
+  // Keep refs in sync (used by the rAF auto-advance timer)
+  useEffect(() => {
+    goNextRef.current = goNext
+  }, [goNext])
+  useEffect(() => {
+    pausedRef.current = paused
+  }, [paused])
+
+  // Fetch replies when viewing own story (and when story changes)
+  useEffect(() => {
+    if (!user.isMe) {
+      setReplies([])
+      return
+    }
+    const story = stories[index]
+    if (!story) return
+    let cancelled = false
+    setLoadingReplies(true)
+    api<{ replies: StoryReply[] }>(`/api/stories/${story.id}/replies`)
+      .then((data) => {
+        if (!cancelled) setReplies(data.replies)
+      })
+      .catch(() => {
+        if (!cancelled) setReplies([])
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingReplies(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [index, user.isMe, stories])
+
+  // Auto-advance timer using requestAnimationFrame (pauses while the reply input is focused).
+  // Replaces the previous framer-motion progress bar so we can cleanly pause/resume on input focus.
+  useEffect(() => {
+    startRef.current = Date.now()
+    pausedAtRef.current = pausedRef.current ? Date.now() : null
+    pausedAccRef.current = 0
+    if (progressBarRef.current) progressBarRef.current.style.width = '0%'
+
+    const tick = () => {
+      if (pausedAtRef.current === null) {
+        const elapsed = Date.now() - startRef.current - pausedAccRef.current
+        const p = Math.min(1, elapsed / STORY_DURATION_MS)
+        if (progressBarRef.current) {
+          progressBarRef.current.style.width = `${p * 100}%`
+        }
+        if (p >= 1) {
+          goNextRef.current()
+          return
+        }
+      }
+      rafRef.current = requestAnimationFrame(tick)
+    }
+    rafRef.current = requestAnimationFrame(tick)
+
+    return () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+    }
+  }, [index])
+
+  // Pause/resume handler (driven by reply input focus)
+  useEffect(() => {
+    if (paused) {
+      pausedAtRef.current = Date.now()
+    } else if (pausedAtRef.current !== null) {
+      pausedAccRef.current += Date.now() - pausedAtRef.current
+      pausedAtRef.current = null
+    }
+  }, [paused])
 
   // Lock body scroll while open
   useEffect(() => {
@@ -121,6 +221,31 @@ export function StoryViewer({ stories, user, onClose }: StoryViewerProps) {
     if (dx < 0) goNext()
     else goPrev()
   }
+
+  // Post a reply to the current story (friends only — backend enforces).
+  const handleSendReply = useCallback(async () => {
+    const story = stories[index]
+    if (!story) return
+    const content = replyText.trim()
+    if (!content || sending) return
+    setSending(true)
+    try {
+      const data = await api<{ reply: StoryReply }>(`/api/stories/${story.id}/replies`, {
+        method: 'POST',
+        body: JSON.stringify({ content }),
+      })
+      // If we happen to be viewing our own story, surface our own reply in the list.
+      if (user.isMe) {
+        setReplies((prev) => [...prev, data.reply])
+      }
+      setReplyText('')
+      toast.success('Reply sent')
+    } catch (e: any) {
+      toast.error(e?.message || 'Failed to send reply')
+    } finally {
+      setSending(false)
+    }
+  }, [stories, index, replyText, sending, user.isMe])
 
   if (!stories.length) {
     return null
@@ -211,13 +336,10 @@ export function StoryViewer({ stories, user, onClose }: StoryViewerProps) {
             {i < index ? (
               <div className="h-full w-full bg-white" />
             ) : i === index ? (
-              <motion.div
-                key={`${s.id}-${index}`}
+              <div
+                ref={progressBarRef}
                 className="h-full bg-white"
-                initial={{ width: '0%' }}
-                animate={{ width: '100%' }}
-                transition={{ duration: STORY_DURATION_MS / 1000, ease: 'linear' }}
-                onAnimationComplete={goNext}
+                style={{ width: '0%' }}
               />
             ) : null}
           </div>
@@ -278,6 +400,113 @@ export function StoryViewer({ stories, user, onClose }: StoryViewerProps) {
 
       {/* Subtle bottom gradient for legibility on image stories */}
       <div className="pointer-events-none absolute inset-x-0 bottom-0 z-10 h-24 bg-gradient-to-t from-black/50 to-transparent" />
+
+      {/* Reply input bar (others) OR Replies button + popover (own story) */}
+      <div className="absolute bottom-4 left-4 right-4 z-10">
+        {user.isMe ? (
+          <div className="relative">
+            <button
+              type="button"
+              onClick={() => setRepliesOpen((v) => !v)}
+              aria-expanded={repliesOpen}
+              aria-label="View story replies"
+              className="flex w-full items-center gap-2 rounded-full border border-white/20 bg-black/40 px-4 py-2 text-white backdrop-blur transition hover:bg-black/60"
+            >
+              <MessageCircle size={16} />
+              <span className="flex-1 text-left text-sm">
+                {loadingReplies
+                  ? 'Loading replies…'
+                  : replies.length === 0
+                  ? 'No replies yet'
+                  : `Replies (${replies.length})`}
+              </span>
+              {repliesOpen ? <X size={16} /> : null}
+            </button>
+            <AnimatePresence>
+              {repliesOpen && (
+                <motion.div
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 8 }}
+                  transition={{ duration: 0.2 }}
+                  className="fc-scroll absolute bottom-full left-0 right-0 mb-2 max-h-72 overflow-y-auto rounded-xl bg-black/80 p-2 backdrop-blur"
+                >
+                  {loadingReplies && replies.length === 0 ? (
+                    <div className="grid place-items-center py-8">
+                      <Loader2 size={20} className="animate-spin text-white/70" />
+                    </div>
+                  ) : replies.length === 0 ? (
+                    <div className="grid place-items-center gap-2 py-8 text-center text-sm text-white/60">
+                      <MessageCircle size={24} className="opacity-50" />
+                      No replies yet
+                    </div>
+                  ) : (
+                    <ul className="space-y-1">
+                      {replies.map((r) => (
+                        <li
+                          key={r.id}
+                          className="flex items-start gap-2 rounded-lg p-2 transition hover:bg-white/5"
+                        >
+                          <UserAvatar name={r.userName} src={r.userPhoto} size={32} />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-baseline justify-between gap-2">
+                              <span className="truncate text-xs font-semibold text-white">
+                                {r.userName}
+                              </span>
+                              <span className="shrink-0 text-[10px] text-white/50">
+                                {timeAgo(r.createdAt)}
+                              </span>
+                            </div>
+                            <p className="break-words text-sm text-white/90">{r.content}</p>
+                          </div>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        ) : (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault()
+              handleSendReply()
+            }}
+            className="flex items-center gap-2 rounded-full border border-white/20 bg-black/40 px-4 py-2 text-white backdrop-blur"
+          >
+            <input
+              type="text"
+              value={replyText}
+              onChange={(e) => setReplyText(e.target.value)}
+              onFocus={() => setPaused(true)}
+              onBlur={() => setPaused(false)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  handleSendReply()
+                }
+              }}
+              placeholder={`Reply to ${user.name.split(' ')[0]}…`}
+              maxLength={500}
+              className="flex-1 bg-transparent text-sm text-white outline-none placeholder:text-white/60"
+              aria-label="Reply to story"
+            />
+            <button
+              type="submit"
+              disabled={!replyText.trim() || sending}
+              aria-label="Send reply"
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-primary text-primary-foreground transition hover:bg-primary/90 active:scale-95 disabled:pointer-events-none disabled:opacity-40"
+            >
+              {sending ? (
+                <Loader2 size={15} className="animate-spin" />
+              ) : (
+                <Send size={15} />
+              )}
+            </button>
+          </form>
+        )}
+      </div>
     </motion.div>
   )
 }

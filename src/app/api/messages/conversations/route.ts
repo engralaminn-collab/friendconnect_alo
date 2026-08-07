@@ -41,10 +41,10 @@ export async function GET() {
       }
     }
 
-    // chat preferences (pin/mute/disappearing/wallpaper)
+    // chat preferences (pin/mute/disappearing/wallpaper/archived)
     const prefs = await db.chatPreference.findMany({ where: { userId: me.id } })
-    const prefMap = new Map<string, { pinned: boolean; muted: boolean; disappearing: string; wallpaper: string | null }>()
-    for (const p of prefs) prefMap.set(p.peerId, { pinned: p.pinned, muted: p.muted, disappearing: p.disappearing, wallpaper: p.wallpaper })
+    const prefMap = new Map<string, { pinned: boolean; muted: boolean; disappearing: string; wallpaper: string | null; archived: boolean }>()
+    for (const p of prefs) prefMap.set(p.peerId, { pinned: p.pinned, muted: p.muted, disappearing: p.disappearing, wallpaper: p.wallpaper, archived: p.archived })
 
     const conversations = Array.from(new Set([...friendMap.keys(), ...lastByPeer.keys()])).map((peerId) => {
       const friend = friendMap.get(peerId)
@@ -69,6 +69,7 @@ export async function GET() {
         muted: pref?.muted ?? false,
         disappearing: pref?.disappearing ?? 'OFF',
         wallpaper: pref?.wallpaper ?? null,
+        archived: pref?.archived ?? false,
       }
     })
     conversations.sort((a, b) => {
@@ -79,7 +80,11 @@ export async function GET() {
       return bt - at
     })
 
-    return json({ conversations })
+    // separate active vs archived
+    const active = conversations.filter((c) => !c.archived)
+    const archived = conversations.filter((c) => c.archived)
+
+    return json({ conversations: active, archived })
   } catch (e: any) {
     return errorJson(e?.message || 'Server error', 500)
   }

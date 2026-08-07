@@ -559,3 +559,138 @@ Stage Summary:
 - Lint clean, dev 200, realtime 200, all features QA'd.
 - Cumulative feature set now: auth, profiles, friends (search/request/accept/reject/remove/block/suggestions), 1:1+group chat (realtime/typing/presence/status/file-sharing/voice-notes/emoji/reactions/delete/forward/star/disappearing/wallpaper/search/pin/mute), stories, WebRTC calls, groups CRUD, notifications, settings (theme/notifications/privacy/read-receipts), dark mode.
 - Recommended next-phase features: group calls, message scheduling, chat export, last-seen granularity, message pin within chat, typing in group chats (sender-aware), file previews (PDF thumbnail), story replies, profile photo cropping/filters, call duration stats dashboard, online friends widget, message drafts, chat archive.
+
+---
+Task ID: 14-backend
+Agent: orchestrator (Z.ai Code) — scheduled 15-min review (round 4, backend)
+Task: Backend for round 4 features: story replies, message drafts (auto-save), chat archive, online friends widget.
+
+Work Log:
+- DB (additive): added `StoryReply` model (id, storyId, userId, content, createdAt; @@index storyId). Added `replies StoryReply[]` relation to Story + `storyReplies StoryReply[]` to User. Added `MessageDraft` model (id, userId, peerId, isGroup, content, updatedAt; @@unique [userId,peerId,isGroup]). Added `drafts MessageDraft[]` to User. Added `archived Boolean @default(false)` to ChatPreference. Ran `bun run db:push` + `bun run db:generate` — success.
+- API (new routes, no existing endpoints renamed):
+  - `GET/POST /api/stories/[id]/replies` — GET lists replies (story owner or friends only); POST creates a reply (friends only) + notifies the story owner.
+  - `GET/POST/DELETE /api/messages/drafts` — GET all drafts or single (?peerId=&isGroup=); POST upserts (auto-save) — deletes if content empty; DELETE clears a draft.
+  - `GET /api/friends/online` — returns friends whose profile.lastSeen is within the last 2 minutes.
+- API (modified, backward-compatible):
+  - `GET/POST /api/messages/preferences`: now accepts/returns `archived` boolean.
+  - `GET /api/messages/conversations`: now returns `archived` per conversation + separates into `{ conversations: [...active], archived: [...] }`.
+- Restarted realtime mini-service + Next dev server to load new Prisma client. Verified: gateway 200, realtime 200, /api/messages/drafts + /api/friends/online respond 401 (correct without auth).
+- `bun run lint` clean (0 errors).
+
+Stage Summary:
+- Backend for story replies, message drafts, chat archive, online friends is complete. Frontend not yet wired.
+- New files: src/app/api/stories/[id]/replies/route.ts, src/app/api/messages/drafts/route.ts, src/app/api/friends/online/route.ts.
+- Modified: prisma/schema.prisma (+StoryReply, +MessageDraft, +ChatPreference.archived), src/app/api/messages/preferences/route.ts (+archived), src/app/api/messages/conversations/route.ts (+archived, separate active/archived lists).
+- Next: frontend subagents will build story replies UI in StoryViewer, message drafts auto-save in ChatView, chat archive toggle in ConversationList long-press menu, online friends widget on Home.
+
+---
+Task ID: 14-drafts-archive
+Agent: full-stack-developer (Drafts + Archive)
+Task: Surgically edited `/home/z/my-project/src/components/fc/chat/ChatView.tsx` to add (1) message drafts with auto-save + restore and (2) chat archive/unarchive from the conversation row long-press menu. All additive; preserved reactions/pin-mute/search/voice-notes/delete-forward/star/disappearing/wallpaper/call-buttons from rounds 1-3.
+
+Work Log:
+- Read worklog.md (Task 14-backend entry) + full ChatView.tsx (~2420 lines) to map the existing Conversation interface, ConversationList + ConversationRow, ChatRoom peerId effect, handleTextInput, sendText, and the existing long-press context menu pattern.
+- Verified backend contracts by reading the actual route files: `GET/POST/DELETE /api/messages/drafts` (single-draft fetch via ?peerId=&isGroup=, all-drafts fetch with no params, POST deletes empty drafts), `POST /api/messages/preferences` (accepts `archived` boolean), `GET /api/messages/conversations` (now returns `{ conversations: [...active], archived: [...] }`).
+- Feature 1 — Message drafts (auto-save):
+  - Imports: added `Archive, ArchiveRestore, Pencil, ChevronDown, ChevronRight` to the lucide-react import block.
+  - ConversationList state: added `archivedConvs: Conversation[]`, `drafts: Map<string, string>` (peerId → content), `archivedExpanded: boolean` (default false).
+  - ConversationList.load(): now `Promise.all`s three calls — `/api/messages/conversations` (typed `{ conversations, archived }`), `/api/groups`, and `/api/messages/drafts` (no params → all drafts). Builds the drafts `Map` from the response.
+  - ChatRoom: added two refs — `textRef` (mirror of `text`) and `draftSaveTimerRef` (debounce timer). Added a small effect to sync `textRef.current = text` on every text change so the peerId-change cleanup reads the *latest* typed value (no stale-closure bug).
+  - ChatRoom peerId effect (modified): now also calls `setText('')` on conversation switch + cancels any pending draft debounce timer; fetches `GET /api/messages/drafts?peerId=…&isGroup=…` and restores the draft into the input with a subtle "Draft restored" toast (1.5s duration). Cleanup closure saves the OLD conversation's draft one last time via `POST /api/messages/drafts { peerId, isGroup, content }` (only if non-empty — backend auto-deletes empty drafts).
+  - handleTextInput: kept existing typing-indicator logic; added a 500ms debounce-save that POSTs the draft with the current `value` (also POSTs empty content after 500ms idle so the conversation-list "Draft: …" indicator stays in sync — backend deletes the empty draft).
+  - sendText: cancels any pending draft debounce timer + `DELETE /api/messages/drafts?peerId=…&isGroup=…` so the draft doesn't linger after send.
+  - Unmount cleanup useEffect: cancels the pending draft debounce timer (the peerId-change cleanup already saves the final draft for the active conversation).
+  - ConversationList realtime handlers (onNew, onStatus, onGroupNew): unchanged. If a message arrives for an archived peer, `exists` is undefined → `load()` is called, which refetches both lists; the archived conversation stays archived but gets an updated lastMessage + unread count.
+- Feature 2 — Chat archive:
+  - Conversation interface: added `archived?: boolean`.
+  - handleToggleArchive(c, currentlyArchived) callback: optimistic — moves the conversation between `conversations` (active) and `archivedConvs` arrays (sets `archived: true` when archiving, `archived: false` when unarchiving). Calls `POST /api/messages/preferences { peerId, archived }`. Toast "Chat archived" / "Chat unarchived". On error, reverts via `load()`.
+  - ConversationRow props: added `draftPreview?: string`, `archived?: boolean`, `onToggleArchive: () => void`.
+  - ConversationRow render: applies `opacity-70` when archived; shows an Archive icon next to the name when archived; renders the muted `Draft: <text>` indicator (`text-xs text-primary flex items-center gap-1 truncate` + Pencil icon) below the name in place of the last-message preview when a draft exists (unread badge still shown next to the draft).
+  - ConversationRow context menu: added a third "Archive chat"/"Unarchive" item (with Archive/ArchiveRestore icon) below Pin/Mute. `hover:bg-accent`.
+  - ConversationList render: active conversations render first (passing `draftPreview`, `onToggleArchive`). Below them, a small expandable "ARCHIVED (N)" section appears only when archived conversations exist. Header has a ChevronDown/ChevronRight toggle, count in parens, collapsed by default. Expanded rows render the same ConversationRow with `archived` prop set (pin/mute toggles update `archivedConvs` instead of `conversations`). Search filter applies to both active + archived lists.
+
+Stage Summary:
+- File produced: `/home/z/my-project/src/components/fc/chat/ChatView.tsx` — surgically edited (+~210 lines; 2420 → 2628 lines).
+- All pre-existing features (reactions, pin/mute, search, voice notes, delete/forward, star, disappearing, wallpaper, call buttons, typing indicator, infinite scroll, status ticks) preserved — only additive changes; no existing code rewritten.
+- `bun run lint` clean (0 errors / 0 warnings). Dev server returns 200 on `/`.
+- End-to-end browser QA (agent-browser, mobile 390×844, gateway :81, logged in as aria):
+  - Opened Bilal chat → typed "Drafting a message to test auto-save" → waited 2s → `POST /api/messages/drafts 200` in dev.log.
+  - Back to conversation list → Bilal row shows muted `Draft: Drafting a message to test auto-save` line below the name with a small Pencil icon.
+  - Reopened Bilal chat → input field shows the draft text → `GET /api/messages/drafts?peerId=…&isGroup=false 200` → toast "Draft restored".
+  - Tapped Send → `DELETE /api/messages/drafts?peerId=…&isGroup=false 200` → message sent → back to list → draft indicator gone (last-message preview restored).
+  - Long-pressed Bilal row → context menu shows Unpin chat / Mute notifications / Archive chat.
+  - Tapped "Archive chat" → `POST /api/messages/preferences 200` → toast "Chat archived" → Bilal row removed from active list → "ARCHIVED (1)" expandable section appeared at the bottom (collapsed, with chevron + count).
+  - Expanded ARCHIVED (1) → Bilal row appears with opacity-70 styling + Archive icon next to name.
+  - Long-pressed archived Bilal row → context menu shows Unpin chat / Mute notifications / Unarchive.
+  - Tapped "Unarchive" → `POST /api/messages/preferences 200` → toast "Chat unarchived" → Bilal row moved back to active list → ARCHIVED section hidden (count is 0).
+- No backend / realtime / API changes — all contracts matched the existing Task 14-backend implementations.
+
+---
+Task ID: 14-stories-online
+Agent: full-stack-developer (Story replies + online friends)
+Task: Surgically edited two existing frontend files (no rewrites, no backend changes) to wire up the round-4 backend features: (1) story replies UI in StoryViewer.tsx (reply input bar for friends + Replies button + popover for own story, with pause-on-focus auto-advance), and (2) an "Online now" widget in HomeView.tsx (horizontal avatar strip with green dot + pulsing ring, backed by GET /api/friends/online + useSocket().isOnline cross-check, auto-refresh every 30s).
+
+Work Log:
+- Read /home/z/my-project/worklog.md (full architecture + Task 14-backend entry + 14-drafts-archive entry) and inspected the actual backend route handlers (`src/app/api/stories/[id]/replies/route.ts`, `src/app/api/friends/online/route.ts`) to confirm exact response shapes. Read the existing StoryViewer.tsx (283 lines) + HomeView.tsx (243 lines) end-to-end to plan surgical edits. Verified `fc-pulse`, `fc-ping-ring`, `fc-online-dot`, `fc-scroll`, `fc-no-scroll` classes exist in globals.css and `UserAvatar({name, src, size, online})` + `useSocket().isOnline` + `useApp().openChat` contracts in ui.tsx / use-socket.tsx / store.ts. Wrote work notes to `/home/z/my-project/agent-ctx/14-stories-online-full-stack-developer.md`.
+
+StoryViewer.tsx (surgical, ~230 lines added; total now ~510 lines):
+- Imports: appended `Send, MessageCircle, Loader2` to the existing lucide-react import line; added `import { toast } from 'sonner'`. Did NOT need `useAuth` because `user.isMe` is already passed in via the `StoryViewerUser` prop.
+- New exported `StoryReply` interface (`{ id, userId, userName, userPhoto, content, createdAt }`) — matches the backend GET/POST `/api/stories/[id]/replies` response shape.
+- New state: `replyText`, `sending`, `replies`, `repliesOpen`, `loadingReplies`, `paused`. New refs: `progressBarRef`, `rafRef`, `startRef`, `pausedAtRef`, `pausedAccRef`, `pausedRef`, `goNextRef` (the latter two kept in sync via small effects so the rAF tick closure always sees the latest values).
+- Replaced the framer-motion progress bar (`<motion.div animate={{ width: '100%' }} onAnimationComplete={goNext} />`) with a plain `<div ref={progressBarRef} style={{ width: '0%' }} />`. Width is updated directly via the ref inside a `requestAnimationFrame` loop — no React re-render per frame (better perf). The rAF effect on `[index]` resets the timer; a separate effect on `[paused]` handles pause/resume by accumulating elapsed paused time in `pausedAccRef.current` and subtracting it from the total. On reaching 100%, calls `goNextRef.current()`.
+- New effects: (1) clears `replyText` + closes the replies popover when `index` changes; (2) fetches `GET /api/stories/${story.id}/replies` when viewing OWN story (and when story changes) — best-effort, silent catch; (3) ref-sync effects for `goNextRef` + `pausedRef`; (4) the rAF auto-advance timer; (5) the pause/resume handler.
+- `handleSendReply` callback: validates non-empty + !sending, POSTs `{ content }` to `/api/stories/${story.id}/replies`, toasts "Reply sent", clears the input. If viewing own story (rare case where owner replies to self), appends the new reply to the local list.
+- New JSX (before the closing `</motion.div>`): a wrapper `absolute bottom-4 left-4 right-4 z-10` (per spec) containing either:
+  - **Own story (`user.isMe`)**: a "Replies" button (same bar styling: `rounded-full border border-white/20 bg-black/40 backdrop-blur px-4 py-2 text-white`) with label `Loading replies…` / `No replies yet` / `Replies (N)`. Clicking toggles a popover above the button: `absolute bottom-full left-0 right-0 mb-2 max-h-72 overflow-y-auto rounded-xl bg-black/80 backdrop-blur p-2 fc-scroll`. Popover renders a Loader2 spinner while loading, an empty state ("No replies yet" with MessageCircle icon) when no replies, or a list of replies (UserAvatar 32px + name + timeAgo + content). AnimatePresence + motion.div for fade/slide animation.
+  - **Other's story (`!user.isMe`)**: a `<form>` with the same bar styling. Input has `placeholder="Reply to {firstName}…"`, `maxLength=500`, `onFocus={() => setPaused(true)}` / `onBlur={() => setPaused(false)}` (drives the auto-advance pause). Enter (without Shift) or the Send button submits. Send button: `h-8 w-8 rounded-full bg-primary text-primary-foreground` with `Send` icon (or `Loader2 animate-spin` while sending). Disabled when input is empty or sending.
+- Tap-zone interaction preserved: the wrapper occupies only the bottom strip; the form/button capture pointer events in that strip. The three tap-zone buttons (z-10, full-screen) still receive taps everywhere else (left/center/right thirds for prev/close/next). The wrapper is rendered AFTER the tap zones in the DOM so it wins in its bounding rect (same z-index, later paint).
+- Eslint: removed the previously-needed `/* eslint-disable react-hooks/set-state-in-effect */` directive at the top of the file — the rule was no longer firing on this file (the React Compiler appears to bail out on the complex motion/AnimatePresence patterns, so `set-state-in-effect` never reports). With the directive removed, the "Unused eslint-disable directive" warning is gone and lint is fully clean.
+
+HomeView.tsx (surgical, additive):
+- Imports: appended `useMemo` to the existing `react` import line; added `import { useSocket } from '@/hooks/use-socket'` as a new line.
+- New state: `onlineFriends: Friend[]` (populated by `GET /api/friends/online`).
+- New `loadOnline()` function + effect: fetches `GET /api/friends/online`, sets `onlineFriends`. Effect on `[]` calls it immediately + sets up a 30-second `setInterval` for auto-refresh.
+- New `onlineList` useMemo: combines the REST `onlineFriends` list with the realtime socket presence set. A friend is considered online if EITHER source reports them as online — REST (lastSeen within 2-min threshold) OR `isOnline(f.id)` (realtime presence; more accurate). Deduplicates by `id` using a `Map`. Deps: `[onlineFriends, friends, isOnline]`.
+- New "Online now" section JSX (after the hero greeting + quick actions, before the existing Friends strip): hidden when `onlineList.length === 0` (cleaner than a muted hint). Section title uses `SectionTitle` with a small pinging green dot (`animate-ping` Tailwind built-in) + "Online now" text + a count badge (`bg-primary/15 text-primary text-[10px] font-bold`). Strip uses the same `fc-no-scroll flex gap-3 overflow-x-auto px-4 pb-1` pattern as the existing Friends strip. Each online friend renders as a `button` (calls `openChat(f.id)`) with a `relative` wrapper around the avatar containing a pulsing ring halo (`fc-pulse pointer-events-none absolute -inset-1 rounded-full bg-primary/20`), the `UserAvatar` with `online` prop (green dot at bottom-right via `fc-online-dot`), and a first-name label below.
+
+Stage Summary:
+- Files produced (2, surgical — no rewrites):
+  - `src/components/fc/stories/StoryViewer.tsx` — added reply input bar + Replies button + popover + pause-on-focus auto-advance (replaced framer-motion progress bar with rAF timer for clean pause/resume). Existing progress bars / tap zones / view tracking / body-scroll lock / keyboard nav / touch swipe / header / side nav arrows all preserved.
+  - `src/components/fc/home/HomeView.tsx` — added ONLINE NOW widget (auto-refresh 30s, REST + socket union, pulsing ring avatars, hidden when empty). Existing stories bar / hero greeting / quick actions / Friends strip / recent chats / suggestions / call-history button all preserved.
+- All contracts honored: `api`, `timeAgo` from `@/lib/api`; `UserAvatar` from `@/components/fc/ui`; `useSocket` from `@/hooks/use-socket`; `useApp().openChat` from `@/lib/store`; `toast` from `sonner`; lucide `Send, MessageCircle, X, Users, Loader2`. NO new shadcn components needed (used a styled native button for the Send icon button on the translucent bar — cleaner than importing shadcn Button for a 32px round icon button).
+- Styling: emerald/teal brand throughout (NO indigo/blue). Reply input bar = dark translucent bar on the black story viewer bg per spec (`rounded-full border border-white/20 bg-black/40 backdrop-blur px-4 py-2 text-white placeholder:text-white/60`). Replies popover = `bg-black/80 backdrop-blur rounded-xl`. Online widget = green online dots (UserAvatar `online` prop → `fc-online-dot`), subtle pulsing ring on avatars (`fc-pulse` + `bg-primary/20`), "ONLINE NOW" section title with a live ping dot + count badge.
+- Decisions:
+  - Replaced framer-motion progress bar with a manual `requestAnimationFrame` timer so I could cleanly pause/resume on input focus. Direct DOM updates via `progressBarRef.current.style.width` (no React re-render per frame).
+  - Pause-on-focus (not pause-on-typing) — Instagram-style UX: the moment the input receives focus, the story pauses; tapping outside blurs it and the timer resumes. Predictable and matches user expectations.
+  - `goNextRef` + `pausedRef` pattern — small effects keep these refs in sync so the rAF tick closure (captured once per `index` change) always sees the latest values without needing to be re-created.
+  - Replies fetch only for own story (per the spec). For friends' stories, only the reply input is shown. (The backend would allow friends to view replies too, but the spec said "for own story" so I followed that.)
+  - `onlineList` uses union of REST + socket — surfaces friends who may be connected via socket even if their `profile.lastSeen` is slightly stale (the 2-min threshold can lag). More inclusive, matches the spec's hint that "socket presence may be more accurate".
+  - Section hidden when empty rather than showing a muted hint — cleaner UI, matches the spec's preferred option.
+- Lint clean (0 errors / 0 warnings). Dev server returns 200 on `/` (verified via curl). `dev.log` shows `GET /api/friends/online 200` being polled every ~30s by the HomeView auto-refresh, alongside `GET /api/stories 200`, `GET /api/friends 200`, etc. No errors or warnings in the log.
+- No backend / realtime / API / Prisma changes — all contracts matched the existing Task 14-backend implementations.
+
+---
+Task ID: 14-frontend
+Agent: orchestrator (Z.ai Code) — scheduled 15-min review (round 4, frontend + integration)
+Task: Wire round 4 features frontend (story replies, message drafts, chat archive, online friends widget) + integration QA.
+
+Work Log:
+- Dispatched 2 parallel subagents:
+  - Task 14-stories-online: edited StoryViewer.tsx (added reply input bar at bottom — translucent input with "Reply to {name}…" placeholder + Send button for others' stories; "View story replies" button + popover for own stories showing replies list; paused auto-advance when reply input focused via rAF timer with pause-duration accumulation) + HomeView.tsx (added "Online now" section — horizontal avatar strip with pulsing rings + green online dots, hidden when empty, 30s auto-refresh, unions REST + socket presence).
+  - Task 14-drafts-archive: edited ChatView.tsx surgically. Drafts: fetch draft on conversation open + restore + "Draft restored" toast; 500ms debounced auto-save on text change; DELETE draft on send; save-on-unmount; "Draft:" indicator (Pencil icon + truncated text) in conversation list rows. Archive: Archive/Unarchive in long-press menu; conversations endpoint now returns separate active/archived arrays; expandable "ARCHIVED (N)" section at bottom of conversation list (collapsed by default); archived rows slightly muted; unarchive moves back.
+- Integration QA via agent-browser (gateway 81, mobile 390x844, nextjs-portal hidden):
+  - Login as aria → Home renders (online widget hidden — 0 friends online = clean) ✓
+  - Chats → Bilal chat → typed "This is a draft message I haven't sent yet" → API confirms draft auto-saved (content + updatedAt) ✓
+  - Back to list → "Draft: This is a draft message…" indicator shows in Bilal row ✓
+  - Long-press Bilal → menu shows Unpin/Mute/Archive → clicked Archive → API confirms archived:true → "ARCHIVED (1)" section appears ✓
+  - Expanded archived section → Bilal row shows with draft preview → long-press → Unarchive → moved back ✓
+  - Home → tap own story → StoryViewer → "View story replies" button → popover shows "No replies yet" ✓
+  - No errors. `bun run lint` clean (0 errors). Gateway 200. Realtime 200.
+
+Stage Summary:
+- Round 4 complete: 4 new features (story replies, message drafts auto-save, chat archive, online friends widget) all shipped + browser-verified. All additive — zero existing code/features removed.
+- New files: src/app/api/stories/[id]/replies/route.ts, src/app/api/messages/drafts/route.ts, src/app/api/friends/online/route.ts.
+- Modified (surgical): prisma/schema.prisma (+StoryReply, +MessageDraft, +ChatPreference.archived), src/app/api/messages/preferences/route.ts (+archived), src/app/api/messages/conversations/route.ts (+archived, separate active/archived), src/components/fc/stories/StoryViewer.tsx (+reply input + replies popover), src/components/fc/home/HomeView.tsx (+online widget), src/components/fc/chat/ChatView.tsx (+drafts auto-save + archive).
+- Lint clean, dev 200, realtime 200, all features QA'd.
+- Cumulative feature set now: auth, profiles, friends (search/request/accept/reject/remove/block/suggestions/online-widget), 1:1+group chat (realtime/typing/presence/status/file-sharing/voice-notes/emoji/reactions/delete/forward/star/disappearing/wallpaper/search/pin/mute/archive/drafts), stories (create/view/auto-advance/replies), WebRTC calls, groups CRUD, notifications, settings (theme/notifications/privacy/read-receipts), dark mode.
+- Recommended next-phase features: group calls, message scheduling, chat export, last-seen granularity, message pin within chat, typing in group chats (sender-aware), file previews (PDF thumbnail), profile photo cropping/filters, call duration stats dashboard, message edit, chat wallpapers custom upload, story highlights, broadcast lists.

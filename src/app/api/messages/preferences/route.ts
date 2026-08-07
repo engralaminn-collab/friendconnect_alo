@@ -16,6 +16,7 @@ export async function GET() {
         muted: p.muted,
         disappearing: p.disappearing,
         wallpaper: p.wallpaper,
+        archived: p.archived,
       })),
     })
   } catch (e: any) {
@@ -31,11 +32,12 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const peerId = String(body.peerId || '')
     if (!peerId) return errorJson('peerId required', 400)
-    const data: { pinned?: boolean; muted?: boolean; disappearing?: string; wallpaper?: string | null } = {}
+    const data: { pinned?: boolean; muted?: boolean; disappearing?: string; wallpaper?: string | null; archived?: boolean } = {}
     if (typeof body.pinned === 'boolean') data.pinned = body.pinned
     if (typeof body.muted === 'boolean') data.muted = body.muted
     if (typeof body.disappearing === 'string' && ['OFF', '24H', '7D'].includes(body.disappearing)) data.disappearing = body.disappearing
     if (body.wallpaper !== undefined) data.wallpaper = body.wallpaper === '' ? null : String(body.wallpaper)
+    if (typeof body.archived === 'boolean') data.archived = body.archived
     const pref = await db.chatPreference.upsert({
       where: { userId_peerId: { userId: me.id, peerId } },
       update: data,
@@ -48,6 +50,7 @@ export async function POST(req: NextRequest) {
         muted: pref.muted,
         disappearing: pref.disappearing,
         wallpaper: pref.wallpaper,
+        archived: pref.archived,
       },
     })
   } catch (e: any) {

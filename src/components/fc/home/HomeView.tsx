@@ -1,7 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useAuth } from '@/hooks/use-auth'
+import { useSocket } from '@/hooks/use-socket'
 import { useApp } from '@/lib/store'
 import { api, timeAgo, clockTime } from '@/lib/api'
 import { UserAvatar, EmptyState, SectionTitle } from '@/components/fc/ui'
@@ -38,10 +39,12 @@ interface Suggestion {
 
 export function HomeView() {
   const { user } = useAuth()
+  const { isOnline } = useSocket()
   const { openChat, setView, openProfile } = useApp()
   const [friends, setFriends] = useState<Friend[]>([])
   const [conversations, setConversations] = useState<Conversation[]>([])
   const [suggestions, setSuggestions] = useState<Suggestion[]>([])
+  const [onlineFriends, setOnlineFriends] = useState<Friend[]>([])
   const [sendingId, setSendingId] = useState<string | null>(null)
 
   const load = async () => {
@@ -57,11 +60,40 @@ export function HomeView() {
     } catch {}
   }
 
+  const loadOnline = async () => {
+    try {
+      const data = await api<{ online: Friend[] }>('/api/friends/online')
+      setOnlineFriends(data.online)
+    } catch {
+      /* silent */
+    }
+  }
+
   useEffect(() => {
     load()
     const t = setInterval(load, 15000)
     return () => clearInterval(t)
   }, [])
+
+  // Online-friends widget auto-refreshes every 30s. The socket presence set is
+  // cross-checked below to surface friends who may be connected even if their
+  // profile.lastSeen is older than the API's 2-minute threshold.
+  useEffect(() => {
+    loadOnline()
+    const t = setInterval(loadOnline, 30000)
+    return () => clearInterval(t)
+  }, [])
+
+  // Combine the REST online list with the realtime socket presence set.
+  // A friend is considered online if EITHER source reports them as online.
+  const onlineList = useMemo(() => {
+    const byId = new Map<string, Friend>()
+    onlineFriends.forEach((f) => byId.set(f.id, f))
+    friends.forEach((f) => {
+      if (isOnline(f.id)) byId.set(f.id, f)
+    })
+    return Array.from(byId.values())
+  }, [onlineFriends, friends, isOnline])
 
   const hour = new Date().getHours()
   const greeting = hour < 12 ? 'Good morning' : hour < 18 ? 'Good afternoon' : 'Good evening'
@@ -111,7 +143,45 @@ export function HomeView() {
         ))}
       </div>
 
-      {/* Online friends */}
+      {/* Online now — live widget (hidden when no friends online) */}
+      {onlineList.length > 0 && (
+        <section className="mt-6">
+          <div className="flex items-center justify-between px-4">
+            <SectionTitle className="flex items-center gap-1.5">
+              <span className="relative flex h-2 w-2" aria-hidden="true">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
+              </span>
+              Online now
+              <span className="ml-1 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-primary/15 px-1 text-[10px] font-bold text-primary">
+                {onlineList.length}
+              </span>
+            </SectionTitle>
+          </div>
+          <div className="fc-no-scroll mt-2 flex gap-3 overflow-x-auto px-4 pb-1">
+            {onlineList.map((f) => (
+              <button
+                key={f.id}
+                onClick={() => openChat(f.id)}
+                className="flex w-16 flex-col items-center gap-1"
+                aria-label={`Chat with ${f.name}`}
+              >
+                <div className="relative">
+                  {/* Subtle pulsing ring (live halo) */}
+                  <span
+                    aria-hidden="true"
+                    className="fc-pulse pointer-events-none absolute -inset-1 rounded-full bg-primary/20"
+                  />
+                  <UserAvatar name={f.name} src={f.photoUrl} size={56} online />
+                </div>
+                <span className="w-full truncate text-center text-[11px]">{f.name.split(' ')[0]}</span>
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Friends strip */}
       {friends.length > 0 && (
         <section className="mt-6">
           <div className="flex items-center justify-between px-4">

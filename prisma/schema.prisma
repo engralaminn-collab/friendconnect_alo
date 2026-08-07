@@ -36,6 +36,8 @@ model User {
   stories       Story[]
   storyViews    StoryView[]
   starredMessages MessageStar[]
+  storyReplies  StoryReply[]
+  drafts        MessageDraft[]
 }
 
 model Profile {
@@ -201,7 +203,9 @@ model ChatPreference {
   // Additive (round 3): disappearing messages timer. OFF | 24H | 7D
   disappearing String @default("OFF")
   // Additive (round 3): chat wallpaper (CSS background value or preset id)
-  wallpaper String?  
+  wallpaper String?
+  // Additive (round 4): chat archive
+  archived  Boolean  @default(false)
   updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -221,6 +225,7 @@ model Story {
 
   user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
   views  StoryView[]
+  replies StoryReply[]
 
   @@index([userId])
 }
@@ -248,4 +253,32 @@ model MessageStar {
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([messageId, userId])
+}
+
+// ---- Additive (round 4): story replies ----
+model StoryReply {
+  id        String   @id @default(cuid())
+  storyId   String
+  userId    String  // replier
+  content   String  // text reply
+  createdAt DateTime @default(now())
+
+  story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([storyId])
+}
+
+// ---- Additive (round 4): message drafts (auto-saved per conversation) ----
+model MessageDraft {
+  id        String   @id @default(cuid())
+  userId    String  // owner of the draft
+  peerId    String  // conversation peer (user id or group id)
+  isGroup   Boolean @default(false)
+  content   String
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, peerId, isGroup])
 }

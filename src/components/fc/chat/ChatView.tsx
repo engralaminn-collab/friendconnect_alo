@@ -60,6 +60,11 @@ import {
   Star,
   MoreVertical,
   Timer,
+  Archive,
+  ArchiveRestore,
+  Pencil,
+  ChevronDown,
+  ChevronRight,
 } from 'lucide-react'
 
 // ---------------- types ----------------
@@ -80,6 +85,7 @@ interface Conversation {
   unread: number
   pinned?: boolean
   muted?: boolean
+  archived?: boolean
   lastMessage: {
     content: string
     type: string
@@ -272,6 +278,9 @@ function ConversationList() {
   const [tab, setTab] = useState<'chats' | 'groups'>('chats')
   const [query, setQuery] = useState('')
   const [conversations, setConversations] = useState<Conversation[]>([])
+  const [archivedConvs, setArchivedConvs] = useState<Conversation[]>([])
+  const [drafts, setDrafts] = useState<Map<string, string>>(new Map())
+  const [archivedExpanded, setArchivedExpanded] = useState(false)
   const [groups, setGroups] = useState<GroupLite[]>([])
   const [loading, setLoading] = useState(true)
   const { openChat, openGroupChat } = useApp()
@@ -282,12 +291,23 @@ function ConversationList() {
   const load = useCallback(async () => {
     setLoading(true)
     try {
-      const [c, g] = await Promise.all([
-        api<{ conversations: Conversation[] }>('/api/messages/conversations').catch(() => ({ conversations: [] as Conversation[] })),
+      const [c, g, d] = await Promise.all([
+        api<{ conversations: Conversation[]; archived: Conversation[] }>(
+          '/api/messages/conversations'
+        ).catch(() => ({ conversations: [] as Conversation[], archived: [] as Conversation[] })),
         api<{ groups: GroupLite[] }>('/api/groups').catch(() => ({ groups: [] as GroupLite[] })),
+        api<{ drafts: Array<{ peerId: string; isGroup: boolean; content: string; updatedAt: string }> }>(
+          '/api/messages/drafts'
+        ).catch(() => ({ drafts: [] as Array<{ peerId: string; isGroup: boolean; content: string; updatedAt: string }> })),
       ])
       setConversations(c.conversations)
+      setArchivedConvs(c.archived)
       setGroups(g.groups)
+      const draftMap = new Map<string, string>()
+      for (const draft of d.drafts) {
+        if (draft.content) draftMap.set(draft.peerId, draft.content)
+      }
+      setDrafts(draftMap)
     } catch (e: any) {
       toast.error(e?.message || 'Failed to load')
     } finally {
@@ -357,11 +377,40 @@ function ConversationList() {
   const filteredConvs = q
     ? conversations.filter((c) => c.name.toLowerCase().includes(q) || c.username.toLowerCase().includes(q))
     : conversations
+  const filteredArchived = q
+    ? archivedConvs.filter((c) => c.name.toLowerCase().includes(q) || c.username.toLowerCase().includes(q))
+    : archivedConvs
   const filteredGroups = q
     ? groups.filter((g) => g.name.toLowerCase().includes(q) || (g.description || '').toLowerCase().includes(q))
     : groups
 
   const totalUnread = conversations.reduce((s, c) => s + c.unread, 0)
+
+  // ---- archive / unarchive a conversation (optimistic + API + toast) ----
+  const handleToggleArchive = useCallback(
+    async (c: Conversation, currentlyArchived: boolean) => {
+      const nextArchived = !currentlyArchived
+      // Optimistic move between active/archived arrays
+      if (nextArchived) {
+        setConversations((prev) => prev.filter((x) => x.id !== c.id))
+        setArchivedConvs((prev) => [{ ...c, archived: true }, ...prev])
+      } else {
+        setArchivedConvs((prev) => prev.filter((x) => x.id !== c.id))
+        setConversations((prev) => [...prev, { ...c, archived: false }])
+      }
+      try {
+        await api('/api/messages/preferences', {
+          method: 'POST',
+          body: JSON.stringify({ peerId: c.id, archived: nextArchived }),
+        })
+        toast.success(nextArchived ? 'Chat archived' : 'Chat unarchived')
+      } catch (e: any) {
+        toast.error(e?.message || 'Failed to update archive')
+        load()
+      }
+    },
+    [load]
+  )
 
   return (
     <div className="flex h-full flex-col">
@@ -410,7 +459,7 @@ function ConversationList() {
                 <ConvRowSkeleton key={i} />
               ))}
             </div>
-          ) : filteredConvs.length === 0 ? (
+          ) : filteredConvs.length === 0 && filteredArchived.length === 0 ? (
             <EmptyState
               icon={<MessageCircle size={36} />}
               title={q ? 'No matching chats' : 'No conversations yet'}
@@ -424,6 +473,7 @@ function ConversationList() {
                   conversation={c}
                   online={isOnline(c.id)}
                   meId={meId}
+                  draftPreview={drafts.get(c.id)}
                   onOpen={() => openChat(c.id)}
                   onTogglePin={async () => {
                     try {
@@ -437,8 +487,53 @@ function ConversationList() {
                       setConversations((prev) => prev.map((x) => (x.id === c.id ? { ...x, muted: !x.muted } : x)))
                     } catch (e: any) { toast.error(e.message) }
                   }}
+                  onToggleArchive={() => handleToggleArchive(c, false)}
                 />
               ))}
+
+              {/* Archived section (collapsed by default) */}
+              {filteredArchived.length > 0 && (
+                <div className="mt-4">
+                  <button
+                    type="button"
+                    onClick={() => setArchivedExpanded((v) => !v)}
+                    className="flex w-full items-center gap-1.5 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground transition hover:text-foreground"
+                    aria-expanded={archivedExpanded}
+                    aria-controls="archived-chats-list"
+                  >
+                    {archivedExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                    Archived ({filteredArchived.length})
+                  </button>
+                  {archivedExpanded && (
+                    <div id="archived-chats-list" className="space-y-0.5">
+                      {filteredArchived.map((c) => (
+                        <ConversationRow
+                          key={c.id}
+                          conversation={c}
+                          online={isOnline(c.id)}
+                          meId={meId}
+                          draftPreview={drafts.get(c.id)}
+                          archived
+                          onOpen={() => openChat(c.id)}
+                          onTogglePin={async () => {
+                            try {
+                              await api('/api/messages/preferences', { method: 'POST', body: JSON.stringify({ peerId: c.id, pinned: !c.pinned }) })
+                              setArchivedConvs((prev) => prev.map((x) => (x.id === c.id ? { ...x, pinned: !x.pinned } : x)))
+                            } catch (e: any) { toast.error(e.message) }
+                          }}
+                          onToggleMute={async () => {
+                            try {
+                              await api('/api/messages/preferences', { method: 'POST', body: JSON.stringify({ peerId: c.id, muted: !c.muted }) })
+                              setArchivedConvs((prev) => prev.map((x) => (x.id === c.id ? { ...x, muted: !x.muted } : x)))
+                            } catch (e: any) { toast.error(e.message) }
+                          }}
+                          onToggleArchive={() => handleToggleArchive(c, true)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </TabsContent>
@@ -473,16 +568,22 @@ function ConversationRow({
   conversation,
   online,
   meId,
+  draftPreview,
+  archived,
   onOpen,
   onTogglePin,
   onToggleMute,
+  onToggleArchive,
 }: {
   conversation: Conversation
   online: boolean
   meId?: string
+  draftPreview?: string
+  archived?: boolean
   onOpen: () => void
   onTogglePin: () => void
   onToggleMute: () => void
+  onToggleArchive: () => void
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const pressTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -510,7 +611,8 @@ function ConversationRow({
         onPointerLeave={cancelPress}
         className={cn(
           'flex w-full items-center gap-3 rounded-xl p-2.5 text-left transition-colors hover:bg-accent/50',
-          pinned && 'bg-primary/5'
+          pinned && 'bg-primary/5',
+          archived && 'opacity-70'
         )}
       >
         <UserAvatar name={conversation.name} src={conversation.photoUrl} size={48} online={online} />
@@ -520,6 +622,7 @@ function ConversationRow({
               <span className="truncate">{conversation.name}</span>
               {pinned && <Pin size={11} className="shrink-0 text-primary" />}
               {muted && <BellOff size={11} className="shrink-0 text-muted-foreground" />}
+              {archived && <Archive size={11} className="shrink-0 text-muted-foreground" />}
             </span>
             {conversation.lastMessage && (
               <span className="shrink-0 text-[10px] text-muted-foreground">
@@ -527,26 +630,47 @@ function ConversationRow({
               </span>
             )}
           </div>
-          <div className="flex items-center justify-between gap-2">
-            <span
-              className={cn(
-                'truncate text-xs',
-                conversation.unread > 0 && !muted ? 'font-medium text-foreground' : 'text-muted-foreground'
+          {draftPreview ? (
+            // Draft indicator takes priority over the last-message preview so
+            // the user sees their unsaved text at a glance.
+            <div className="mt-0.5 flex items-center justify-between gap-2">
+              <span className="flex min-w-0 items-center gap-1 truncate text-xs text-primary">
+                <Pencil size={11} className="shrink-0" />
+                <span className="truncate">Draft: {draftPreview}</span>
+              </span>
+              {conversation.unread > 0 && (
+                <span
+                  className={cn(
+                    'grid h-5 min-w-5 shrink-0 place-items-center rounded-full px-1.5 text-[10px] font-bold',
+                    muted ? 'bg-muted text-muted-foreground' : 'bg-primary text-primary-foreground'
+                  )}
+                >
+                  {conversation.unread > 9 ? '9+' : conversation.unread}
+                </span>
               )}
-            >
-              {lastMessagePreview(conversation, meId)}
-            </span>
-            {conversation.unread > 0 && (
+            </div>
+          ) : (
+            <div className="flex items-center justify-between gap-2">
               <span
                 className={cn(
-                  'grid h-5 min-w-5 shrink-0 place-items-center rounded-full px-1.5 text-[10px] font-bold',
-                  muted ? 'bg-muted text-muted-foreground' : 'bg-primary text-primary-foreground'
+                  'truncate text-xs',
+                  conversation.unread > 0 && !muted ? 'font-medium text-foreground' : 'text-muted-foreground'
                 )}
               >
-                {conversation.unread > 9 ? '9+' : conversation.unread}
+                {lastMessagePreview(conversation, meId)}
               </span>
-            )}
-          </div>
+              {conversation.unread > 0 && (
+                <span
+                  className={cn(
+                    'grid h-5 min-w-5 shrink-0 place-items-center rounded-full px-1.5 text-[10px] font-bold',
+                    muted ? 'bg-muted text-muted-foreground' : 'bg-primary text-primary-foreground'
+                  )}
+                >
+                  {conversation.unread > 9 ? '9+' : conversation.unread}
+                </span>
+              )}
+            </div>
+          )}
         </div>
       </button>
       {menuOpen && (
@@ -564,6 +688,13 @@ function ConversationRow({
               className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-accent"
             >
               {muted ? <Bell size={14} /> : <BellOff size={14} />} {muted ? 'Unmute' : 'Mute notifications'}
+            </button>
+            <button
+              onClick={() => { onToggleArchive(); setMenuOpen(false) }}
+              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm hover:bg-accent"
+            >
+              {archived ? <ArchiveRestore size={14} /> : <Archive size={14} />}
+              {archived ? 'Unarchive' : 'Archive chat'}
             </button>
           </div>
         </>
@@ -657,7 +788,16 @@ function ChatRoom({
   const recordTimerRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const prevHeightRef = useRef(0)
   const skipAutoScrollRef = useRef(false)
+  // Draft auto-save: a ref mirror of `text` so the peerId-change cleanup can
+  // read the *current* text without a stale closure, and a debounce timer.
+  const textRef = useRef('')
+  const draftSaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const meId = me?.id
+
+  // keep textRef in sync with `text` (so cleanup reads the latest typed value)
+  useEffect(() => {
+    textRef.current = text
+  }, [text])
 
   // ---- load history + peer info ----
   useEffect(() => {
@@ -667,6 +807,14 @@ function ChatRoom({
     setHasMore(true)
     setPeerTyping(false)
     setPeerInfo(null)
+    // Reset the input for the new conversation; the draft (if any) is restored
+    // below.
+    setText('')
+    // Cancel any pending draft autosave from the previous conversation.
+    if (draftSaveTimerRef.current) {
+      clearTimeout(draftSaveTimerRef.current)
+      draftSaveTimerRef.current = null
+    }
     oldestTsRef.current = null
     atBottomRef.current = true
 
@@ -692,9 +840,9 @@ function ChatRoom({
                 }
               }
               // fallback to conversations endpoint (peer may not be a friend yet but has messages)
-              return api<{ conversations: Conversation[] }>('/api/messages/conversations')
+              return api<{ conversations: Conversation[]; archived: Conversation[] }>('/api/messages/conversations')
                 .then((d) => {
-                  const c = d.conversations.find((c) => c.id === peerId)
+                  const c = d.conversations.find((c) => c.id === peerId) || d.archived.find((c) => c.id === peerId)
                   return c
                     ? { name: c.name, photoUrl: c.photoUrl, username: c.username, lastSeen: null }
                     : null
@@ -723,8 +871,39 @@ function ChatRoom({
         if (!cancelled) setLoading(false)
       })
 
+    // Restore any saved draft for this peer (so the user picks up where they
+    // left off). isGroup is derived from `mode` for this same conversation.
+    const isGroup = mode === 'group'
+    api<{ draft: { content: string; updatedAt: string } | null }>(
+      `/api/messages/drafts?peerId=${encodeURIComponent(peerId)}&isGroup=${isGroup}`
+    )
+      .then((d) => {
+        if (cancelled) return
+        if (d.draft && d.draft.content) {
+          setText(d.draft.content)
+          toast.success('Draft restored', { duration: 1500 })
+        }
+      })
+      .catch(() => {})
+
     return () => {
       cancelled = true
+      // Save the draft one last time for the conversation we're leaving so it
+      // doesn't get lost. The closure captures the OLD peerId/mode; textRef
+      // holds the latest typed value at the moment of cleanup.
+      const leavingPeerId = peerId
+      const leavingIsGroup = isGroup
+      const content = textRef.current
+      if (draftSaveTimerRef.current) {
+        clearTimeout(draftSaveTimerRef.current)
+        draftSaveTimerRef.current = null
+      }
+      if (content.trim()) {
+        api('/api/messages/drafts', {
+          method: 'POST',
+          body: JSON.stringify({ peerId: leavingPeerId, isGroup: leavingIsGroup, content }),
+        }).catch(() => {})
+      }
     }
   }, [mode, peerId])
 
@@ -1114,6 +1293,16 @@ function ChatRoom({
     if (!content) return
     sendMessage({ content, type: 'text', fileUrl: null, fileName: null, fileSize: null, mimeType: null })
     setText('')
+    // Clear the draft now that the message has been sent (don't leave a
+    // lingering draft behind). Cancel any pending debounce-save first.
+    if (draftSaveTimerRef.current) {
+      clearTimeout(draftSaveTimerRef.current)
+      draftSaveTimerRef.current = null
+    }
+    const isGroup = mode === 'group'
+    api(`/api/messages/drafts?peerId=${encodeURIComponent(peerId)}&isGroup=${isGroup}`, {
+      method: 'DELETE',
+    }).catch(() => {})
     if (socket && mode === 'direct') {
       socket.emit(RT.TYPING, { receiverId: peerId, isTyping: false })
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current)
@@ -1198,6 +1387,12 @@ function ChatRoom({
     return () => {
       if (recordStreamRef.current) recordStreamRef.current.getTracks().forEach((t) => t.stop())
       if (recordTimerRef.current) clearInterval(recordTimerRef.current)
+      // Cancel any pending draft debounce-save on unmount; the peerId-change
+      // cleanup already saves the final draft for the active conversation.
+      if (draftSaveTimerRef.current) {
+        clearTimeout(draftSaveTimerRef.current)
+        draftSaveTimerRef.current = null
+      }
     }
   }, [])
 
@@ -1228,7 +1423,8 @@ function ChatRoom({
 
   // ---- typing ----
   const handleTextInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setText(e.target.value)
+    const value = e.target.value
+    setText(value)
     if (socket && mode === 'direct') {
       socket.emit(RT.TYPING, { receiverId: peerId, isTyping: true })
       if (typingTimerRef.current) clearTimeout(typingTimerRef.current)
@@ -1236,6 +1432,18 @@ function ChatRoom({
         socket.emit(RT.TYPING, { receiverId: peerId, isTyping: false })
       }, 1500)
     }
+    // Debounced draft auto-save (500ms idle). The backend deletes empty
+    // drafts so we still POST when the user clears the field — this keeps
+    // the conversation list "Draft: …" indicator in sync.
+    if (draftSaveTimerRef.current) clearTimeout(draftSaveTimerRef.current)
+    draftSaveTimerRef.current = setTimeout(() => {
+      draftSaveTimerRef.current = null
+      const isGroup = mode === 'group'
+      api('/api/messages/drafts', {
+        method: 'POST',
+        body: JSON.stringify({ peerId, isGroup, content: value }),
+      }).catch(() => {})
+    }, 500)
   }
 
   const handleKey = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
