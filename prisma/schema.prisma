@@ -184,13 +184,20 @@ model Call {
   receiverId String?
   groupId    String?
   type       String    @default("audio") // audio | video
-  status     String    @default("ringing") // ringing | connected | ended | missed | declined
+  status     String    @default("ringing") // ringing | connected | ended | missed | declined | busy | failed | cancelled | timeout
   startedAt  DateTime  @default(now())
   endedAt    DateTime?
   duration   Int?
+  // Additive (round 13): call tracking for diagnostics + history
+  answeredAt DateTime?
+  failureReason String?  // e.g. "ice_failed", "timeout", "rejected"
+  connectionType String? // "p2p" | "turn" | "stun" (best-guess from ICE candidate stats)
 
   caller   User   @relation("CallCaller", fields: [callerId], references: [id], onDelete: Cascade)
   receiver User?  @relation("CallReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@index([callerId])
+  @@index([receiverId])
 }
 
 model Notification {

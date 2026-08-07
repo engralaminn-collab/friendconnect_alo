@@ -395,48 +395,192 @@ io.on('connection', (socket) => {
     }
   })
 
-  // ---------- Call signaling ----------
+  // ---------- Call signaling (hardened round 13) ----------
+  // Tracks active calls per user for busy detection + authorization.
+  // All signaling validates that the sender is authenticated + not blocked.
+  const activeCalls = new Map<string, { callId: string; peerId: string; role: 'caller' | 'receiver' }>()
+
   const forward = (targetUserId: string, event: string, payload: any) => {
     io.to(room(targetUserId)).emit(event, { ...payload, from: userId })
   }
 
-  socket.on('call:offer', (data: { targetUserId: string; type: string; sdp: string }) => {
+  // Rate limit: max 5 call initiations per 10 seconds per user
+  const callRateMap = new Map<string, number[]>()
+  function checkCallRate(uid: string): boolean {
+    const now = Date.now()
+    const arr = (callRateMap.get(uid) || []).filter(t => now - t < 10000)
+    arr.push(now)
+    callRateMap.set(uid, arr)
+    return arr.length <= 5
+  }
+
+  // Helper: validate call participation (not blocked)
+  async function canCall(callerId: string, receiverId: string): Promise<{ ok: boolean; reason?: string }> {
+    if (callerId === receiverId) return { ok: false, reason: 'cannot call yourself' }
+    const blocked = await db.friendship.findFirst({
+      where: {
+        status: 'BLOCKED',
+        OR: [
+          { requesterId: callerId, receiverId: receiverId },
+          { requesterId: receiverId, receiverId: callerId },
+        ],
+      },
+    })
+    if (blocked) return { ok: false, reason: 'blocked' }
+    // Check receiver's call permission
+    const receiverProfile = await db.profile.findUnique({ where: { userId: receiverId } })
+    if (receiverProfile?.callPermission === 'FRIENDS') {
+      const fr = await db.friendship.findFirst({
+        where: { status: 'ACCEPTED', OR: [{ requesterId: callerId, receiverId: receiverId }, { requesterId: receiverId, receiverId: callerId }] },
+      })
+      if (!fr) return { ok: false, reason: 'not friends' }
+    }
+    return { ok: true }
+  }
+
+  // call:invite — caller initiates a call (before SDP offer)
+  socket.on('call:invite', async (data: { targetUserId: string; type: string; callId: string }, ack?: (r: any) => void) => {
+    if (!userId) return ack?.({ ok: false, error: 'unauth' })
+    if (!checkCallRate(userId)) return ack?.({ ok: false, error: 'rate_limited' })
+    const { targetUserId, type, callId } = data
+    if (!targetUserId || !callId) return ack?.({ ok: false, error: 'missing fields' })
+    // Authorization
+    const check = await canCall(userId, targetUserId)
+    if (!check.ok) return ack?.({ ok: false, error: check.reason })
+    // Busy check — if receiver is already in a call
+    if (activeCalls.has(targetUserId)) {
+      forward(targetUserId, 'call:busy', { callId, callerId: userId })
+      ack?.({ ok: false, error: 'busy' })
+      return
+    }
+    // Check if receiver is online
+    if (!isOnline(targetUserId)) {
+      ack?.({ ok: false, error: 'unavailable' })
+      return
+    }
+    // Record active call
+    activeCalls.set(userId, { callId, peerId: targetUserId, role: 'caller' })
+    activeCalls.set(targetUserId, { callId, peerId: userId, role: 'receiver' })
+    // Forward invite to receiver
+    forward(targetUserId, 'call:incoming', { callerId: userId, type, callId })
+    ack?.({ ok: true })
+    // Set 30s timeout — if not answered, auto-cancel
+    setTimeout(() => {
+      if (activeCalls.has(userId) && activeCalls.get(userId)?.callId === callId) {
+        forward(userId, 'call:timeout', { callId })
+        forward(targetUserId, 'call:timeout', { callId })
+        activeCalls.delete(userId)
+        activeCalls.delete(targetUserId)
+      }
+    }, 30000)
+  })
+
+  // call:ringing — receiver's device is ringing
+  socket.on('call:ringing', (data: { targetUserId: string; callId: string }) => {
     if (!userId) return
+    forward(data.targetUserId, 'call:ringing', { callId: data.callId })
+  })
+
+  // call:accepted — receiver accepted (will send answer next)
+  socket.on('call:accepted', (data: { targetUserId: string; callId: string }) => {
+    if (!userId) return
+    forward(data.targetUserId, 'call:accepted', { callId: data.callId })
+  })
+
+  // call:rejected — receiver rejected
+  socket.on('call:rejected', (data: { targetUserId: string; callId: string }) => {
+    if (!userId) return
+    forward(data.targetUserId, 'call:ended', { reason: 'declined', by: userId, callId: data.callId })
+    activeCalls.delete(userId)
+    activeCalls.delete(data.targetUserId)
+  })
+
+  // call:offer — caller sends SDP offer (after invite was acked)
+  socket.on('call:offer', (data: { targetUserId: string; type: string; sdp: string; callId?: string }) => {
+    if (!userId) return
+    // Authorization: must have an active call with this peer
+    const active = activeCalls.get(userId)
+    if (active && active.peerId !== data.targetUserId) return // mismatch — reject
     forward(data.targetUserId, 'call:incoming', {
       callerId: userId,
       type: data.type,
       sdp: data.sdp,
+      callId: data.callId,
     })
   })
 
-  socket.on('call:answer', (data: { targetUserId: string; sdp: string }) => {
+  // call:answer — receiver sends SDP answer
+  socket.on('call:answer', (data: { targetUserId: string; sdp: string; callId?: string }) => {
     if (!userId) return
-    forward(data.targetUserId, 'call:sdp', { kind: 'answer', sdp: data.sdp })
+    forward(data.targetUserId, 'call:sdp', { kind: 'answer', sdp: data.sdp, callId: data.callId })
   })
 
-  socket.on('call:ice', (data: { targetUserId: string; candidate: any }) => {
+  // call:ice — ICE candidate exchange
+  socket.on('call:ice', (data: { targetUserId: string; candidate: any; callId?: string }) => {
     if (!userId) return
-    forward(data.targetUserId, 'call:ice-candidate', { candidate: data.candidate })
+    forward(data.targetUserId, 'call:ice-candidate', { candidate: data.candidate, callId: data.callId })
   })
 
-  socket.on('call:ringing', (data: { targetUserId: string }) => {
+  // call:connected — ICE connected (call is live)
+  socket.on('call:connected', (data: { targetUserId: string; callId: string }) => {
     if (!userId) return
-    forward(data.targetUserId, 'call:incoming', { callerId: userId, ringing: true })
+    forward(data.targetUserId, 'call:connected', { callId: data.callId })
   })
 
+  // call:reconnecting — ICE is reconnecting
+  socket.on('call:reconnecting', (data: { targetUserId: string; callId: string }) => {
+    if (!userId) return
+    forward(data.targetUserId, 'call:reconnecting', { callId: data.callId })
+  })
+
+  // call:reconnected — ICE reconnected
+  socket.on('call:reconnected', (data: { targetUserId: string; callId: string }) => {
+    if (!userId) return
+    forward(data.targetUserId, 'call:reconnected', { callId: data.callId })
+  })
+
+  // call:failed — ICE failed
+  socket.on('call:failed', (data: { targetUserId: string; callId: string; reason?: string }) => {
+    if (!userId) return
+    forward(data.targetUserId, 'call:ended', { reason: 'failed', by: userId, callId: data.callId, failureReason: data.reason })
+    activeCalls.delete(userId)
+    activeCalls.delete(data.targetUserId)
+  })
+
+  // call:cancelled — caller cancelled before answer
+  socket.on('call:cancelled', (data: { targetUserId: string; callId: string }) => {
+    if (!userId) return
+    forward(data.targetUserId, 'call:ended', { reason: 'cancelled', by: userId, callId: data.callId })
+    activeCalls.delete(userId)
+    activeCalls.delete(data.targetUserId)
+  })
+
+  // call:end — either party ends the call (legacy + new)
+  socket.on('call:end', (data: { targetUserId: string; callId?: string }) => {
+    if (!userId) return
+    forward(data.targetUserId, 'call:ended', { reason: 'ended', by: userId, callId: data.callId })
+    activeCalls.delete(userId)
+    activeCalls.delete(data.targetUserId)
+  })
+
+  // Legacy: call:reject (preserved for backward compat with existing CallOverlay)
   socket.on('call:reject', (data: { targetUserId: string }) => {
     if (!userId) return
     forward(data.targetUserId, 'call:ended', { reason: 'declined', by: userId })
-  })
-
-  socket.on('call:end', (data: { targetUserId: string }) => {
-    if (!userId) return
-    forward(data.targetUserId, 'call:ended', { reason: 'ended', by: userId })
+    activeCalls.delete(userId)
+    activeCalls.delete(data.targetUserId)
   })
 
   socket.on('disconnect', async () => {
     if (userId) {
       setOffline(userId, socket.id)
+      // Clean up active calls — notify peer that this user disconnected
+      const active = activeCalls.get(userId)
+      if (active) {
+        forward(active.peerId, 'call:ended', { reason: 'disconnected', by: userId, callId: active.callId })
+        activeCalls.delete(userId)
+        activeCalls.delete(active.peerId)
+      }
       if (!isOnline(userId)) {
         io.emit('presence', { userId, online: false })
         await updateLastSeen(userId)

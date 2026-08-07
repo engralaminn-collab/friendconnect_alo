@@ -56,5 +56,20 @@ module.exports = {
       error_file: './logs/worker-error.log',
       kill_timeout: 10000, // Workers need more time to finish jobs
     },
+    {
+      name: 'friendconnect-turn',
+      script: 'turnserver',
+      args: '-c /etc/turnserver.conf --no-cli',
+      cwd: '/',
+      interpreter: 'none',
+      env: {},
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      out_file: '/var/log/turnserver-pm2.log',
+      error_file: '/var/log/turnserver-pm2-error.log',
+      kill_timeout: 3000,
+      // Only starts if coturn is installed; PM2 will retry on failure
+    },
   ],
 }
