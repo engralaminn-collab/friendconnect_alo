@@ -1,38 +1,30 @@
-# FriendConnect
+# FriendConnect Android client
 
-A private friend communication app built with Flutter and Firebase.
+This Flutter source tree is the Android companion to the React/Firebase web app at the repository root. It uses the same Firebase Authentication, Firestore collections, Storage paths, and security rules.
 
-## Setup Instructions
+## Setup
 
-1. Ensure you have the Flutter SDK installed on your machine.
-2. Ensure you have the Firebase CLI installed and configured.
-3. Replace the placeholder values in `lib/firebase_options.dart` with your actual Firebase project configuration, or simply run:
-   ```bash
-   flutterfire configure --project=friendconnect-2ca91
-   ```
-4. Place your `google-services.json` in the `android/app/` directory (you will need to generate the Android scaffolding first using `flutter create .` if not present, though this directory acts as your dart source code core).
+1. Install Flutter and configure the Firebase project with FlutterFire (`flutterfire configure --project=friendconnect-2ca91`).
+2. Put the Android Firebase configuration in the generated Android app scaffold when preparing a device build.
+3. Enable Email/Password Authentication, Firestore, and Storage in Firebase Console.
+4. Provision each account from the admin/Firebase Console; public registration is disabled for this private circle.
 
-## Build Instructions
+Fetch dependencies and run:
 
-To fetch dependencies:
 ```bash
 flutter pub get
-```
-
-To run the application on an emulator or connected device:
-```bash
 flutter run
 ```
 
-To build the release APK for Android:
+## Calls
+
+WebRTC uses public STUN servers by default. Networks with strict NAT/firewall rules may need a TURN relay. Supply relay settings at build time:
+
 ```bash
-flutter build apk --release
+flutter run \
+  --dart-define=TURN_URL=turn:relay.example.com:3478 \
+  --dart-define=TURN_USERNAME=your-username \
+  --dart-define=TURN_PASSWORD=your-secret
 ```
 
-The output will be located at `build/app/outputs/flutter-apk/app-release.apk` which you can rename to `friendconnect.apk`.
-
-## Features
-- User Authentication (Login, Register)
-- Real-time Firestore Database Integration
-- Clean Architecture implementation
-- Riverpod State Management
+The shared Firestore/Storage rule files are copied here as `firestore.rules` and `storage.rules`. Keep them in sync with the repository root when changing the data model.

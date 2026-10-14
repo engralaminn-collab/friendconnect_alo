@@ -1,70 +1,56 @@
-import React, { useEffect } from 'react';
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import React, { Suspense, lazy, useEffect } from 'react';
+import { signOut } from 'firebase/auth';
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from 'react-router-dom';
+import { auth } from './firebase/config';
 import { useAuthStore } from './core/store/authStore';
-
 import Login from './features/auth/Login';
-import Layout from './components/ui/Layout';
-import ChatList from './features/chat/ChatList';
-import ChatScreen from './features/chat/ChatScreen';
-import FriendList from './features/friends/FriendList';
-import Profile from './features/profile/Profile';
-import AdminPanel from './features/admin/AdminPanel';
 
-function ProtectedRoute({ children, adminOnly = false }: { children: React.ReactNode, adminOnly?: boolean }) {
+const MessengerApp = lazy(() => import('./features/messenger/MessengerApp'));
+const SelfHostedApp = lazy(() => import('./features/self-hosted/SelfHostedApp'));
+const AppLoading = () => <div className="auth-loading"><span className="spinner" /><span>Opening your private circle…</span></div>;
+
+function ProtectedRoute({ children }: { children: React.ReactNode }) {
   const { firebaseUser, userProfile, loading } = useAuthStore();
+  const inactiveAccount = Boolean(firebaseUser && !loading && (!userProfile?.isActive || userProfile.approved === false));
+
+  useEffect(() => {
+    if (inactiveAccount) void signOut(auth).catch(() => undefined);
+  }, [inactiveAccount]);
 
   if (loading) {
-    return (
-      <div className="flex h-screen items-center justify-center bg-gray-50">
-        <p className="text-gray-500">Loading...</p>
-      </div>
-    );
+    return <div className="auth-loading"><span className="spinner" /><span>Opening your private circle…</span></div>;
   }
 
-  if (!firebaseUser) {
-    return <Navigate to="/login" replace />;
-  }
-
-  if (!userProfile?.isActive || userProfile?.approved === false) {
-    return <Navigate to="/login?blocked=1" replace />;
-  }
-
-  if (adminOnly && userProfile?.role !== 'admin') {
-    return <Navigate to="/" replace />;
-  }
-
+  if (!firebaseUser) return <Navigate to="/login" replace />;
+  if (!userProfile?.isActive || userProfile.approved === false) return <Navigate to="/login?blocked=1" replace />;
   return <>{children}</>;
 }
 
-export default function App() {
-  const { initializeAuth } = useAuthStore();
+function AppRoutes() {
+  const initializeAuth = useAuthStore(state => state.initializeAuth);
+  const location = useLocation();
+  const selfHostedRoute = location.pathname === '/self-hosted' || location.pathname.startsWith('/self-hosted/');
 
   useEffect(() => {
-    initializeAuth();
-  }, [initializeAuth]);
+    if (selfHostedRoute) return undefined;
+    return initializeAuth();
+  }, [initializeAuth, selfHostedRoute]);
 
   return (
+    <Routes>
+      <Route path="/login" element={<Login />} />
+      <Route path="/register" element={<Navigate to="/login" replace />} />
+      <Route path="/self-hosted/*" element={<Suspense fallback={<AppLoading />}><SelfHostedApp /></Suspense>} />
+      <Route path="/demo" element={<Suspense fallback={<AppLoading />}><MessengerApp mode="demo" /></Suspense>} />
+      <Route path="*" element={<ProtectedRoute><Suspense fallback={<AppLoading />}><MessengerApp mode="live" /></Suspense></ProtectedRoute>} />
+    </Routes>
+  );
+}
+
+export default function App() {
+  return (
     <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Navigate to="/login" replace />} />
-        
-        <Route path="/" element={
-          <ProtectedRoute>
-            <Layout />
-          </ProtectedRoute>
-        }>
-          <Route index element={<ChatList />} />
-          <Route path="chat/:id" element={<ChatScreen />} />
-          <Route path="friends" element={<FriendList />} />
-          <Route path="profile" element={<Profile />} />
-          <Route path="admin" element={
-            <ProtectedRoute adminOnly>
-              <AdminPanel />
-            </ProtectedRoute>
-          } />
-        </Route>
-      </Routes>
+      <AppRoutes />
     </BrowserRouter>
   );
 }

@@ -61,26 +61,26 @@ class FriendService {
   Future<void> acceptRequest(String requestId, String senderId) async {
     final receiverId = _auth.currentUser!.uid;
     
-    WriteBatch batch = _firestore.batch();
-    
-    // Update request
-    batch.update(_firestore.collection('friendRequests').doc(requestId), {
+    // Mark the request first so Firestore rules can verify the accepted relationship
+    // when both stable friend links are written immediately after it.
+    await _firestore.collection('friendRequests').doc(requestId).update({
       'status': 'accepted',
     });
-    
-    // Add to friends collection
-    final friendDoc1 = _firestore.collection('friends').doc();
+
+    final createdAt = DateTime.now().millisecondsSinceEpoch;
+    final batch = _firestore.batch();
+    final friendDoc1 = _firestore.collection('friends').doc('${receiverId}_$senderId');
     batch.set(friendDoc1, {
       'userId': receiverId,
       'friendId': senderId,
-      'createdAt': DateTime.now().millisecondsSinceEpoch,
+      'createdAt': createdAt,
     });
 
-    final friendDoc2 = _firestore.collection('friends').doc();
+    final friendDoc2 = _firestore.collection('friends').doc('${senderId}_$receiverId');
     batch.set(friendDoc2, {
       'userId': senderId,
       'friendId': receiverId,
-      'createdAt': DateTime.now().millisecondsSinceEpoch,
+      'createdAt': createdAt,
     });
 
     await batch.commit();

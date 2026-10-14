@@ -35,7 +35,7 @@ class WebRTCService {
       callerId: callerId,
       receiverId: receiverId,
       type: isVideo ? 'video' : 'audio',
-      status: 'calling',
+      status: 'preparing',
       createdAt: DateTime.now().millisecondsSinceEpoch,
     );
 
@@ -60,7 +60,8 @@ class WebRTCService {
       'offer': {
         'type': offer.type,
         'sdp': offer.sdp,
-      }
+      },
+      'status': 'calling',
     });
 
     // Listen for Answer

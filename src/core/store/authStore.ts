@@ -10,7 +10,7 @@ interface AuthState {
   loading: boolean;
   setUser: (user: FirebaseUser | null) => void;
   setProfile: (profile: User | null) => void;
-  initializeAuth: () => void;
+  initializeAuth: () => () => void;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
@@ -19,21 +19,24 @@ export const useAuthStore = create<AuthState>((set) => ({
   loading: true,
   setUser: (user) => set({ firebaseUser: user }),
   setProfile: (profile) => set({ userProfile: profile }),
-  initializeAuth: () => {
-    onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        set({ firebaseUser: user });
-        const docRef = doc(db, 'users', user.uid);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          set({ userProfile: docSnap.data() as User });
-          // Update online status
-          await updateDoc(docRef, { onlineStatus: true, lastSeen: Date.now() });
-        }
-      } else {
-        set({ firebaseUser: null, userProfile: null });
+  initializeAuth: () => onAuthStateChanged(auth, async (user) => {
+    set({ firebaseUser: user, loading: true });
+    if (!user) {
+      set({ userProfile: null, loading: false });
+      return;
+    }
+
+    const docRef = doc(db, 'users', user.uid);
+    try {
+      const docSnap = await getDoc(docRef);
+      set({ userProfile: docSnap.exists() ? docSnap.data() as User : null });
+      if (docSnap.exists()) {
+        await updateDoc(docRef, { onlineStatus: true, lastSeen: Date.now() }).catch(() => undefined);
       }
+    } catch {
+      set({ userProfile: null });
+    } finally {
       set({ loading: false });
-    });
-  }
+    }
+  })
 }));

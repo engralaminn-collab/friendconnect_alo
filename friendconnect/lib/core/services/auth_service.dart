@@ -29,48 +29,25 @@ class AuthService {
       );
       
       if (result.user != null) {
-        DocumentSnapshot doc = await _firestore.collection('users').doc(result.user!.uid).get().catchError((e) {
-          return _firestore.collection('users').doc(result.user!.uid).get(const GetOptions(source: Source.cache));
+        final userRef = _firestore.collection('users').doc(result.user!.uid);
+        final userDoc = await userRef.get().catchError((_) {
+          return userRef.get(const GetOptions(source: Source.cache));
         });
-        if (doc.exists) {
-           await _firestore.collection('users').doc(result.user!.uid).update({
-             'onlineStatus': true,
-             'lastSeen': DateTime.now().millisecondsSinceEpoch,
-           });
-           return UserModel.fromMap(doc.data() as Map<String, dynamic>, doc.id);
+        if (userDoc.exists) {
+          final profile = UserModel.fromMap(userDoc.data() as Map<String, dynamic>, userDoc.id);
+          if (!profile.isActive || !profile.approved) {
+            await _auth.signOut();
+            throw Exception('This account is not active or approved yet. Please contact your admin.');
+          }
+          await userRef.update({
+            'onlineStatus': true,
+            'lastSeen': DateTime.now().millisecondsSinceEpoch,
+          }).catchError((_) {});
+          return profile;
         }
       }
-      return null;
-    } catch (e) {
-      rethrow;
-    }
-  }
-
-  Future<UserModel?> register(String name, String username, String email, String password) async {
-    try {
-      UserCredential result = await _auth.createUserWithEmailAndPassword(
-        email: email,
-        password: password,
-      );
-      
-      if (result.user != null) {
-        final userModel = UserModel(
-          uid: result.user!.uid,
-          name: name,
-          username: username,
-          email: email,
-          onlineStatus: true,
-          lastSeen: DateTime.now().millisecondsSinceEpoch,
-          createdAt: DateTime.now().millisecondsSinceEpoch,
-          isActive: true,
-          role: 'user',
-          profileVisibility: 'public',
-        );
-
-        await _firestore.collection('users').doc(result.user!.uid).set(userModel.toMap());
-        return userModel;
-      }
-      return null;
+      await _auth.signOut();
+      throw Exception('This account has not been added to the private circle yet. Please contact your admin.');
     } catch (e) {
       rethrow;
     }

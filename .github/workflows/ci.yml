@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'arena/**']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: Type-check, build, tests, and dependency audit
+    # This custom label must be assigned only to a dedicated, unprivileged CI runner.
+    # Do not run pull-request code on the production deployment runner.
+    runs-on: [self-hosted, linux, x64, friendconnect-ci]
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install web dependencies from lockfile
+        run: npm ci --no-audit --no-fund
+      - name: Type-check
+        run: npm run lint
+      - name: Build web client
+        run: npm run build
+      - name: Audit web dependencies
+        run: npm audit --audit-level=low
+      - name: Install API dependencies from lockfile
+        run: npm ci --no-audit --no-fund
+        working-directory: server
+      - name: Check API and tests
+        run: npm run check
+        working-directory: server
+      - name: Audit API dependencies
+        run: npm audit --audit-level=low
+        working-directory: server
+      - name: Check deployment scripts and safe extractor syntax
+        run: |
+          bash -n server/scripts/backup.sh server/scripts/restore.sh
+          python3 -m py_compile server/scripts/safe_extract.py

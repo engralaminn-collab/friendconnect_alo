@@ -1,23 +1,38 @@
 rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
-    
-    function isAuthenticated() {
+    function signedIn() {
       return request.auth != null;
     }
 
-    function isChatParticipant(chatId) {
-      return request.auth.uid in firestore.get(/databases/(default)/documents/chats/$(chatId)).data.participants;
+    function activeMember() {
+      let userPath = /databases/(default)/documents/users/$(request.auth.uid);
+      return signedIn()
+        && firestore.exists(userPath)
+        && firestore.get(userPath).data.isActive == true
+        && (!firestore.get(userPath).data.keys().hasAny(['approved'])
+          || firestore.get(userPath).data.approved == true);
+    }
+
+    function chatParticipant(chatId) {
+      let chatPath = /databases/(default)/documents/chats/$(chatId);
+      return activeMember()
+        && firestore.exists(chatPath)
+        && request.auth.uid in firestore.get(chatPath).data.participants;
     }
 
     match /users/{userId}/{allPaths=**} {
-      allow read: if isAuthenticated();
-      allow write: if isAuthenticated() && request.auth.uid == userId;
+      allow read: if activeMember();
+      allow write: if activeMember()
+        && request.auth.uid == userId
+        && request.resource.size < 8 * 1024 * 1024;
     }
 
     match /chat/{chatId}/{allPaths=**} {
-      allow read: if isAuthenticated() && isChatParticipant(chatId);
-      allow write: if isAuthenticated() && isChatParticipant(chatId) && request.resource.size < 50 * 1024 * 1024;
+      allow read: if chatParticipant(chatId);
+      allow write: if chatParticipant(chatId)
+        && request.resource.size < 50 * 1024 * 1024
+        && request.resource.contentType.matches('image/.*|video/.*|audio/.*|application/pdf|application/msword|application/vnd.openxmlformats-officedocument.*|text/.*|application/zip|application/octet-stream');
     }
 
     match /{allPaths=**} {

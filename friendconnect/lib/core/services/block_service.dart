@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -32,15 +33,28 @@ class BlockService {
 
   Stream<bool> isBlocked(String otherUserId) {
     final currentUserId = _auth.currentUser!.uid;
-    return _firestore.collection('blocks').snapshots().map((snapshot) {
-      for (var doc in snapshot.docs) {
-        final data = doc.data();
-        if ((data['blockerId'] == currentUserId && data['blockedId'] == otherUserId) ||
-            (data['blockerId'] == otherUserId && data['blockedId'] == currentUserId)) {
-          return true;
-        }
+    final controller = StreamController<bool>();
+    final blockedState = [false, false];
+    final subscriptions = <StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>>[];
+    final references = [
+      _firestore.collection('blocks').doc('${currentUserId}_$otherUserId'),
+      _firestore.collection('blocks').doc('${otherUserId}_$currentUserId'),
+    ];
+
+    controller.onListen = () {
+      for (var index = 0; index < references.length; index++) {
+        final position = index;
+        subscriptions.add(references[index].snapshots().listen((snapshot) {
+          blockedState[position] = snapshot.exists;
+          if (!controller.isClosed) controller.add(blockedState.any((blocked) => blocked));
+        }, onError: controller.addError));
       }
-      return false;
-    });
+    };
+    controller.onCancel = () async {
+      for (final subscription in subscriptions) {
+        await subscription.cancel();
+      }
+    };
+    return controller.stream;
   }
 }

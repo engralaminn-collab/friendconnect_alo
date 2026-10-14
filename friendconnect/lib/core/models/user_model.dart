@@ -10,6 +10,7 @@ class UserModel {
   final int lastSeen;
   final int createdAt;
   final bool isActive;
+  final bool approved;
   final String role;
   final String profileVisibility;
 
@@ -25,6 +26,7 @@ class UserModel {
     required this.lastSeen,
     required this.createdAt,
     required this.isActive,
+    this.approved = true,
     required this.role,
     required this.profileVisibility,
   });
@@ -42,6 +44,7 @@ class UserModel {
       lastSeen: map['lastSeen'] ?? 0,
       createdAt: map['createdAt'] ?? 0,
       isActive: map['isActive'] ?? true,
+      approved: map['approved'] ?? true,
       role: map['role'] ?? 'user',
       profileVisibility: map['profileVisibility'] ?? 'public',
     );
@@ -59,6 +62,7 @@ class UserModel {
       'lastSeen': lastSeen,
       'createdAt': createdAt,
       'isActive': isActive,
+      'approved': approved,
       'role': role,
       'profileVisibility': profileVisibility,
     };

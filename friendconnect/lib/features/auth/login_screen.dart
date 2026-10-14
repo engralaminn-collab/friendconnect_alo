@@ -1,7 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/services/auth_service.dart';
-import 'register_screen.dart';
 import 'forgot_password_screen.dart';
 import '../home/home_screen.dart';
 
@@ -73,11 +72,13 @@ class _LoginScreenState extends ConsumerState<LoginScreen> {
                 style: ElevatedButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 16)),
                 child: _isLoading ? const CircularProgressIndicator() : const Text('Login'),
               ),
-              TextButton(
-                onPressed: () {
-                  Navigator.push(context, MaterialPageRoute(builder: (_) => const RegisterScreen()));
-                },
-                child: const Text('Create new account'),
+              const Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: Text(
+                  'This is a private circle. Ask your admin for an account.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey, fontSize: 12),
+                ),
               ),
               TextButton(
                 onPressed: () {

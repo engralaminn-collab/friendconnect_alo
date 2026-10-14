@@ -1,5 +1,5 @@
 export type Role = "user" | "admin";
-export type ProfileVisibility = "private" | "hidden";
+export type ProfileVisibility = "private" | "hidden" | "public";
 
 export interface User {
   uid: string;

@@ -1,83 +1,209 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    function isAuthenticated() {
+    function signedIn() {
       return request.auth != null;
     }
-    
-    function isOwner(userId) {
-      return isAuthenticated() && request.auth.uid == userId;
+
+    function userPath(userId) {
+      return /databases/$(database)/documents/users/$(userId);
     }
 
-    function isAdmin() {
-      return isAuthenticated() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'admin';
+    function activeMember() {
+      return signedIn()
+        && exists(userPath(request.auth.uid))
+        && get(userPath(request.auth.uid)).data.isActive == true
+        && (!get(userPath(request.auth.uid)).data.keys().hasAny(['approved'])
+          || get(userPath(request.auth.uid)).data.approved == true);
     }
 
-    function isBlocked(user1, user2) {
-      let b1 = exists(/databases/$(database)/documents/blocks/$(user1 + '_' + user2));
-      let b2 = exists(/databases/$(database)/documents/blocks/$(user2 + '_' + user1));
-      return b1 || b2;
+    function admin() {
+      return activeMember()
+        && get(userPath(request.auth.uid)).data.role == 'admin';
     }
 
-    // Users Collection
+    function acceptedFriendRequest(userA, userB) {
+      return (exists(/databases/$(database)/documents/friendRequests/$(userA + '_' + userB))
+          && get(/databases/$(database)/documents/friendRequests/$(userA + '_' + userB)).data.status == 'accepted')
+        || (exists(/databases/$(database)/documents/friendRequests/$(userB + '_' + userA))
+          && get(/databases/$(database)/documents/friendRequests/$(userB + '_' + userA)).data.status == 'accepted');
+    }
+
+    function friendRelation(userA, userB) {
+      return exists(/databases/$(database)/documents/friends/$(userA + '_' + userB))
+        || exists(/databases/$(database)/documents/friends/$(userB + '_' + userA))
+        || acceptedFriendRequest(userA, userB);
+    }
+
+    function isBlocked(userA, userB) {
+      return exists(/databases/$(database)/documents/blocks/$(userA + '_' + userB))
+        || exists(/databases/$(database)/documents/blocks/$(userB + '_' + userA));
+    }
+
+    function isChatParticipant(chatId) {
+      return activeMember()
+        && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
+    }
+
+    function isCallParticipant(callId) {
+      let call = get(/databases/$(database)/documents/calls/$(callId)).data;
+      return activeMember() && (call.callerId == request.auth.uid || call.receiverId == request.auth.uid);
+    }
+
     match /users/{userId} {
-      allow read: if isAuthenticated();
-      allow create: if isOwner(userId);
-      allow update: if isOwner(userId) || isAdmin();
-      allow delete: if isAdmin();
+      // This directory is limited to active, approved members of the invite-only circle.
+      allow read: if (signedIn() && request.auth.uid == userId) || activeMember();
+      // Provision account documents through the administrator/Firebase Console only.
+      allow create: if admin();
+      allow update: if admin() || (activeMember()
+        && request.auth.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'username', 'phone', 'photoUrl', 'bio', 'onlineStatus', 'lastSeen', 'profileVisibility'
+        ]));
+      allow delete: if admin();
     }
 
-    // Friends Collection
-    match /friends/{docId} {
-      allow read: if isAuthenticated() && (resource.data.userId == request.auth.uid || resource.data.friendId == request.auth.uid);
-      allow create: if isAuthenticated() && (request.resource.data.userId == request.auth.uid || request.resource.data.friendId == request.auth.uid);
-      allow delete: if isAuthenticated();
-    }
-
-    // Friend Requests Collection
     match /friendRequests/{requestId} {
-      allow read: if isAuthenticated() && (resource.data.senderId == request.auth.uid || resource.data.receiverId == request.auth.uid);
-      allow create: if isAuthenticated() && request.resource.data.senderId == request.auth.uid && !isBlocked(request.resource.data.senderId, request.resource.data.receiverId);
-      allow update, delete: if isAuthenticated() && (resource.data.senderId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+      allow read: if activeMember()
+        && (resource.data.senderId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+      allow create: if activeMember()
+        && requestId == request.resource.data.senderId + '_' + request.resource.data.receiverId
+        && request.resource.data.senderId == request.auth.uid
+        && request.resource.data.receiverId != request.auth.uid
+        && request.resource.data.status == 'pending'
+        && exists(userPath(request.resource.data.receiverId))
+        && get(userPath(request.resource.data.receiverId)).data.isActive == true
+        && !isBlocked(request.resource.data.senderId, request.resource.data.receiverId);
+      allow update: if activeMember() && (
+        (resource.data.receiverId == request.auth.uid
+          && resource.data.status == 'pending'
+          && request.resource.data.senderId == resource.data.senderId
+          && request.resource.data.receiverId == resource.data.receiverId
+          && request.resource.data.status in ['accepted', 'rejected']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']))
+        || (resource.data.senderId == request.auth.uid
+          && resource.data.status in ['rejected', 'pending']
+          && request.resource.data.status == 'pending'
+          && request.resource.data.senderId == resource.data.senderId
+          && request.resource.data.receiverId == resource.data.receiverId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'createdAt']))
+      );
+      allow delete: if activeMember() && resource.data.senderId == request.auth.uid && resource.data.status == 'pending';
     }
 
-    // Chats Collection
+    match /friends/{friendDocId} {
+      allow read: if activeMember()
+        && (resource.data.userId == request.auth.uid || resource.data.friendId == request.auth.uid);
+      allow create: if activeMember()
+        && request.resource.data.userId != request.resource.data.friendId
+        && (request.resource.data.userId == request.auth.uid || request.resource.data.friendId == request.auth.uid)
+        && acceptedFriendRequest(request.resource.data.userId, request.resource.data.friendId);
+      allow update: if false;
+      allow delete: if activeMember()
+        && (resource.data.userId == request.auth.uid || resource.data.friendId == request.auth.uid);
+    }
+
     match /chats/{chatId} {
-      allow read: if isAuthenticated() && request.auth.uid in resource.data.participants;
-      allow create: if isAuthenticated() && request.auth.uid in request.resource.data.participants && !isBlocked(request.resource.data.participants[0], request.resource.data.participants[1]);
-      allow update: if isAuthenticated() && request.auth.uid in resource.data.participants;
-      
-      // Messages Subcollection
+      allow read: if activeMember() && request.auth.uid in resource.data.participants;
+      allow create: if activeMember()
+        && request.auth.uid in request.resource.data.participants
+        && request.resource.data.participants.size() == 2
+        && request.resource.data.participants[0] != request.resource.data.participants[1]
+        && friendRelation(request.resource.data.participants[0], request.resource.data.participants[1])
+        && !isBlocked(request.resource.data.participants[0], request.resource.data.participants[1]);
+      allow update: if activeMember()
+        && request.auth.uid in resource.data.participants
+        && request.resource.data.participants == resource.data.participants
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastMessage', 'lastMessageTime', 'typing', 'archivedBy']);
+      allow delete: if admin();
+
       match /messages/{messageId} {
-        allow read: if isAuthenticated() && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
-        // Require that the sender is part of the chat and not blocked
-        allow create: if isAuthenticated() 
-                      && request.auth.uid == request.resource.data.senderId
-                      && request.auth.uid in get(/databases/$(database)/documents/chats/$(chatId)).data.participants;
-        allow update, delete: if isAuthenticated() && resource.data.senderId == request.auth.uid;
+        allow read: if isChatParticipant(chatId);
+        allow create: if isChatParticipant(chatId)
+          && request.resource.data.senderId == request.auth.uid
+          && request.resource.data.chatId == chatId
+          && request.resource.data.type in ['text', 'image', 'video', 'file', 'audio']
+          && request.resource.data.status == 'sent'
+          && request.resource.data.content is string
+          && !isBlocked(
+            get(/databases/$(database)/documents/chats/$(chatId)).data.participants[0],
+            get(/databases/$(database)/documents/chats/$(chatId)).data.participants[1]
+          );
+        allow update: if isChatParticipant(chatId) && (
+          (resource.data.senderId == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['content', 'isEdited']))
+          || (resource.data.senderId != request.auth.uid
+            && request.resource.data.status == 'seen'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'readAt']))
+          || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['reactions'])
+        );
+        allow delete: if isChatParticipant(chatId) && resource.data.senderId == request.auth.uid;
       }
     }
 
-    // Calls Collection
     match /calls/{callId} {
-      allow read, update: if isAuthenticated() && (resource.data.callerId == request.auth.uid || resource.data.receiverId == request.auth.uid);
-      allow create: if isAuthenticated() && request.resource.data.callerId == request.auth.uid && !isBlocked(request.resource.data.callerId, request.resource.data.receiverId);
+      allow read: if activeMember()
+        && (resource.data.callerId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+      allow create: if activeMember()
+        && request.resource.data.callerId == request.auth.uid
+        && request.resource.data.receiverId != request.auth.uid
+        && request.resource.data.type in ['audio', 'video']
+        && request.resource.data.status == 'preparing'
+        && friendRelation(request.resource.data.callerId, request.resource.data.receiverId)
+        && !isBlocked(request.resource.data.callerId, request.resource.data.receiverId);
+      allow update: if activeMember()
+        && (resource.data.callerId == request.auth.uid || resource.data.receiverId == request.auth.uid)
+        && request.resource.data.callerId == resource.data.callerId
+        && request.resource.data.receiverId == resource.data.receiverId
+        && (
+          (resource.data.callerId == request.auth.uid
+            && resource.data.status == 'preparing'
+            && request.resource.data.status == 'calling'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['offer', 'status']))
+          || (resource.data.receiverId == request.auth.uid
+            && resource.data.status == 'calling'
+            && request.resource.data.status == 'accepted'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['answer', 'status']))
+          || (resource.data.receiverId == request.auth.uid
+            && resource.data.status == 'calling'
+            && request.resource.data.status == 'accepted'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']))
+          || (resource.data.receiverId == request.auth.uid
+            && resource.data.status == 'accepted'
+            && request.resource.data.status == 'accepted'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['answer']))
+          || ((resource.data.callerId == request.auth.uid || resource.data.receiverId == request.auth.uid)
+            && resource.data.status in ['calling', 'accepted']
+            && request.resource.data.status == 'ended'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']))
+          || (resource.data.receiverId == request.auth.uid
+            && resource.data.status == 'calling'
+            && request.resource.data.status == 'rejected'
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']))
+        );
+      allow delete: if admin();
+
+      match /{candidateCollection}/{candidateId} {
+        allow read, create: if candidateCollection in ['callerCandidates', 'receiverCandidates']
+          && isCallParticipant(callId);
+        allow update, delete: if false;
+      }
     }
 
-    // Blocks Collection
-    // Document ID should be blockerId_blockedId
     match /blocks/{blockId} {
-      allow read: if isAuthenticated() && (resource.data.blockerId == request.auth.uid || resource.data.blockedId == request.auth.uid);
-      allow create: if isAuthenticated() && request.resource.data.blockerId == request.auth.uid;
-      allow delete: if isAuthenticated() && resource.data.blockerId == request.auth.uid;
+      // Allow direct checks for either direction without exposing other members' block lists.
+      allow read: if activeMember() && (
+        blockId.matches('^' + request.auth.uid + '_.*$')
+        || blockId.matches('^.*_' + request.auth.uid + '$')
+      );
+      allow create: if activeMember() && request.resource.data.blockerId == request.auth.uid;
+      allow delete: if activeMember() && resource.data.blockerId == request.auth.uid;
+      allow update: if false;
     }
 
-    // Reports Collection
     match /reports/{reportId} {
-      allow read: if isAdmin();
-      allow create: if isAuthenticated();
-      allow update, delete: if isAdmin();
+      allow create: if activeMember() && request.resource.data.reporterId == request.auth.uid;
+      allow read, update, delete: if admin();
     }
   }
 }
