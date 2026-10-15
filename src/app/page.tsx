@@ -19,9 +19,11 @@ import { CallOverlay } from '@/components/fc/calls/CallOverlay'
 import { FCLogo } from '@/components/fc/ui'
 
 function AuthedApp() {
+  const { user } = useAuth()
   const { view } = useApp()
+
   return (
-    <SocketProvider>
+    <SocketProvider userId={user?.id}>
       <NotificationsProvider>
         <div className="flex min-h-screen flex-col bg-background">
           <TopBar />

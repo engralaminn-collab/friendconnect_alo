@@ -63,7 +63,7 @@ export function ProfileView() {
   }
 
   const u = profile.user
-  const online = isOnline(u.id)
+  const online = (typeof isOnline === "function" && isOnline(u.id))
 
   const act = async (action: string, msg: string) => {
     setActionLoading(true)
@@ -187,7 +187,7 @@ function MyProfile() {
   if (!user) return null
   const p = user.profile
   const verified = p?.verified || 'unverified'
-  const meOnline = isOnline(user.id)
+  const meOnline = (typeof isOnline === "function" && isOnline(user.id))
   const lastActive = meOnline
     ? { label: 'online', detail: 'active now' }
     : formatLastSeenPrecise(p?.lastSeen)

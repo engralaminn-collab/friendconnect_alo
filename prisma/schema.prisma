@@ -4,13 +4,14 @@ generator client {
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "mysql"
   url      = env("DATABASE_URL")
 }
 
 model User {
   id           String   @id @default(cuid())
   email        String   @unique
+  phone         String?   @unique
   username     String   @unique
   passwordHash String
   name         String
@@ -23,7 +24,7 @@ model User {
   twoFactorBackup   String?  // comma-sep backup codes (hashed)
   role              String   @default("user") // user | admin
   fileQuotaBytes    Int      @default(104857600) // 100MB default quota
-  fileUsedBytes     Int      @default(0)
+  fileUsedBytes     Int @default(0)
 
   profile       Profile?
   sessions      Session[]

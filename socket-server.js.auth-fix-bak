@@ -1,0 +1,344 @@
+const { createServer } = require("http");
+const { Server } = require("socket.io");
+const { PrismaClient } = require("@prisma/client");
+
+const PORT = process.env.SOCKET_PORT || 3114;
+const db = new PrismaClient();
+
+const onlineUsers = new Map(); // userId → Set<socketId>
+const socketUser = new Map();  // socketId → userId
+
+function markOnline(userId, sid) {
+  if (!onlineUsers.has(userId)) onlineUsers.set(userId, new Set());
+  onlineUsers.get(userId).add(sid);
+  socketUser.set(sid, userId);
+}
+function markOffline(sid) {
+  const uid = socketUser.get(sid);
+  if (!uid) return null;
+  socketUser.delete(sid);
+  const set = onlineUsers.get(uid);
+  if (set) {
+    set.delete(sid);
+    if (set.size === 0) { onlineUsers.delete(uid); return uid; }
+  }
+  return null;
+}
+function emitToUser(userId, event, payload) {
+  const socks = onlineUsers.get(userId);
+  if (!socks) return false;
+  for (const sid of socks) io.to(sid).emit(event, payload);
+  return true;
+}
+
+const http = createServer((req, res) => {
+  if (req.url === "/health") {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({
+      status: "ok",
+      connections: io?.engine?.clientsCount || 0,
+      onlineUsers: onlineUsers.size,
+      authenticated: socketUser.size,
+    }));
+    return;
+  }
+  res.writeHead(404); res.end();
+});
+
+const io = new Server(http, {
+  cors: { origin: ["https://panel.alolabs.net", "http://localhost:3014"], credentials: true },
+  transports: ["websocket", "polling"],
+});
+
+async function broadcastPresence(userId, online) {
+  try {
+    const friends = await db.friendship.findMany({
+      where: { status: "ACCEPTED", OR: [{ requesterId: userId }, { receiverId: userId }] },
+    });
+    for (const f of friends) {
+      const other = f.requesterId === userId ? f.receiverId : f.requesterId;
+      emitToUser(other, "presence", { userId, online });
+    }
+  } catch (e) { console.error("presence", e.message); }
+}
+
+io.on("connection", (socket) => {
+  console.log(`[+] ${socket.id}`);
+
+  // ── AUTH ──────────────────────────────────────────
+  socket.on("auth", async ({ token }, ack) => {
+    try {
+      if (!token) return ack?.({ ok: false, error: "no token" });
+      const session = await db.session.findUnique({
+        where: { token }, include: { user: true },
+      });
+      if (!session || session.expiresAt.getTime() < Date.now())
+        return ack?.({ ok: false, error: "invalid session" });
+      const userId = session.user.id;
+      markOnline(userId, socket.id);
+      socket.join(`user:${userId}`);
+      await db.profile.update({
+        where: { userId }, data: { lastSeen: new Date() },
+      }).catch(() => {});
+      ack?.({ ok: true, userId });
+      broadcastPresence(userId, true);
+      console.log(`[AUTH] ${session.user.username} (${socket.id})`);
+    } catch (e) {
+      console.error("auth", e.message);
+      ack?.({ ok: false, error: e.message });
+    }
+  });
+
+  // ── DIRECT MESSAGE ──────────────────────────────────
+  socket.on("message:send", async (payload, ack) => {
+    try {
+      const senderId = socketUser.get(socket.id);
+      if (!senderId) return ack?.({ ok: false, error: "not authenticated" });
+      const { receiverId, content, type = "text",
+        fileUrl = null, fileName = null, fileSize = null, mimeType = null,
+        replyToId = null, tempId } = payload || {};
+      if (!receiverId || (!content && !fileUrl))
+        return ack?.({ ok: false, error: "missing" });
+      const blocked = await db.friendship.findFirst({
+        where: {
+          status: "BLOCKED",
+          OR: [
+            { requesterId: senderId, receiverId },
+            { requesterId: receiverId, receiverId: senderId },
+          ],
+        },
+      });
+      if (blocked) return ack?.({ ok: false, error: "blocked" });
+      const msg = await db.message.create({
+        data: {
+          senderId, receiverId, content: content || "",
+          type, fileUrl, fileName, fileSize, mimeType,
+          replyToId, status: "SENT",
+        },
+        include: { sender: { include: { profile: true } } },
+      });
+      const messageData = {
+        id: msg.id, tempId,
+        senderId: msg.senderId, senderName: msg.sender.name,
+        senderPhoto: msg.sender.profile?.photoUrl ?? null,
+        receiverId: msg.receiverId,
+        content: msg.content, type: msg.type,
+        fileUrl: msg.fileUrl, fileName: msg.fileName,
+        fileSize: msg.fileSize, mimeType: msg.mimeType,
+        status: msg.status, replyToId: msg.replyToId,
+        createdAt: msg.createdAt.toISOString(),
+      };
+      ack?.({ ok: true, message: messageData });
+      if (emitToUser(receiverId, "message:new", messageData)) {
+        await db.message.update({
+          where: { id: msg.id },
+          data: { status: "DELIVERED", deliveredAt: new Date() },
+        }).catch(() => {});
+      }
+    } catch (e) {
+      console.error("message:send", e.message);
+      ack?.({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on("group:message:send", async (payload, ack) => {
+    try {
+      const senderId = socketUser.get(socket.id);
+      if (!senderId) return ack?.({ ok: false, error: "not authenticated" });
+      const { groupId, content, type = "text",
+        fileUrl = null, fileName = null, fileSize = null, mimeType = null,
+        replyToId = null, tempId } = payload || {};
+      if (!groupId || (!content && !fileUrl)) return ack?.({ ok: false, error: "missing" });
+      const membership = await db.groupMember.findUnique({
+        where: { groupId_userId: { groupId, userId: senderId } },
+      });
+      if (!membership) return ack?.({ ok: false, error: "not a member" });
+      const msg = await db.message.create({
+        data: {
+          senderId, groupId, content: content || "",
+          type, fileUrl, fileName, fileSize, mimeType,
+          replyToId, status: "SENT",
+        },
+        include: { sender: { include: { profile: true } } },
+      });
+      const messageData = {
+        id: msg.id, tempId, senderId: msg.senderId,
+        senderName: msg.sender.name,
+        senderPhoto: msg.sender.profile?.photoUrl ?? null,
+        groupId: msg.groupId,
+        content: msg.content, type: msg.type,
+        fileUrl: msg.fileUrl, fileName: msg.fileName,
+        fileSize: msg.fileSize, mimeType: msg.mimeType,
+        replyToId: msg.replyToId,
+        createdAt: msg.createdAt.toISOString(),
+      };
+      ack?.({ ok: true, message: messageData });
+      const members = await db.groupMember.findMany({
+        where: { groupId }, select: { userId: true },
+      });
+      for (const m of members) {
+        if (m.userId === senderId) continue;
+        emitToUser(m.userId, "group:message:new", messageData);
+      }
+    } catch (e) {
+      console.error("group:message:send", e.message);
+      ack?.({ ok: false, error: e.message });
+    }
+  });
+
+  socket.on("message:seen", async ({ messageIds, peerId }) => {
+    try {
+      const readerId = socketUser.get(socket.id);
+      if (!readerId || !messageIds?.length) return;
+      await db.message.updateMany({
+        where: { id: { in: messageIds }, receiverId: readerId },
+        data: { status: "SEEN", seenAt: new Date() },
+      });
+      emitToUser(peerId, "message:status", { messageIds, status: "SEEN", readerId });
+    } catch (e) { console.error("message:seen", e.message); }
+  });
+
+  socket.on("typing", ({ peerId, isTyping }) => {
+    const senderId = socketUser.get(socket.id);
+    if (!senderId || !peerId) return;
+    emitToUser(peerId, "typing:indicator", { userId: senderId, isTyping });
+  });
+
+  socket.on("group:typing", ({ groupId, isTyping }) => {
+    const senderId = socketUser.get(socket.id);
+    if (!senderId || !groupId) return;
+    socket.to(`group:${groupId}`).emit("group:typing:indicator", { userId: senderId, groupId, isTyping });
+  });
+
+  socket.on("group:join", ({ groupId }) => { if (groupId) socket.join(`group:${groupId}`); });
+  socket.on("group:leave", ({ groupId }) => { if (groupId) socket.leave(`group:${groupId}`); });
+
+  // ═══════════════════════════════════════════════════
+  //          WEBRTC CALL SIGNALING (CORRECTED)
+  // ═══════════════════════════════════════════════════
+
+  socket.on("call:offer", async (payload) => {
+    try {
+      const callerId = socketUser.get(socket.id);
+      if (!callerId) {
+        console.log("[call:offer] not authenticated");
+        return;
+      }
+      const { targetUserId, type = "audio", sdp } = payload || {};
+      if (!targetUserId || !sdp) return;
+
+      console.log(`[CALL:OFFER] ${callerId} → ${targetUserId} (${type})`);
+
+      if (!onlineUsers.has(targetUserId)) {
+        console.log(`[CALL] ${targetUserId} offline`);
+        socket.emit("call:ended", { reason: "unavailable", from: targetUserId });
+        // Missed call record
+        await db.call.create({
+          data: {
+            callerId, receiverId: targetUserId, type,
+            status: "MISSED",
+          },
+        }).catch((e) => console.log("call record error:", e.message));
+        return;
+      }
+
+      const caller = await db.user.findUnique({
+        where: { id: callerId }, include: { profile: true },
+      });
+
+      const sent = emitToUser(targetUserId, "call:incoming", {
+        type,
+        callerId,
+        from: callerId,
+        callerName: caller?.name,
+        callerPhoto: caller?.profile?.photoUrl ?? null,
+        sdp,
+      });
+
+      console.log(`[CALL:INCOMING] delivered to ${targetUserId}: ${sent}`);
+
+      await db.call.create({
+        data: {
+          callerId, receiverId: targetUserId, type,
+          status: "RINGING",
+        },
+      }).catch((e) => console.log("call record error:", e.message));
+    } catch (e) { console.error("call:offer", e.message); }
+  });
+
+  socket.on("call:answer", (payload) => {
+    const calleeId = socketUser.get(socket.id);
+    if (!calleeId) return;
+    const { targetUserId, sdp } = payload || {};
+    if (!targetUserId || !sdp) return;
+
+    console.log(`[CALL:ANSWER] ${calleeId} → ${targetUserId}`);
+
+    emitToUser(targetUserId, "call:sdp", {
+      kind: "answer", sdp, from: calleeId,
+    });
+
+    db.call.updateMany({
+      where: { callerId: targetUserId, receiverId: calleeId, status: "RINGING" },
+      data: { status: "IN_PROGRESS", startedAt: new Date() },
+    }).catch(() => {});
+  });
+
+  socket.on("call:ice", ({ targetUserId, candidate }) => {
+    const fromUserId = socketUser.get(socket.id);
+    if (!fromUserId || !targetUserId || !candidate) return;
+    emitToUser(targetUserId, "call:ice-candidate", {
+      candidate, from: fromUserId,
+    });
+  });
+
+  socket.on("call:reject", ({ targetUserId }) => {
+    const fromUserId = socketUser.get(socket.id);
+    if (!fromUserId || !targetUserId) return;
+    console.log(`[CALL:REJECT] ${fromUserId} → ${targetUserId}`);
+    emitToUser(targetUserId, "call:ended", {
+      reason: "rejected", from: fromUserId,
+    });
+    db.call.updateMany({
+      where: { callerId: targetUserId, receiverId: fromUserId, status: "RINGING" },
+      data: { status: "REJECTED", endedAt: new Date() },
+    }).catch(() => {});
+  });
+
+  socket.on("call:end", ({ targetUserId }) => {
+    const fromUserId = socketUser.get(socket.id);
+    if (!fromUserId || !targetUserId) return;
+    console.log(`[CALL:END] ${fromUserId} → ${targetUserId}`);
+    emitToUser(targetUserId, "call:ended", {
+      reason: "ended", from: fromUserId,
+    });
+    db.call.updateMany({
+      where: {
+        OR: [
+          { callerId: fromUserId, receiverId: targetUserId },
+          { callerId: targetUserId, receiverId: fromUserId },
+        ],
+        status: { in: ["RINGING", "IN_PROGRESS"] },
+      },
+      data: { status: "ENDED", endedAt: new Date() },
+    }).catch(() => {});
+  });
+
+  socket.on("reaction:add", (p) => socket.broadcast.emit("reaction:update", p));
+  socket.on("reaction:remove", (p) => socket.broadcast.emit("reaction:update", p));
+  socket.on("message:delete", (p) => socket.broadcast.emit("message:deleted", p));
+  socket.on("message:edit", (p) => socket.broadcast.emit("message:edited", p));
+
+  socket.on("disconnect", () => {
+    const uid = markOffline(socket.id);
+    if (uid) {
+      broadcastPresence(uid, false);
+      db.profile.update({
+        where: { userId: uid }, data: { lastSeen: new Date() },
+      }).catch(() => {});
+      console.log(`[-] ${uid}`);
+    }
+  });
+});
+
+http.listen(PORT, () => console.log(`✅ Socket.IO on port ${PORT}`));

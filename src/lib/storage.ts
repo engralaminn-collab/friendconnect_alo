@@ -14,7 +14,7 @@ export interface StorageProvider {
 
 class LocalStorageProvider implements StorageProvider {
   private dir: string
-  constructor(dir: string = '/home/z/my-project/upload') {
+  constructor(dir: string = '/home/aloedu/storage/friendconnect') {
     this.dir = dir
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
   }

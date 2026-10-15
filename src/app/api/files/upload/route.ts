@@ -7,7 +7,7 @@ import { join } from 'path'
 import { randomBytes } from 'crypto'
 import { logger } from '@/lib/logger'
 
-const UPLOAD_DIR = '/home/z/my-project/upload'
+const UPLOAD_DIR = '/home/aloedu/storage/friendconnect'
 const MAX_FILE_SIZE = 50 * 1024 * 1024 // 50MB per file
 // Blocked MIME types (basic virus-scanning heuristic — reject executables/scripts)
 const BLOCKED_MIME = [

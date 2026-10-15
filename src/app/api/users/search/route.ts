@@ -1,49 +1,33 @@
-import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
-import { getSessionUser } from '@/lib/session'
-import { errorJson, json } from '@/lib/serialize'
+import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
 
-export async function GET(req: NextRequest) {
+export async function GET(req: Request) {
   try {
-    const me = await getSessionUser()
-    if (!me) return errorJson('Unauthorized', 401)
-    const q = req.nextUrl.searchParams.get('q') || ''
-    const where = q
-      ? {
-          OR: [
-            { username: { contains: q.toLowerCase() } },
-            { name: { contains: q } },
-            { email: { contains: q.toLowerCase() } },
-          ],
-          NOT: { id: me.id },
-        }
-      : { NOT: { id: me.id } }
-    const users = await db.user.findMany({
-      where,
-      take: 30,
-      include: { profile: true },
-    })
-    // friendship status with me
-    const friendships = await db.friendship.findMany({
-      where: { OR: [{ requesterId: me.id }, { receiverId: me.id }] },
-    })
-    const fsMap = new Map<string, string>()
-    for (const f of friendships) {
-      const other = f.requesterId === me.id ? f.receiverId : f.requesterId
-      fsMap.set(other, f.status + (f.blockerId ? (f.blockerId === me.id ? ':me' : ':them') : ''))
-    }
-    return json({
-      users: users.map((u) => ({
-        id: u.id,
-        username: u.username,
-        name: u.name,
-        photoUrl: u.profile?.photoUrl ?? null,
-        bio: u.profile?.bio ?? null,
-        location: u.profile?.location ?? null,
-        relation: fsMap.get(u.id) || 'NONE',
-      })),
-    })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+    const { searchParams } = new URL(req.url);
+    const q = (searchParams.get("q") || "").trim().toLowerCase();
+
+    const users = await prisma.user.findMany({
+      where: q
+        ? {
+            OR: [
+              { username: { contains: q } },
+              { name: { contains: q } },
+              { email: { contains: q } },
+            ],
+          }
+        : undefined,
+      select: {
+        id: true,
+        username: true,
+        name: true,
+        email: true,
+        role: true,
+      },
+      take: 50,
+    });
+
+    return NextResponse.json({ users });
+  } catch (error: any) {
+    return NextResponse.json({ users: [], error: error.message }, { status: 500 });
   }
 }

@@ -1599,7 +1599,7 @@ function ChatRoom({
       mode === 'direct'
         ? api<{ friends: Friend[] }>('/api/friends')
             .then((d) => d.friends.find((f) => f.id === peerId) || null)
-            .then((friend): PeerInfo | null => {
+            .then(async (friend): Promise<PeerInfo | null> => {
               if (friend) {
                 return {
                   name: friend.name,

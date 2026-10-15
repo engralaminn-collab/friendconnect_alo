@@ -4,6 +4,8 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as SonnerToaster } from "@/components/ui/sonner";
 import { ThemeProvider } from "@/components/theme-provider";
+import { AuthProvider } from "@/hooks/use-auth";
+import { SocketProvider } from "@/hooks/use-socket";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -34,7 +36,6 @@ export const viewport: Viewport = {
   viewportFit: "cover",
 };
 
-// Register service worker for PWA + push notifications
 const SW_SCRIPT = `
 if ('serviceWorker' in navigator) {
   window.addEventListener('load', () => {
@@ -53,7 +54,11 @@ export default function RootLayout({
       </head>
       <body className={`${geistSans.variable} antialiased bg-background text-foreground`}>
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange={false}>
-          {children}
+          <AuthProvider>
+            <SocketProvider>
+              {children}
+            </SocketProvider>
+          </AuthProvider>
           <Toaster />
           <SonnerToaster position="top-center" richColors closeButton />
         </ThemeProvider>

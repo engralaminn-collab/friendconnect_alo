@@ -1,40 +1,82 @@
-import { NextRequest } from 'next/server'
-import { db } from '@/lib/db'
-import { hashPassword, isEmail, sanitizeUsername, validatePassword } from '@/lib/auth'
-import { createSession, setSessionCookie } from '@/lib/session'
-import { ensureProfile, errorJson, json } from '@/lib/serialize'
-import { audit } from '@/lib/audit'
+import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+import crypto from "crypto";
 
-export async function POST(req: NextRequest) {
+function hashPassword(password: string): string {
+  return crypto.createHash("sha256").update(password).digest("hex");
+}
+
+export async function POST(req: Request) {
   try {
-    const body = await req.json()
-    const email = String(body.email || '').trim().toLowerCase()
-    const username = sanitizeUsername(String(body.username || ''))
-    const name = String(body.name || '').trim()
-    const password = String(body.password || '')
+    const body = await req.json();
+    const { name, username, email, phone, password } = body;
 
-    if (!isEmail(email)) return errorJson('Invalid email', 400)
-    if (!username || username.length < 3) return errorJson('Username must be at least 3 chars (a-z, 0-9, _, .)', 400)
-    if (!name) return errorJson('Name is required', 400)
-    const pwErr = validatePassword(password)
-    if (pwErr) return errorJson(pwErr, 400)
+    if (!password) {
+      return NextResponse.json(
+        { error: "পাসওয়ার্ড আবশ্যক" },
+        { status: 400 }
+      );
+    }
 
-    const existingEmail = await db.user.findUnique({ where: { email } })
-    if (existingEmail) return errorJson('Email already registered', 409)
-    const existingUsername = await db.user.findUnique({ where: { username } })
-    if (existingUsername) return errorJson('Username already taken', 409)
+    const rawInput = (email || phone || username || "").trim();
+    if (!rawInput) {
+      return NextResponse.json(
+        { error: "ইমেইল, ফোন নম্বর বা ইউজারনেম দিন" },
+        { status: 400 }
+      );
+    }
 
-    const user = await db.user.create({
-      data: { email, username, name, passwordHash: hashPassword(password), emailVerified: false },
-    })
-    await ensureProfile(user.id)
-    const userAgent = req.headers.get('user-agent') || undefined
-    const ip = req.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || req.headers.get('x-real-ip') || undefined
-    const token = await createSession(user.id, { userAgent, ip })
-    await setSessionCookie(token)
-    await audit({ userId: user.id, action: 'register', ip, userAgent })
-    return json({ user: { id: user.id, email, username, name } })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+    const cleanRaw = rawInput.toLowerCase().replace(/[^a-z0-9_]/g, "");
+    const finalUsername = (username ? username.toLowerCase().replace(/[^a-z0-9_]/g, "") : cleanRaw) || "user_" + Date.now();
+    const finalEmail = email ? email.toLowerCase().trim() : (rawInput.includes("@") ? rawInput.toLowerCase() : `${finalUsername}@alolabs.net`);
+    const finalName = name || finalUsername;
+
+    const existing = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: finalEmail },
+          { username: finalUsername },
+        ],
+      },
+    });
+
+    if (existing) {
+      return NextResponse.json(
+        { error: "এই ইউজার বা ইমেইল ইতিমধ্যে নিবন্ধিত। সরাসরি লগইন করুন।" },
+        { status: 400 }
+      );
+    }
+
+    const passwordHash = hashPassword(password);
+
+    const user = await prisma.user.create({
+      data: {
+        name: finalName,
+        username: finalUsername,
+        email: finalEmail,
+        passwordHash: passwordHash,
+        role: "user",
+        emailVerified: true,
+      },
+      select: {
+        id: true,
+        name: true,
+        username: true,
+        email: true,
+        role: true,
+      },
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: "অ্যাকাউন্ট সফলভাবে তৈরি হয়েছে! এখন লগইন করুন।",
+      user,
+    });
+  } catch (error: any) {
+    console.error("Register Error:", error);
+    return NextResponse.json(
+      { error: error.message || "রেজিস্ট্রেশন সম্পন্ন করা যায়নি" },
+      { status: 500 }
+    );
   }
 }

@@ -3,7 +3,7 @@ import { db } from '@/lib/db'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
 
-const UPLOAD_DIR = '/home/z/my-project/upload'
+const UPLOAD_DIR = '/home/aloedu/storage/friendconnect'
 
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
