@@ -1,40 +1,35 @@
 'use client'
 
-import { createContext, useContext, useCallback, useEffect, useState, ReactNode } from 'react'
+import { useEffect, useState, useCallback, createContext, useContext, ReactNode } from 'react'
 import { api } from '@/lib/api'
-
-export interface ProfileData {
-  photoUrl: string | null
-  bio: string | null
-  phone: string | null
-  location: string | null
-  birthday: string | null
-  education: string | null
-  work: string | null
-  profileVisibility: string
-  messagePermission: string
-  callPermission: string
-  readReceipts: boolean
-  photoFilter: string | null
-  verified: string
-  lastSeen: string | null
-}
+import { errorJson, json } from '@/lib/serialize'
 
 export interface AuthUser {
   id: string
-  email: string
-  username: string
+  email: string username: string
   name: string
   role: string
   emailVerified: boolean
   twoFactorEnabled: boolean
   fileQuota: { used: number; quota: number } | null
-  profile: ProfileData | null
+  profile: {
+    photoUrl: string | null
+    bio: string | null
+    phone: string | null
+    location: string | null
+    birthday: string | null
+    education: string | null
+    work: string | null
+    profileVisibility: string
+    messagePermission: string
+    callPermission: string readReceipts: boolean
+    photoFilter: string | null
+    verified: string
+    lastSeen: string | null } | null
 }
 
 interface AuthCtx {
-  user: AuthUser | null
-  loading: boolean
+  user: AuthUser | null loading: boolean
   refresh: () => Promise<AuthUser | null>
   setUser: (u: AuthUser | null) => void
   login: (identifier: string, password: string) => Promise<void>
@@ -62,8 +57,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
-    refresh()
-  }, [refresh])
+    if (user?.id) {
+      refresh()
+    }
+  }, [user?.id])
 
   const login = useCallback(async (identifier: string, password: string) => {
     const data = await api<{ user: any }>('/api/auth/login', {
