@@ -161,7 +161,7 @@ export function FriendsView() {
                     {rel === 'NONE' && <Button size="sm" variant="secondary" className="rounded-full" disabled={actionLoading[u.id + 'request']} onClick={() => doAction(u.id, 'request', 'Request sent')}><UserPlus size={14} className="mr-1" />Add</Button>}
                     {rel === 'PENDING' && <span className="text-xs text-muted-foreground">Pending</span>}
                     {rel === 'ACCEPTED' && <Button size="sm" variant="ghost" className="rounded-full" onClick={() => openChat(u.id)}><MessageCircle size={14} className="mr-1" />Chat</Button>}
-                    {rel.startsWith('BLOCKED') && <span className="text-xs text-muted-foreground">Blocked</span>}
+                    {rel?.startsWith('BLOCKED') && <span className="text-xs text-muted-foreground">Blocked</span>}
                   </div>
                 )
               })}
