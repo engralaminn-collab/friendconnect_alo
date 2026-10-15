@@ -58,3 +58,4 @@ server.log
 socket-server.js*
 seed-fc.cjs
 userId
+*.backup
