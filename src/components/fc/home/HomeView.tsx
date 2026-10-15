@@ -87,12 +87,17 @@ export function HomeView() {
   // Combine the REST online list with the realtime socket presence set.
   // A friend is considered online if EITHER source reports them as online.
   const onlineList = useMemo(() => {
-    const byId = new Map<string, Friend>()
-    onlineFriends.forEach((f) => byId.set(f.id, f))
-    friends.forEach((f) => {
-      if (isOnline(f.id)) byId.set(f.id, f)
-    })
-    return Array.from(byId.values())
+    const byId = new Map<string, Friend>();
+    const safeOnline = Array.isArray(onlineFriends) ? onlineFriends : [];
+    const safeFriends = Array.isArray(friends) ? friends : [];
+
+    safeOnline.forEach((f) => byId.set(f.id, f));
+    safeFriends.forEach((f) => {
+      if (typeof isOnline === 'function' && isOnline(f.id)) {
+        byId.set(f.id, f);
+      }
+    });
+    return Array.from(byId.values());
   }, [onlineFriends, friends, isOnline])
 
   const hour = new Date().getHours()
