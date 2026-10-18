@@ -122,8 +122,11 @@ export function HomeView() {
           </div>
         </div>
         <p className="mt-3 text-sm text-muted-foreground">
-          You have <span className="font-semibold text-foreground">{friends.length}</span> friends ·{' '}
-          <span className="font-semibold text-foreground">{conversations.reduce((a, c) => a + c.unread, 0)}</span> unread messages
+          A private space to rediscover old friends — chat, call, and share memories without the noise of public networks.
+        </p>
+        <p className="mt-1 text-xs text-muted-foreground">
+          <span className="font-semibold text-foreground">{friends.length}</span> friends ·{' '}
+          <span className="font-semibold text-foreground">{conversations.reduce((a, c) => a + c.unread, 0)}</span> unread
         </p>
       </div>
 
@@ -132,7 +135,7 @@ export function HomeView() {
         {[
           { icon: Search, label: 'Find', action: () => setView('friends') },
           { icon: MessageCircle, label: 'Chat', action: () => setView('chat') },
-          { icon: Video, label: 'Call', action: () => setView('calls') },
+          { icon: Video, label: 'Calls', action: () => setView('calls') },
           { icon: Users, label: 'Groups', action: () => setView('groups') },
         ].map((a) => (
           <button

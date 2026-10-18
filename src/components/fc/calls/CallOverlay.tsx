@@ -188,6 +188,7 @@ export function CallOverlay() {
             {callState === "connecting" && "Connecting…"}
             {callState === "connected" && formatDuration(elapsed)}
           </div>
+          <div className="text-[11px] text-white/50">Private call · crystal-clear audio</div>
         </div>
       </div>
 

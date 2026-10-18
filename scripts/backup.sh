@@ -41,8 +41,9 @@ fi
 
 # 2. Uploads backup
 echo "[2/3] Backing up uploads..."
-if [ -d "${APP_DIR}/upload" ]; then
-  tar czf "$BACKUP_PATH/uploads.tar.gz" -C "$APP_DIR" upload/
+UPLOAD_SRC="${UPLOAD_DIR:-${APP_DIR}/upload}"
+if [ -d "$UPLOAD_SRC" ]; then
+  tar czf "$BACKUP_PATH/uploads.tar.gz" -C "$(dirname "$UPLOAD_SRC")" "$(basename "$UPLOAD_SRC")"
   echo "  ✓ Uploads: uploads.tar.gz ($(du -h "$BACKUP_PATH/uploads.tar.gz" | cut -f1))"
 fi
 

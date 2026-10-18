@@ -55,7 +55,7 @@ echo "  ✓ PM2 services restarted"
 # 7. Health check
 echo "[7/7] Running health check..."
 sleep 5
-HEALTH_URL="${NEXTAUTH_URL:-http://localhost:3000}/api/health"
+HEALTH_URL="${HEALTH_URL:-http://localhost:3000/api/health}"
 for i in 1 2 3 4 5; do
   STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$HEALTH_URL" 2>/dev/null || echo "000")
   if [ "$STATUS" = "200" ]; then

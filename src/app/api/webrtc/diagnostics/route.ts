@@ -1,6 +1,6 @@
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
-import { isTurnConfigured, STUN_SERVERS, TURN_SERVERS, TURN_REALM } from '@/lib/constants'
+import { isTurnConfigured, STUN_SERVERS, TURN_SERVERS, TURN_REALM } from '@/lib/ice'
 import { json, errorJson } from '@/lib/serialize'
 
 // GET /api/webrtc/diagnostics — authenticated diagnostics (no secrets exposed)

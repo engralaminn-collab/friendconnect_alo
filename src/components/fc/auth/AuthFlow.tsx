@@ -75,7 +75,7 @@ function Welcome() {
     >
       <div className="flex flex-1 flex-col items-center justify-center text-center">
         <FCLogo size={72} className="mb-6" />
-        <h1 className="text-3xl font-extrabold tracking-tight">Find your people again.</h1>
+        <h1 className="text-3xl font-extrabold tracking-tight">Rediscover old friends.</h1>
         <p className="mt-3 max-w-sm text-muted-foreground">
           FriendConnect is a private space to rediscover old friends — chat, call, and share memories without the noise of public networks.
         </p>
@@ -135,13 +135,21 @@ function Login() {
   const { setView } = useApp()
   const [identifier, setIdentifier] = useState('')
   const [password, setPassword] = useState('')
+  const [totp, setTotp] = useState('')
+  const [needs2fa, setNeeds2fa] = useState(false)
   const [loading, setLoading] = useState(false)
 
   const submit = async () => {
     if (!identifier || !password) return toast.error('Enter your credentials')
+    if (needs2fa && !totp) return toast.error('Enter your authenticator code')
     setLoading(true)
     try {
-      await login(identifier, password)
+      const result = await login(identifier, password, totp || undefined)
+      if (result.requires2fa) {
+        setNeeds2fa(true)
+        toast.message('Enter the 6-digit code from your authenticator app')
+        return
+      }
       toast.success('Welcome back!')
       setView('home')
     } catch (e: any) {
@@ -172,6 +180,12 @@ function Login() {
             <Input id="li-pw" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" className="rounded-xl pl-9" onKeyDown={(e) => e.key === 'Enter' && submit()} />
           </FieldShell>
         </div>
+        {needs2fa && (
+          <div className="space-y-1.5">
+            <Label htmlFor="li-2fa">Authenticator code</Label>
+            <Input id="li-2fa" value={totp} onChange={(e) => setTotp(e.target.value)} placeholder="123456" inputMode="numeric" maxLength={6} className="rounded-xl text-center text-2xl tracking-[0.4em]" onKeyDown={(e) => e.key === 'Enter' && submit()} />
+          </div>
+        )}
         <button onClick={() => setView('forgot')} className="text-xs font-medium text-primary hover:underline">
           Forgot password?
         </button>
@@ -236,7 +250,7 @@ function Register() {
         </div>
         <div className="space-y-1.5">
           <Label>Password</Label>
-          <FieldShell icon={Lock}><Input type="password" value={form.password} onChange={set('password')} placeholder="At least 6 characters" className="rounded-xl pl-9" /></FieldShell>
+          <FieldShell icon={Lock}><Input type="password" value={form.password} onChange={set('password')} placeholder="At least 8 characters, letter + number" className="rounded-xl pl-9" /></FieldShell>
         </div>
       </div>
       <Button size="lg" className="mt-6 w-full rounded-2xl" disabled={loading} onClick={submit}>

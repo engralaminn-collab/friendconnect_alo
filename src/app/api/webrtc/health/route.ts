@@ -1,13 +1,21 @@
 import { json } from '@/lib/serialize'
-import { isTurnConfigured, STUN_SERVERS, TURN_SERVERS, TURN_REALM } from '@/lib/constants'
+import { isTurnConfigured, STUN_SERVERS, TURN_REALM } from '@/lib/ice'
 import { isRedisAvailable } from '@/lib/cache'
 import { isEmailConfigured } from '@/lib/email'
 
 // GET /api/webrtc/health — public WebRTC subsystem health (no secrets)
 export async function GET() {
   const checks: Record<string, string> = {}
-  // Signaling (realtime service on :3003)
-  checks.signaling = 'ok'
+  try {
+    const port = process.env.SOCKET_PORT || '3003'
+    const ac = new AbortController()
+    const t = setTimeout(() => ac.abort(), 2000)
+    const res = await fetch(`http://127.0.0.1:${port}/health`, { signal: ac.signal }).catch(() => null)
+    clearTimeout(t)
+    checks.signaling = res && res.ok ? 'ok' : 'error'
+  } catch {
+    checks.signaling = 'error'
+  }
   // STUN
   checks.stun = STUN_SERVERS.length > 0 ? 'ok' : 'unconfigured'
   // TURN

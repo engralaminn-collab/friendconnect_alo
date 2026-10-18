@@ -1,63 +1,60 @@
-import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import crypto from "crypto";
-import { createSession, setSessionCookie } from "@/lib/session";
+import { NextRequest } from 'next/server'
+import { db } from '@/lib/db'
+import { verifyPassword, needsRehash, hashPassword, clientIp, validatePassword } from '@/lib/auth'
+import { createSession, setSessionCookie } from '@/lib/session'
+import { verifyTotp } from '@/lib/totp'
+import { audit } from '@/lib/audit'
+import { errorJson, json } from '@/lib/serialize'
+import { rateLimit } from '@/lib/cache'
 
-function verifyPassword(plain: string, hash: string): boolean {
-  if (!plain || !hash) return false;
-  const sha = crypto.createHash("sha256").update(plain).digest("hex");
-  return sha === hash || plain === hash;
-}
-
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { login, identifier, email, username, phone, password } = body;
+    const ip = clientIp(req) || 'unknown'
+    const rl = await rateLimit(`login:${ip}`, 10, 60)
+    if (!rl.allowed) return errorJson('Too many login attempts. Try again in a minute.', 429)
 
-    const userInput = (login || identifier || email || username || phone || "").trim().toLowerCase();
+    const body = await req.json()
+    const { login, identifier, email, username, phone, password, totp } = body as Record<string, string>
+    const userInput = String(login || identifier || email || username || phone || '').trim().toLowerCase()
 
     if (!userInput || !password) {
-      return NextResponse.json(
-        { error: "ইউজারনেম/ইমেইল এবং পাসওয়ার্ড আবশ্যক" },
-        { status: 400 }
-      );
+      return errorJson('Username/email and password are required', 400)
     }
 
-    const user = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { username: userInput },
-          { email: userInput },
-        ],
-      },
-    });
+    const user = await db.user.findFirst({
+      where: { OR: [{ username: userInput }, { email: userInput }] },
+    })
 
-    if (!user || !user.passwordHash) {
-      return NextResponse.json(
-        { error: "ভুল ইউজারনেম/ইমেইল বা পাসওয়ার্ড" },
-        { status: 401 }
-      );
+    if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
+      await audit({ action: 'login_failed', ip, meta: { identifier: userInput } })
+      return errorJson('Invalid username/email or password', 401)
     }
 
-    const isValid = verifyPassword(password, user.passwordHash);
-    if (!isValid) {
-      return NextResponse.json(
-        { error: "ভুল পাসওয়ার্ড" },
-        { status: 401 }
-      );
+    if (user.twoFactorEnabled) {
+      if (!totp) {
+        return json({ requires2fa: true, message: 'Two-factor authentication required' }, 200)
+      }
+      const totpOk = user.twoFactorSecret ? verifyTotp(String(totp), user.twoFactorSecret) : false
+      if (!totpOk) {
+        return errorJson('Invalid authenticator code', 401)
+      }
     }
 
-    // 1. Create database session
-    const userAgent = req.headers.get("user-agent") || undefined;
-    const ip = req.headers.get("x-forwarded-for") || undefined;
-    const token = await createSession(user.id, { userAgent, ip });
+    if (needsRehash(user.passwordHash)) {
+      const pwErr = validatePassword(password)
+      if (!pwErr) {
+        await db.user.update({ where: { id: user.id }, data: { passwordHash: hashPassword(password) } })
+      }
+    }
 
-    // 2. Set official session cookie
-    await setSessionCookie(token);
+    const userAgent = req.headers.get('user-agent') || undefined
+    const token = await createSession(user.id, { userAgent, ip })
+    await setSessionCookie(token)
+    await audit({ userId: user.id, action: 'login', ip, userAgent })
 
-    const response = NextResponse.json({
+    return json({
       success: true,
-      message: "লগইন সফল হয়েছে!",
+      message: 'Logged in',
       user: {
         id: user.id,
         name: user.name,
@@ -65,23 +62,9 @@ export async function POST(req: Request) {
         email: user.email,
         role: user.role,
       },
-      token,
-    });
-
-    // Also set fc_token for backward compatibility
-    response.cookies.set("fc_token", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 30 * 24 * 60 * 60,
-      path: "/",
-    });
-
-    return response;
-  } catch (error: any) {
-    console.error("Login Error:", error);
-    return NextResponse.json(
-      { error: error.message || "লগইন করা সম্ভব হয়নি" },
-      { status: 500 }
-    );
+    })
+  } catch (error: unknown) {
+    const err = error as Error
+    return errorJson(err.message || 'Login failed', 500)
   }
 }

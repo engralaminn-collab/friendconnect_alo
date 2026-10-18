@@ -129,3 +129,53 @@ export async function GET(req: NextRequest) {
     return errorJson(e?.message || 'Server error', 500)
   }
 }
+
+export async function POST(req: NextRequest) {
+  try {
+    const me = await getSessionUser()
+    if (!me) return errorJson('Unauthorized', 401)
+    const body = await req.json()
+    const receiverId = body.receiverId ? String(body.receiverId) : null
+    const groupId = body.groupId ? String(body.groupId) : null
+    const content = String(body.content || body.message || '')
+    if (!receiverId && !groupId) return errorJson('receiverId or groupId required', 400)
+    if (!content && !body.fileUrl) return errorJson('content required', 400)
+    if (groupId) {
+      const membership = await db.groupMember.findUnique({
+        where: { groupId_userId: { groupId, userId: me.id } },
+      })
+      if (!membership) return errorJson('Not a member', 403)
+    }
+    const msg = await db.message.create({
+      data: {
+        senderId: me.id,
+        receiverId,
+        groupId,
+        content,
+        type: body.type || 'text',
+        fileUrl: body.fileUrl || null,
+        fileName: body.fileName || null,
+        fileSize: body.fileSize || null,
+        mimeType: body.mimeType || null,
+        replyToId: body.replyToId || null,
+        status: 'SENT',
+      },
+    })
+    return json({
+      message: {
+        id: msg.id,
+        senderId: msg.senderId,
+        receiverId: msg.receiverId,
+        groupId: msg.groupId,
+        content: msg.content,
+        type: msg.type,
+        fileUrl: msg.fileUrl,
+        status: msg.status,
+        createdAt: msg.createdAt.toISOString(),
+      },
+    })
+  } catch (e: unknown) {
+    const err = e as Error
+    return errorJson(err?.message || 'Server error', 500)
+  }
+}

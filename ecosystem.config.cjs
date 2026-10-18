@@ -1,10 +1,12 @@
+const path = require('path')
+const APP_DIR = process.env.APP_DIR || path.resolve(__dirname)
+
 module.exports = {
   apps: [
     {
-      // ── Main FriendConnect App ──
       name: 'friendconnect',
       script: '.next/standalone/server.js',
-      cwd: '/home/aloedu/friendconnect',
+      cwd: APP_DIR,
       instances: 1,
       exec_mode: 'fork',
       autorestart: true,
@@ -12,7 +14,7 @@ module.exports = {
       watch: false,
       env: {
         NODE_ENV: 'production',
-        PORT: 3014,
+        PORT: 3000,
         HOSTNAME: '0.0.0.0',
       },
       out_file: './logs/app-out.log',
@@ -23,10 +25,9 @@ module.exports = {
       listen_timeout: 15000,
     },
     {
-      // ── Socket / Realtime Server ──
       name: 'friendconnect-socket',
       script: 'socket-server.js',
-      cwd: '/home/aloedu/friendconnect',
+      cwd: APP_DIR,
       instances: 1,
       exec_mode: 'fork',
       autorestart: true,
@@ -34,13 +35,31 @@ module.exports = {
       watch: false,
       env: {
         NODE_ENV: 'production',
-        SOCKET_PORT: 3114,
+        SOCKET_PORT: 3003,
       },
       out_file: './logs/socket-out.log',
       error_file: './logs/socket-error.log',
       merge_logs: true,
       log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
       kill_timeout: 5000,
+    },
+    {
+      name: 'friendconnect-turn',
+      script: 'scripts/turn-server.js',
+      cwd: APP_DIR,
+      instances: 1,
+      exec_mode: 'fork',
+      autorestart: true,
+      max_memory_restart: '128M',
+      watch: false,
+      env: {
+        NODE_ENV: 'production',
+        TURN_PORT: 3478,
+      },
+      out_file: './logs/turn-out.log',
+      error_file: './logs/turn-error.log',
+      merge_logs: true,
+      log_date_format: 'YYYY-MM-DD HH:mm:ss Z',
     },
   ],
 }

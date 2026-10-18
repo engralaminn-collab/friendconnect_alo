@@ -35,7 +35,8 @@ class SMTPEmailProvider implements EmailProvider {
         host: this.config.host,
         port: this.config.port,
         secure: this.config.secure,
-        auth: { user: this.config.user, pass: this.config.pass },
+        auth: this.config.user ? { user: this.config.user, pass: this.config.pass } : undefined,
+        tls: { rejectUnauthorized: false },
       })
       const info = await transporter.sendMail({
         from: this.config.from,
