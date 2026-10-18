@@ -1,6 +1,9 @@
 // FriendConnect - Private Social Platform schema
 generator client {
-  provider = "prisma-client-js"
+  provider   = "prisma-client-js"
+  // Rust-free Prisma Client: no query-engine binary, uses a JS driver adapter
+  // (src/lib/db-runtime.js). Works the same on servers and in Next standalone builds.
+  engineType = "client"
 }
 
 datasource db {

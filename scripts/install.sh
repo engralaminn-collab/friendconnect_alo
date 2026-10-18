@@ -20,7 +20,7 @@ bun run build
 echo "  ✓ Build complete"
 echo "[5/5] Database setup..."
 bun run db:generate
-bunx prisma migrate deploy 2>/dev/null || { echo "  Running initial migration..."; bunx prisma migrate dev --name init; }
+bunx prisma migrate deploy  # never `migrate dev` in production: it can reset the database
 echo "  ✓ Database ready"
 echo ""
 echo "=== Installation complete ==="

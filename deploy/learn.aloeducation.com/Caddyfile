@@ -1,0 +1,38 @@
+# FriendConnect — add this block to /etc/caddy/Caddyfile, then:
+#   sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
+# DNS: an A record learn.aloeducation.com → 103.231.239.79 must exist (Caddy gets HTTPS automatically).
+# WARNING: if learn.aloeducation.com already has a block (another app), this REPLACES it.
+
+learn.aloeducation.com {
+	encode gzip zstd
+
+	# chat uploads up to 55 MB
+	request_body {
+		max_size 60MB
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		Permissions-Policy "camera=(self), microphone=(self), display-capture=(self), geolocation=()"
+		-Server
+	}
+
+	# Realtime (socket server, SOCKET_PORT=3018) — websockets are proxied automatically
+	handle /socket.io* {
+		reverse_proxy 127.0.0.1:3018
+	}
+
+	# Next.js app (PORT=3017)
+	handle {
+		reverse_proxy 127.0.0.1:3017
+	}
+
+	log {
+		output file /var/log/caddy/learn.aloeducation.com.log {
+			roll_size 20MiB
+			roll_keep 5
+		}
+	}
+}
