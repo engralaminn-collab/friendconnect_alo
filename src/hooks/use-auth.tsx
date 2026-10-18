@@ -2,11 +2,11 @@
 
 import { useEffect, useState, useCallback, createContext, useContext, ReactNode } from 'react'
 import { api } from '@/lib/api'
-import { errorJson, json } from '@/lib/serialize'
 
 export interface AuthUser {
   id: string
-  email: string username: string
+  email: string
+  username: string
   name: string
   role: string
   emailVerified: boolean
@@ -22,17 +22,20 @@ export interface AuthUser {
     work: string | null
     profileVisibility: string
     messagePermission: string
-    callPermission: string readReceipts: boolean
+    callPermission: string
+    readReceipts: boolean
     photoFilter: string | null
     verified: string
-    lastSeen: string | null } | null
+    lastSeen: string | null
+  } | null
 }
 
 interface AuthCtx {
-  user: AuthUser | null loading: boolean
+  user: AuthUser | null
+  loading: boolean
   refresh: () => Promise<AuthUser | null>
   setUser: (u: AuthUser | null) => void
-  login: (identifier: string, password: string) => Promise<void>
+  login: (identifier: string, password: string, totp?: string) => Promise<{ requires2fa: boolean }>
   register: (data: { name: string; username: string; email: string; password: string }) => Promise<void>
   logout: () => Promise<void>
 }
@@ -57,17 +60,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [])
 
   useEffect(() => {
-    if (user?.id) {
-      refresh()
-    }
-  }, [user?.id])
+    void refresh()
+  }, [refresh])
 
-  const login = useCallback(async (identifier: string, password: string) => {
-    const data = await api<{ user: any }>('/api/auth/login', {
+  const login = useCallback(async (identifier: string, password: string, totp?: string) => {
+    const data = await api<{ user?: AuthUser; requires2fa?: boolean }>('/api/auth/login', {
       method: 'POST',
-      body: JSON.stringify({ email: identifier, password }),
+      body: JSON.stringify({ identifier, password, totp }),
     })
+    if (data.requires2fa) return { requires2fa: true }
     await refresh()
+    return { requires2fa: false }
   }, [refresh])
 
   const register = useCallback(async (input: { name: string; username: string; email: string; password: string }) => {

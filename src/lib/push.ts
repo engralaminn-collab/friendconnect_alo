@@ -1,11 +1,13 @@
-// Web Push notification library (round 15)
-// Uses web-push npm package. If VAPID keys are not configured, push is disabled (graceful fallback).
 import { logger } from '@/lib/logger'
 
-let _webpush: any = null
-let _configured = false
+type WebPush = {
+  setVapidDetails: (subject: string, publicKey: string, privateKey: string) => void
+  sendNotification: (sub: unknown, payload: string) => Promise<unknown>
+}
 
-export function initWebPush() {
+let _webpush: WebPush | null = null
+
+export function initWebPush(): WebPush | null {
   if (_webpush) return _webpush
   const publicKey = process.env.VAPID_PUBLIC_KEY
   const privateKey = process.env.VAPID_PRIVATE_KEY
@@ -15,14 +17,15 @@ export function initWebPush() {
     return null
   }
   try {
-    const webpush = (eval('require')('web-push'))
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const webpush = require('web-push') as WebPush
     webpush.setVapidDetails(subject, publicKey, privateKey)
     _webpush = webpush
-    _configured = true
     logger.info('web-push configured', { subject })
     return webpush
-  } catch (e: any) {
-    logger.error('web-push init failed', { error: e?.message })
+  } catch (e: unknown) {
+    const err = e as Error
+    logger.error('web-push init failed', { error: err?.message })
     return null
   }
 }
@@ -35,7 +38,10 @@ export function getVapidPublicKey(): string {
   return process.env.VAPID_PUBLIC_KEY || ''
 }
 
-export async function sendPushNotification(subscription: { endpoint: string; p256dh: string; auth: string }, payload: any) {
+export async function sendPushNotification(
+  subscription: { endpoint: string; p256dh: string; auth: string },
+  payload: unknown
+) {
   const webpush = initWebPush()
   if (!webpush) return { ok: false, error: 'web-push not configured' }
   try {
@@ -44,8 +50,9 @@ export async function sendPushNotification(subscription: { endpoint: string; p25
       JSON.stringify(payload)
     )
     return { ok: true }
-  } catch (e: any) {
-    logger.error('push send failed', { error: e?.message, endpoint: subscription.endpoint.slice(0, 50) })
-    return { ok: false, error: e?.message, statusCode: e?.statusCode }
+  } catch (e: unknown) {
+    const err = e as Error & { statusCode?: number }
+    logger.error('push send failed', { error: err?.message, endpoint: subscription.endpoint.slice(0, 50) })
+    return { ok: false, error: err?.message, statusCode: err?.statusCode }
   }
 }

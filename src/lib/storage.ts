@@ -1,8 +1,7 @@
-// Storage provider abstraction (round 12) — local + S3-compatible.
-// If no S3 config is set, uses local filesystem (default).
-import { writeFileSync, readFileSync, existsSync, mkdirSync, unlinkSync, statSync } from 'fs'
+import { writeFileSync, readFileSync, existsSync, mkdirSync, unlinkSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { logger } from '@/lib/logger'
+import { uploadDir } from '@/lib/paths'
 
 export interface StorageProvider {
   upload(key: string, data: Buffer, mimeType: string): Promise<{ url: string; size: number }>
@@ -14,9 +13,9 @@ export interface StorageProvider {
 
 class LocalStorageProvider implements StorageProvider {
   private dir: string
-  constructor(dir: string = '/home/aloedu/storage/friendconnect') {
-    this.dir = dir
-    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+  constructor(dir?: string) {
+    this.dir = dir || uploadDir()
+    if (!existsSync(this.dir)) mkdirSync(this.dir, { recursive: true })
   }
   async upload(key: string, data: Buffer, _mimeType: string) {
     const path = join(this.dir, key)
@@ -24,14 +23,17 @@ class LocalStorageProvider implements StorageProvider {
     return { url: `/api/files/${key.split('.')[0]}`, size: data.length }
   }
   async download(key: string) {
-    // key may be a full filename or just the id prefix
-    const { readdirSync } = await import('fs')
-    const match = readdirSync(this.dir).find((f: string) => f.startsWith(key.split('.')[0]))
+    const prefix = key.split('.')[0]
+    const match = readdirSync(this.dir).find((f: string) => f.startsWith(prefix))
     if (!match) throw new Error('File not found')
     return readFileSync(join(this.dir, match))
   }
   async delete(key: string) {
-    try { unlinkSync(join(this.dir, key)) } catch {}
+    try {
+      unlinkSync(join(this.dir, key))
+    } catch {
+      /* ignore */
+    }
   }
   getUrl(key: string) {
     return `/api/files/${key.split('.')[0]}`
@@ -43,18 +45,16 @@ class LocalStorageProvider implements StorageProvider {
 
 class S3StorageProvider implements StorageProvider {
   private config: { endpoint: string; bucket: string; accessKey: string; secretKey: string; region: string }
-  constructor(config: typeof S3StorageProvider.prototype.config) {
+  constructor(config: S3StorageProvider['config']) {
     this.config = config
   }
   async upload(key: string, data: Buffer, mimeType: string) {
-    // Uses the AWS SDK v3 S3 client (optional dependency)
-    const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3').catch(() => ({ S3Client: null, PutObjectCommand: null }))
-    if (!S3Client) throw new Error('@aws-sdk/client-s3 not installed')
+    const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3')
     const client = new S3Client({
       endpoint: this.config.endpoint || undefined,
       region: this.config.region,
       credentials: { accessKeyId: this.config.accessKey, secretAccessKey: this.config.secretKey },
-      forcePathStyle: !!this.config.endpoint, // MinIO needs path-style
+      forcePathStyle: !!this.config.endpoint,
     })
     await client.send(new PutObjectCommand({ Bucket: this.config.bucket, Key: key, Body: data, ContentType: mimeType }))
     const url = this.config.endpoint
@@ -63,16 +63,20 @@ class S3StorageProvider implements StorageProvider {
     return { url, size: data.length }
   }
   async download(key: string) {
-    const { S3Client, GetObjectCommand } = await import('@aws-sdk/client-s3').catch(() => ({ S3Client: null, GetObjectCommand: null }))
-    if (!S3Client) throw new Error('@aws-sdk/client-s3 not installed')
-    const client = new S3Client({ region: this.config.region, credentials: { accessKeyId: this.config.accessKey, secretAccessKey: this.config.secretKey } })
+    const { S3Client, GetObjectCommand } = await import('@aws-sdk/client-s3')
+    const client = new S3Client({
+      region: this.config.region,
+      credentials: { accessKeyId: this.config.accessKey, secretAccessKey: this.config.secretKey },
+    })
     const res = await client.send(new GetObjectCommand({ Bucket: this.config.bucket, Key: key }))
     return Buffer.from(await res.Body!.transformToByteArray())
   }
   async delete(key: string) {
-    const { S3Client, DeleteObjectCommand } = await import('@aws-sdk/client-s3').catch(() => ({ S3Client: null, DeleteObjectCommand: null }))
-    if (!S3Client) return
-    const client = new S3Client({ region: this.config.region, credentials: { accessKeyId: this.config.accessKey, secretAccessKey: this.config.secretKey } })
+    const { S3Client, DeleteObjectCommand } = await import('@aws-sdk/client-s3')
+    const client = new S3Client({
+      region: this.config.region,
+      credentials: { accessKeyId: this.config.accessKey, secretAccessKey: this.config.secretKey },
+    })
     await client.send(new DeleteObjectCommand({ Bucket: this.config.bucket, Key: key }))
   }
   getUrl(key: string) {
@@ -81,7 +85,12 @@ class S3StorageProvider implements StorageProvider {
       : `https://${this.config.bucket}.s3.${this.config.region}.amazonaws.com/${key}`
   }
   async exists(key: string) {
-    try { await this.download(key); return true } catch { return false }
+    try {
+      await this.download(key)
+      return true
+    } catch {
+      return false
+    }
   }
 }
 

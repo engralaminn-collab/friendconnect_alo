@@ -1,5 +1,4 @@
 'use client'
-/* eslint-disable react-hooks/set-state-in-effect */
 
 import * as React from 'react'
 import { useEffect, useState, useRef, useCallback, useMemo } from 'react'
@@ -77,6 +76,7 @@ import {
   Folder,
   FolderOpen,
   Move,
+  Lock,
 } from 'lucide-react'
 
 // ---------------- types ----------------
@@ -1917,7 +1917,7 @@ function ChatRoom({
   // ---- toggle reaction on a message ----
   const toggleReaction = useCallback(
     (messageId: string, emoji: string) => {
-      if (!socket) return
+      if (!socket || !meId) return
       setMessages((prev) =>
         prev.map((m) => {
           if (m.id !== messageId) return m
@@ -2809,8 +2809,12 @@ function ChatRoom({
         </div>
       )}
 
+      <p className="flex items-center justify-center gap-1 border-t border-border/60 px-3 py-1 text-[10px] text-muted-foreground">
+        <Lock size={10} />
+        Private chat — encrypted-feel realtime. Only people in this conversation can see these messages.
+      </p>
       {/* input bar */}
-      <div className="border-t border-border bg-background p-2 fc-safe-bottom">
+      <div className="border-t-0 bg-background p-2 fc-safe-bottom">
         {recording ? (
           <div className="flex items-center gap-3 rounded-2xl bg-destructive/10 px-4 py-3">
             <span className="relative flex h-3 w-3">
@@ -3813,6 +3817,9 @@ function ChatSettingsSheet({
   onOpenStarred,
   onOpenScheduled,
   onOpenReminders,
+  mode,
+  peerId,
+  peerName,
 }: {
   open: boolean
   onOpenChange: (o: boolean) => void

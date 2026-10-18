@@ -3,53 +3,55 @@ import { isRedisAvailable, getCache } from '@/lib/cache'
 import { isEmailConfigured } from '@/lib/email'
 import { isPushConfigured } from '@/lib/push'
 import { json } from '@/lib/serialize'
+import { realtimeUrl } from '@/lib/paths'
 
-// Health check endpoint (round 11+15) — reports all subsystem status honestly.
 export async function GET() {
   const checks: Record<string, string> = {}
   let ok = true
   let degraded = false
 
-  // Database
   try {
-    await db.$queryRaw`SELECT 1`
+    await db.user.count()
     checks.database = 'ok'
   } catch {
     checks.database = 'error'
     ok = false
   }
 
-  // Realtime (separate process on :3003)
-  checks.realtime = 'ok'
+  try {
+    const url = realtimeUrl()
+    const ac = new AbortController()
+    const t = setTimeout(() => ac.abort(), 2000)
+    const res = await fetch(`${url}/health`, { signal: ac.signal }).catch(() => null)
+    clearTimeout(t)
+    checks.realtime = res && res.ok ? 'ok' : 'error'
+    if (checks.realtime !== 'ok') {
+      degraded = true
+    }
+  } catch {
+    checks.realtime = 'error'
+    degraded = true
+  }
 
-  // Redis
   if (isRedisAvailable()) {
     try {
       const cache = getCache()
       await cache.set('health:ping', 'pong', 5)
       const val = await cache.get('health:ping')
       checks.redis = val === 'pong' ? 'ok' : 'error'
-      if (checks.redis !== 'ok') ok = false
+      if (checks.redis !== 'ok') degraded = true
     } catch {
       checks.redis = 'error'
-      ok = false
+      degraded = true
     }
   } else {
     checks.redis = 'unconfigured'
-    degraded = true
   }
 
-  // Email
   checks.email = isEmailConfigured() ? 'ok' : 'unconfigured'
-  if (checks.email !== 'ok') degraded = true
-
-  // Push
   checks.push = isPushConfigured() ? 'ok' : 'unconfigured'
-  if (checks.push !== 'ok') degraded = true
-
-  // Uptime
   checks.uptime = `${process.uptime().toFixed(1)}s`
 
-  const status = ok ? (degraded ? 'degraded' : 'healthy') : 'unhealthy'
+  const status = !ok ? 'unhealthy' : degraded ? 'degraded' : 'healthy'
   return json({ status, checks, timestamp: new Date().toISOString() }, ok ? 200 : 503)
 }

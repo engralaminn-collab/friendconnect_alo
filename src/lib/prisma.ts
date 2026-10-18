@@ -1,11 +1,7 @@
-import { PrismaClient } from "@prisma/client";
+import runtime from './db-runtime'
 
-const globalForPrisma = globalThis as unknown as {
-  prisma: PrismaClient | undefined;
-};
+const client = (runtime as { prisma?: typeof runtime }).prisma || runtime
 
-export const prisma = globalForPrisma.prisma ?? new PrismaClient();
-export const db = prisma;
-
-if (process.env.NODE_ENV !== "production") globalForPrisma.prisma = prisma;
-export default prisma;
+export const prisma = client
+export const db = client
+export default client

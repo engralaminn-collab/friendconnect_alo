@@ -19,11 +19,10 @@ import { CallOverlay } from '@/components/fc/calls/CallOverlay'
 import { FCLogo } from '@/components/fc/ui'
 
 function AuthedApp() {
-  const { user } = useAuth()
   const { view } = useApp()
 
   return (
-    <SocketProvider userId={user?.id}>
+    <SocketProvider>
       <NotificationsProvider>
         <div className="flex min-h-screen flex-col bg-background">
           <TopBar />
@@ -65,13 +64,10 @@ function Root() {
 
   useEffect(() => {
     if (loading) return
-    const t = setTimeout(() => {
-      if (view === 'splash') setView(user ? 'home' : 'welcome')
-    }, 700)
-    return () => clearTimeout(t)
+    if (view === 'splash') setView(user ? 'home' : 'welcome')
   }, [loading, user, view, setView])
 
-  if (loading) return <Splash />
+  if (loading || view === 'splash') return <Splash />
   if (!user) return <AuthFlow />
   return <AuthedApp />
 }

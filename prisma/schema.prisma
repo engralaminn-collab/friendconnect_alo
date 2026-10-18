@@ -13,7 +13,7 @@ model User {
   email        String   @unique
   phone         String?   @unique
   username     String   @unique
-  passwordHash String
+  passwordHash String   @db.VarChar(255)
   name         String
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -21,7 +21,7 @@ model User {
   emailVerified     Boolean  @default(false)
   twoFactorSecret   String?
   twoFactorEnabled  Boolean  @default(false)
-  twoFactorBackup   String?  // comma-sep backup codes (hashed)
+  twoFactorBackup   String?  @db.Text
   role              String   @default("user") // user | admin
   fileQuotaBytes    Int      @default(104857600) // 100MB default quota
   fileUsedBytes     Int @default(0)
@@ -62,7 +62,7 @@ model Profile {
   userId             String   @unique
   user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   photoUrl           String?
-  bio                String?
+  bio                String?  @db.Text
   phone              String?
   location           String?
   birthday           String?
@@ -90,7 +90,7 @@ model Session {
   expiresAt DateTime
   createdAt DateTime @default(now())
   // Additive (round 11): device management
-  userAgent   String?  // browser/device User-Agent string
+  userAgent   String?  @db.Text
   deviceName  String?  // parsed friendly name (e.g. "Chrome on macOS")
   ipAddress   String?  // last known IP
   lastActiveAt DateTime @default(now())
@@ -120,7 +120,7 @@ model Message {
   senderId   String
   receiverId String?
   groupId    String?
-  content    String
+  content    String   @db.Text
   type       String   @default("text") // text | image | video | audio | document
   fileUrl    String?
   fileName   String?
@@ -156,7 +156,7 @@ model Message {
 model Group {
   id          String   @id @default(cuid())
   name        String
-  description String?
+  description String?  @db.Text
   photoUrl    String?
   createdBy   String
   createdAt   DateTime @default(now())
@@ -208,8 +208,8 @@ model Notification {
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
   type      String   // friend_request | message | call | group | system
   title     String
-  body      String
-  data      String?
+  body      String   @db.Text
+  data      String?  @db.Text
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
 }
@@ -267,7 +267,7 @@ model Story {
   id        String   @id @default(cuid())
   userId    String
   type      String   @default("text") // text | image
-  content   String   // text content or image url
+  content   String   @db.Text
   bg        String?  // background color/gradient for text stories
   createdAt DateTime @default(now())
   expiresAt DateTime // 24h after createdAt
@@ -312,7 +312,7 @@ model StoryReply {
   id        String   @id @default(cuid())
   storyId   String
   userId    String  // replier
-  content   String  // text reply
+  content   String  @db.Text
   createdAt DateTime @default(now())
 
   story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
@@ -327,7 +327,7 @@ model MessageDraft {
   userId    String  // owner of the draft
   peerId    String  // conversation peer (user id or group id)
   isGroup   Boolean @default(false)
-  content   String
+  content   String   @db.Text
   updatedAt DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -402,8 +402,8 @@ model AuditLog {
   action    String   // e.g. "login", "logout", "2fa_enable", "admin_user_view"
   resource  String?  // e.g. "user:abc123", "message:def456"
   ip        String?
-  userAgent String?
-  meta      String?  // JSON string of extra context
+  userAgent String?  @db.Text
+  meta      String?  @db.Text
   createdAt DateTime @default(now())
 
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
@@ -417,7 +417,7 @@ model AuditLog {
 model PushSubscription {
   id        String   @id @default(cuid())
   userId    String
-  endpoint  String   @unique
+  endpoint  String   @unique @db.VarChar(512)
   p256dh    String
   auth      String
   userAgent String?

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback } from 'react'
+import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
 import { api, timeAgo } from '@/lib/api'
 import { useApp } from '@/lib/store'
 import { useSocket } from '@/hooks/use-socket'
@@ -47,11 +47,37 @@ export function FriendsView() {
   }, [])
 
   const runSearch = useCallback(async (q: string) => {
+    const term = q.trim()
+    if (term.length < 2) {
+      setResults([])
+      return
+    }
     try {
-      const data = await api<{ users: UserLite[] }>(`/api/users/search?q=${encodeURIComponent(q)}`)
+      const data = await api<{ users: UserLite[] }>(`/api/users/search?q=${encodeURIComponent(term)}`)
       setResults(data.users)
-    } catch {}
+    } catch {
+      setResults([])
+    }
   }, [])
+
+  const searchTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  useEffect(() => {
+    if (searchTimer.current) clearTimeout(searchTimer.current)
+    searchTimer.current = setTimeout(() => {
+      void runSearch(query)
+    }, 250)
+    return () => {
+      if (searchTimer.current) clearTimeout(searchTimer.current)
+    }
+  }, [query, runSearch])
+
+  const visibleFriends = useMemo(() => {
+    const term = query.trim().toLowerCase()
+    if (!term) return friends
+    return friends.filter(
+      (f) => f.name.toLowerCase().includes(term) || f.username.toLowerCase().includes(term)
+    )
+  }, [friends, query])
 
   const loadSuggestions = useCallback(async () => {
     setSuggestionsLoading(true)
@@ -79,9 +105,8 @@ export function FriendsView() {
   }, [])
 
   useEffect(() => {
-    loadFriends()
-    runSearch(query)
-  }, [loadFriends, runSearch, query])
+    void loadFriends()
+  }, [loadFriends])
 
   useEffect(() => {
     loadSuggestions()
@@ -126,7 +151,8 @@ export function FriendsView() {
   return (
     <div className="flex h-full flex-col">
       <div className="border-b border-border px-4 py-3">
-        <h1 className="mb-3 text-xl font-bold">Friends</h1>
+        <h1 className="mb-1 text-xl font-bold">Find friends</h1>
+        <p className="mb-3 text-xs text-muted-foreground">Search by name or username to rediscover people you know.</p>
         <div className="relative">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
           <Input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by name or username" className="rounded-xl pl-9" />
@@ -143,12 +169,14 @@ export function FriendsView() {
         </TabsList>
 
         <TabsContent value="search" className="fc-scroll m-0 flex-1 overflow-y-auto p-4">
-          {results.length === 0 ? (
+          {query.trim().length < 2 ? (
+            <EmptyState icon={<Search size={36} />} title="Find friends" description="Search by name or username to rediscover people you know." />
+          ) : results.length === 0 ? (
             <EmptyState icon={<Search size={36} />} title="No users found" description="Try searching by name or username." />
           ) : (
             <div className="space-y-1">
               {results.map((u) => {
-                const rel = u.relation
+                const rel = u.relation || 'NONE'
                 return (
                   <div key={u.id} className="flex items-center gap-3 rounded-xl p-2 hover:bg-accent/40">
                     <button onClick={() => openProfile(u.id)} className="flex flex-1 items-center gap-3 text-left">
@@ -170,11 +198,11 @@ export function FriendsView() {
         </TabsContent>
 
         <TabsContent value="friends" className="fc-scroll m-0 flex-1 overflow-y-auto p-4">
-          {friends.length === 0 ? (
-            <EmptyState icon={<Users size={36} />} title="No friends yet" description="Find people you know and send a request." />
+          {visibleFriends.length === 0 ? (
+            <EmptyState icon={<Users size={36} />} title={friends.length === 0 ? 'No friends yet' : 'No matches'} description={friends.length === 0 ? 'Find people you know and send a request.' : 'Try a different name or username.'} />
           ) : (
             <div className="space-y-1">
-              {friends.map((f) => (
+              {visibleFriends.map((f) => (
                 <FriendRow
                   key={f.id}
                   friend={f}

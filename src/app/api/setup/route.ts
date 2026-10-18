@@ -1,6 +1,8 @@
+import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { hashPassword } from '@/lib/auth'
 import { ensureProfile, json, errorJson } from '@/lib/serialize'
+import { getSessionUser } from '@/lib/session'
 
 const DEMO = [
   { name: 'Aria Ahmed', username: 'aria', email: 'aria@friendconnect.app', password: 'password123', bio: 'Reconnecting with old classmates.', location: 'Dhaka, Bangladesh' },
@@ -8,8 +10,19 @@ const DEMO = [
   { name: 'Carla Gomez', username: 'carla', email: 'carla@friendconnect.app', password: 'password123', bio: 'Designer & music lover.', location: 'Madrid, Spain' },
 ]
 
-export async function POST() {
+export async function POST(req: NextRequest) {
   try {
+    const allow = process.env.ALLOW_SETUP === 'true' || process.env.NODE_ENV !== 'production'
+    if (!allow) {
+      const me = await getSessionUser()
+      if (!me || me.role !== 'admin') return errorJson('Setup is disabled in production', 403)
+    }
+    const secret = process.env.SETUP_SECRET
+    if (secret) {
+      const provided = req.headers.get('x-setup-secret') || ''
+      if (provided !== secret) return errorJson('Forbidden', 403)
+    }
+
     const created: { username: string; email: string; password: string; name: string }[] = []
     const ids: Record<string, string> = {}
     for (const d of DEMO) {
@@ -18,13 +31,12 @@ export async function POST() {
         user = await db.user.create({
           data: { email: d.email, username: d.username, name: d.name, passwordHash: hashPassword(d.password), emailVerified: true },
         })
-        await ensureProfile(user.id)
-        await db.profile.update({
-          where: { userId: user.id },
-          data: { bio: d.bio, location: d.location },
-        })
       }
-      // make aria an admin + verified profile for the admin dashboard
+      await ensureProfile(user.id)
+      await db.profile.update({
+        where: { userId: user.id },
+        data: { bio: d.bio, location: d.location },
+      })
       if (d.username === 'aria') {
         await db.user.update({ where: { id: user.id }, data: { role: 'admin', emailVerified: true } })
         await db.profile.updateMany({ where: { userId: user.id }, data: { verified: 'verified' } })
@@ -32,9 +44,9 @@ export async function POST() {
       ids[d.username] = user.id
       created.push({ username: d.username, email: d.email, password: d.password, name: d.name })
     }
-    // make aria <-> bilal friends, aria <-> carla friends
     const link = async (a: string, b: string) => {
-      const aId = ids[a], bId = ids[b]
+      const aId = ids[a]
+      const bId = ids[b]
       const existing = await db.friendship.findFirst({
         where: { OR: [{ requesterId: aId, receiverId: bId }, { requesterId: bId, receiverId: aId }] },
       })
@@ -45,7 +57,6 @@ export async function POST() {
     await link('aria', 'bilal')
     await link('aria', 'carla')
 
-    // a couple of seed messages between aria and bilal
     const existingMsg = await db.message.findFirst({ where: { senderId: ids['aria'], receiverId: ids['bilal'] } })
     if (!existingMsg) {
       await db.message.create({ data: { senderId: ids['aria'], receiverId: ids['bilal'], content: 'Hey Bilal! Long time no see 🎉', type: 'text', status: 'SEEN' } })
@@ -53,7 +64,8 @@ export async function POST() {
     }
 
     return json({ ok: true, accounts: created })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (e: unknown) {
+    const err = e as Error
+    return errorJson(err?.message || 'Server error', 500)
   }
 }

@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers'
 import { db } from '@/lib/db'
-import { sessionCookieName, sessionTtlMs } from '@/lib/auth'
+import { sessionCookieName, sessionTtlMs, generateToken } from '@/lib/auth'
 import { parseDeviceName } from '@/lib/logger'
 
 export interface AuthUser {
@@ -13,36 +13,18 @@ export interface AuthUser {
   twoFactorEnabled?: boolean
 }
 
+function cookieSecure(): boolean {
+  return process.env.NODE_ENV === 'production'
+}
+
 export async function getSessionUser(): Promise<AuthUser | null> {
   const cookieStore = await cookies()
   const token = cookieStore.get(sessionCookieName)?.value
   if (!token) return null
-  const session = await db.session.findUnique({
-    where: { token },
-    include: { user: true },
-  })
-  if (!session) return null
-  if (session.expiresAt.getTime() < Date.now()) {
-    await db.session.delete({ where: { id: session.id } }).catch(() => {})
-    return null
-  }
-  // update lastActiveAt (throttled — only every 5 min)
-  if (Date.now() - session.lastActiveAt.getTime() > 5 * 60 * 1000) {
-    await db.session.update({ where: { id: session.id }, data: { lastActiveAt: new Date() } }).catch(() => {})
-  }
-  return {
-    id: session.user.id,
-    email: session.user.email,
-    username: session.user.username,
-    name: session.user.name,
-    role: session.user.role,
-    emailVerified: session.user.emailVerified,
-    twoFactorEnabled: session.user.twoFactorEnabled,
-  }
+  return getUserByToken(token)
 }
 
 export async function createSession(userId: string, opts?: { userAgent?: string; ip?: string }): Promise<string> {
-  const { generateToken } = await import('@/lib/auth')
   const token = generateToken()
   const userAgent = opts?.userAgent || null
   const deviceName = userAgent ? parseDeviceName(userAgent) : null
@@ -63,6 +45,7 @@ export async function setSessionCookie(token: string) {
   const cookieStore = await cookies()
   cookieStore.set(sessionCookieName, token, {
     httpOnly: true,
+    secure: cookieSecure(),
     sameSite: 'lax',
     path: '/',
     maxAge: sessionTtlMs / 1000,
@@ -71,7 +54,13 @@ export async function setSessionCookie(token: string) {
 
 export async function clearSessionCookie() {
   const cookieStore = await cookies()
-  cookieStore.delete(sessionCookieName)
+  cookieStore.set(sessionCookieName, '', {
+    httpOnly: true,
+    secure: cookieSecure(),
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 0,
+  })
 }
 
 export async function requireUser(): Promise<AuthUser> {
@@ -80,18 +69,38 @@ export async function requireUser(): Promise<AuthUser> {
   return user
 }
 
-// Validate a session token from external services (websocket). Returns user id or null.
+export async function requireAdmin(): Promise<AuthUser> {
+  const user = await requireUser()
+  if (user.role !== 'admin') throw new Error('FORBIDDEN')
+  return user
+}
+
+export async function getCurrentSessionToken(): Promise<string | null> {
+  const cookieStore = await cookies()
+  return cookieStore.get(sessionCookieName)?.value ?? null
+}
+
 export async function getUserByToken(token: string): Promise<AuthUser | null> {
+  if (!token) return null
   const session = await db.session.findUnique({
     where: { token },
     include: { user: true },
   })
   if (!session) return null
-  if (session.expiresAt.getTime() < Date.now()) return null
+  if (session.expiresAt.getTime() < Date.now()) {
+    await db.session.delete({ where: { id: session.id } }).catch(() => {})
+    return null
+  }
+  if (Date.now() - session.lastActiveAt.getTime() > 5 * 60 * 1000) {
+    await db.session.update({ where: { id: session.id }, data: { lastActiveAt: new Date() } }).catch(() => {})
+  }
   return {
     id: session.user.id,
     email: session.user.email,
     username: session.user.username,
     name: session.user.name,
+    role: session.user.role,
+    emailVerified: session.user.emailVerified,
+    twoFactorEnabled: session.user.twoFactorEnabled,
   }
 }

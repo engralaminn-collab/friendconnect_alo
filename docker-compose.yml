@@ -1,0 +1,90 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--save", "60", "1"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  app:
+    build: .
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      DATABASE_URL: file:./db/custom.db
+      REDIS_URL: redis://redis:6379
+      SOCKET_INTERNAL_URL: http://socket:3003
+      TURN_SERVERS: ${TURN_PUBLIC:-turn:127.0.0.1:3478}
+      TURN_USERNAME: ${TURN_USERNAME:-friendconnect}
+      TURN_PASSWORD: ${TURN_PASSWORD:-fc-turn-dev-local}
+      TURN_REALM: friendconnect
+    ports:
+      - "3000:3000"
+    volumes:
+      - uploads:/app/upload
+      - sqlite_data:/app/db
+
+  socket:
+    build: .
+    restart: unless-stopped
+    command: ["node", "socket-server.js"]
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      SOCKET_PORT: 3003
+      DATABASE_URL: file:./db/custom.db
+      REDIS_URL: redis://redis:6379
+    ports:
+      - "3003:3003"
+    volumes:
+      - sqlite_data:/app/db
+      - uploads:/app/upload
+
+  turn:
+    build: .
+    restart: unless-stopped
+    command: ["node", "scripts/turn-server.js"]
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      TURN_PORT: 3478
+      TURN_USERNAME: ${TURN_USERNAME:-friendconnect}
+      TURN_PASSWORD: ${TURN_PASSWORD:-fc-turn-dev-local}
+      TURN_REALM: friendconnect
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - app
+      - socket
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:-localhost}
+    volumes:
+      - ./Caddyfile.production:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  redis_data:
+  uploads:
+  sqlite_data:
+  caddy_data:
+  caddy_config:

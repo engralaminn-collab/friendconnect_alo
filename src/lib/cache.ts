@@ -1,6 +1,3 @@
-// Redis abstraction (round 12) — graceful fallback to in-memory when Redis is unavailable.
-// In production with REDIS_URL set, connects to Redis for caching/rate-limiting.
-// Without Redis, falls back to in-memory maps (single-process only).
 import { logger } from '@/lib/logger'
 
 export interface CacheProvider {
@@ -11,7 +8,7 @@ export interface CacheProvider {
 }
 
 class MemoryCache implements CacheProvider {
-  private store = new Map<string, { value: any; expires: number | null }>()
+  private store = new Map<string, { value: unknown; expires: number | null }>()
   async get<T>(key: string): Promise<T | null> {
     const entry = this.store.get(key)
     if (!entry) return null
@@ -36,16 +33,26 @@ class MemoryCache implements CacheProvider {
 }
 
 class RedisCache implements CacheProvider {
-  private client: any
+  private client: {
+    get: (k: string) => Promise<string | null>
+    set: (...args: unknown[]) => Promise<unknown>
+    del: (k: string) => Promise<unknown>
+    incr: (k: string) => Promise<number>
+    expire: (k: string, s: number) => Promise<unknown>
+    on: (ev: string, cb: (err: Error) => void) => void
+  }
+
   constructor(url: string) {
-    const Redis = (eval('require')('ioredis'))
-    this.client = new Redis(url, { retryStrategy: (times: number) => Math.min(times * 500, 2000) })
-    this.client.on('error', (err: any) => logger.error('redis error', { error: err.message }))
+    // Dynamic import kept server-side; ioredis is a Node runtime dep.
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    const Redis = require('ioredis')
+    this.client = new Redis(url, { retryStrategy: (times: number) => Math.min(times * 500, 2000), maxRetriesPerRequest: 2 })
+    this.client.on('error', (err: Error) => logger.error('redis error', { error: err.message }))
     this.client.on('connect', () => logger.info('redis connected'))
   }
   async get<T>(key: string): Promise<T | null> {
     const val = await this.client.get(key)
-    return val ? JSON.parse(val) : null
+    return val ? (JSON.parse(val) as T) : null
   }
   async set<T>(key: string, value: T, ttlSeconds?: number): Promise<void> {
     const val = JSON.stringify(value)
@@ -71,8 +78,9 @@ export function getCache(): CacheProvider {
     try {
       _cache = new RedisCache(redisUrl)
       logger.info('cache provider: redis')
-    } catch (e: any) {
-      logger.warn('redis init failed, falling back to memory', { error: e?.message })
+    } catch (e: unknown) {
+      const err = e as Error
+      logger.warn('redis init failed, falling back to memory', { error: err?.message })
       _cache = new MemoryCache()
     }
   } else {
@@ -86,8 +94,11 @@ export function isRedisAvailable(): boolean {
   return !!process.env.REDIS_URL
 }
 
-// Rate limiter using the cache provider
-export async function rateLimit(key: string, maxRequests: number, windowSeconds: number): Promise<{ allowed: boolean; remaining: number }> {
+export async function rateLimit(
+  key: string,
+  maxRequests: number,
+  windowSeconds: number
+): Promise<{ allowed: boolean; remaining: number }> {
   const cache = getCache()
   const count = await cache.incr(key, windowSeconds)
   return { allowed: count <= maxRequests, remaining: Math.max(0, maxRequests - count) }

@@ -1,82 +1,82 @@
-import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
-import crypto from "crypto";
+import { NextRequest } from 'next/server'
+import { db } from '@/lib/db'
+import { hashPassword, validatePassword, sanitizeUsername, isEmail, clientIp } from '@/lib/auth'
+import { createSession, setSessionCookie } from '@/lib/session'
+import { ensureProfile, errorJson, json } from '@/lib/serialize'
+import { rateLimit } from '@/lib/cache'
+import { audit } from '@/lib/audit'
+import { sendEmail, isEmailConfigured } from '@/lib/email'
+import { generateOtp } from '@/lib/auth'
 
-function hashPassword(password: string): string {
-  return crypto.createHash("sha256").update(password).digest("hex");
-}
-
-export async function POST(req: Request) {
+export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { name, username, email, phone, password } = body;
+    const ip = clientIp(req) || 'unknown'
+    const rl = await rateLimit(`register:${ip}`, 5, 3600)
+    if (!rl.allowed) return errorJson('Too many registrations from this network', 429)
 
-    if (!password) {
-      return NextResponse.json(
-        { error: "পাসওয়ার্ড আবশ্যক" },
-        { status: 400 }
-      );
-    }
+    const body = await req.json()
+    const { name, username, email, password } = body as Record<string, string>
 
-    const rawInput = (email || phone || username || "").trim();
-    if (!rawInput) {
-      return NextResponse.json(
-        { error: "ইমেইল, ফোন নম্বর বা ইউজারনেম দিন" },
-        { status: 400 }
-      );
-    }
+    if (!password) return errorJson('Password is required', 400)
+    const pwErr = validatePassword(password)
+    if (pwErr) return errorJson(pwErr, 400)
 
-    const cleanRaw = rawInput.toLowerCase().replace(/[^a-z0-9_]/g, "");
-    const finalUsername = (username ? username.toLowerCase().replace(/[^a-z0-9_]/g, "") : cleanRaw) || "user_" + Date.now();
-    const finalEmail = email ? email.toLowerCase().trim() : (rawInput.includes("@") ? rawInput.toLowerCase() : `${finalUsername}@alolabs.net`);
-    const finalName = name || finalUsername;
+    const finalUsername = sanitizeUsername(String(username || ''))
+    const finalEmail = String(email || '').trim().toLowerCase()
+    const finalName = String(name || '').trim()
 
-    const existing = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { email: finalEmail },
-          { username: finalUsername },
-        ],
-      },
-    });
+    if (!finalName || finalName.length < 2) return errorJson('Name is required', 400)
+    if (!finalUsername || finalUsername.length < 3) return errorJson('Username must be at least 3 characters', 400)
+    if (!isEmail(finalEmail)) return errorJson('A valid email is required', 400)
 
-    if (existing) {
-      return NextResponse.json(
-        { error: "এই ইউজার বা ইমেইল ইতিমধ্যে নিবন্ধিত। সরাসরি লগইন করুন।" },
-        { status: 400 }
-      );
-    }
+    const existing = await db.user.findFirst({
+      where: { OR: [{ email: finalEmail }, { username: finalUsername }] },
+    })
+    if (existing) return errorJson('That username or email is already registered. Sign in instead.', 409)
 
-    const passwordHash = hashPassword(password);
+    const emailVerified = !isEmailConfigured()
+    const otp = emailVerified ? null : generateOtp()
 
-    const user = await prisma.user.create({
+    const user = await db.user.create({
       data: {
         name: finalName,
         username: finalUsername,
         email: finalEmail,
-        passwordHash: passwordHash,
-        role: "user",
-        emailVerified: true,
+        passwordHash: hashPassword(password),
+        role: 'user',
+        emailVerified,
+        otpCode: otp,
+        otpExpiry: otp ? new Date(Date.now() + 10 * 60 * 1000) : null,
       },
-      select: {
-        id: true,
-        name: true,
-        username: true,
-        email: true,
-        role: true,
-      },
-    });
+    })
+    await ensureProfile(user.id)
 
-    return NextResponse.json({
+    if (otp) {
+      await sendEmail(
+        finalEmail,
+        'Verify your FriendConnect email',
+        `Your verification code is ${otp}. It expires in 10 minutes.`
+      )
+    }
+
+    const userAgent = req.headers.get('user-agent') || undefined
+    const token = await createSession(user.id, { userAgent, ip })
+    await setSessionCookie(token)
+    await audit({ userId: user.id, action: 'register', ip, userAgent })
+
+    return json({
       success: true,
-      message: "অ্যাকাউন্ট সফলভাবে তৈরি হয়েছে! এখন লগইন করুন।",
-      user,
-    });
-  } catch (error: any) {
-    console.error("Register Error:", error);
-    return NextResponse.json(
-      { error: error.message || "রেজিস্ট্রেশন সম্পন্ন করা যায়নি" },
-      { status: 500 }
-    );
+      message: emailVerified ? 'Account created' : 'Account created. Check your email for a verification code.',
+      user: {
+        id: user.id,
+        name: user.name,
+        username: user.username,
+        email: user.email,
+        role: user.role,
+      },
+    })
+  } catch (error: unknown) {
+    const err = error as Error
+    return errorJson(err.message || 'Registration failed', 500)
   }
 }
