@@ -71,6 +71,17 @@ See `.env.example`. Required in production:
 | `scripts/healthcheck.sh` | curl app + socket |
 | `coturn/install.sh` | TURN server |
 
+## Calls / images not working? Checklist
+
+1. **Use HTTPS.** Browsers block the camera and microphone on `http://<ip>` pages, so calls and
+   voice notes cannot work there. Point a domain at the server and use Caddy (`Caddyfile.production`).
+   The app now shows a clear message instead of failing silently.
+2. **TURN for different networks.** Calls between mobile data and WiFi need a relay. Set
+   `TURN_EXTERNAL_IP=<server public ip>` (bundled node-turn) or install Coturn, and open UDP `3478`
+   plus `49152-65535` in the firewall.
+3. **Restart both processes after deploys:** `pm2 restart friendconnect friendconnect-socket friendconnect-turn`.
+   Check `GET /api/webrtc/health` and `GET :3003/health`.
+
 ## Health
 
 - `GET /api/health`

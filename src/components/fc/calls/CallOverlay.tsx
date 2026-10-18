@@ -46,25 +46,51 @@ export function CallOverlay() {
   const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
   const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
 
-  useEffect(() => {
-    if (localVideoRef.current && localStream) {
-      localVideoRef.current.srcObject = localStream;
+  // Mobile browsers sometimes refuse autoplay; retry play() and, if still
+  // blocked, resume on the next tap anywhere on the call screen.
+  const [needsTap, setNeedsTap] = React.useState(false);
+  const tryPlay = React.useCallback((el: HTMLMediaElement | null) => {
+    if (!el || !el.srcObject) return;
+    const p = el.play();
+    if (p && typeof p.catch === "function") {
+      p.then(() => setNeedsTap(false)).catch((err: Error) => {
+        if (err?.name === "NotAllowedError") setNeedsTap(true);
+      });
     }
-  }, [localStream, callState]);
+  }, []);
 
   useEffect(() => {
-    if (remoteVideoRef.current && remoteStream) {
-      remoteVideoRef.current.srcObject = remoteStream;
+    const el = localVideoRef.current;
+    if (el && el.srcObject !== localStream) {
+      el.srcObject = localStream;
+      tryPlay(el);
     }
-    if (remoteAudioRef.current && remoteStream) {
-      remoteAudioRef.current.srcObject = remoteStream;
-    }
-  }, [remoteStream, callState]);
+  }, [localStream, callState, tryPlay]);
 
   useEffect(() => {
-    if (remoteVideoRef.current) remoteVideoRef.current.muted = !speakerOn;
+    const v = remoteVideoRef.current;
+    const a = remoteAudioRef.current;
+    if (v && v.srcObject !== remoteStream) {
+      v.srcObject = remoteStream;
+      tryPlay(v);
+    }
+    if (a && a.srcObject !== remoteStream) {
+      a.srcObject = remoteStream;
+      tryPlay(a);
+    }
+  }, [remoteStream, callState, tryPlay]);
+
+  useEffect(() => {
+    // Sound is played ONLY by the <audio> element. The <video> element is always
+    // muted — previously both played the remote stream, doubling every voice (echo).
     if (remoteAudioRef.current) remoteAudioRef.current.muted = !speakerOn;
-  }, [speakerOn]);
+  }, [speakerOn, remoteStream]);
+
+  const resumePlayback = () => {
+    tryPlay(remoteAudioRef.current);
+    tryPlay(remoteVideoRef.current);
+    tryPlay(localVideoRef.current);
+  };
 
   if (callState === "idle" || !peerInfo) return null;
 
@@ -75,7 +101,11 @@ export function CallOverlay() {
     callState === "connecting";
   const isConnected = callState === "connected";
   const showRemoteVideo = isVideo && isConnected;
-  const showLocalPiP = isVideo && videoEnabled && callState !== "ringing";
+  const showLocalPiP =
+    isVideo &&
+    videoEnabled &&
+    callState !== "ringing" &&
+    !!localStream?.getVideoTracks().length;
 
   const statusLabel = (() => {
     if (callState === "calling") return "Calling…";
@@ -90,6 +120,7 @@ export function CallOverlay() {
       className="fixed inset-0 z-[100] flex flex-col bg-black text-white"
       role="dialog"
       aria-modal="true"
+      onClick={needsTap ? resumePlayback : undefined}
     >
       {/* Background overlay */}
       <div
@@ -107,6 +138,7 @@ export function CallOverlay() {
         ref={remoteVideoRef}
         autoPlay
         playsInline
+        muted
         className={cn(
           "absolute inset-0 h-full w-full bg-black object-cover transition-opacity duration-500",
           showRemoteVideo ? "opacity-100" : "opacity-0"
@@ -189,6 +221,14 @@ export function CallOverlay() {
             {callState === "connected" && formatDuration(elapsed)}
           </div>
           <div className="text-[11px] text-white/50">Private call · crystal-clear audio</div>
+          {needsTap && (
+            <button
+              onClick={resumePlayback}
+              className="mt-2 rounded-full bg-white/20 px-4 py-1.5 text-xs font-medium backdrop-blur"
+            >
+              Tap to enable sound
+            </button>
+          )}
         </div>
       </div>
 

@@ -1,8 +1,25 @@
 import { existsSync, mkdirSync } from 'fs'
-import { join } from 'path'
+import { join, resolve, isAbsolute } from 'path'
+
+/**
+ * Project root. The Next.js standalone server chdir()s into `.next/standalone`; resolving
+ * relative paths against cwd there put uploads inside the build folder (wiped by every
+ * `npm run build`) instead of the real ./upload directory. See db-runtime.js appRoot().
+ */
+export function appRoot(): string {
+  if (process.env.APP_DIR) return resolve(/*turbopackIgnore: true*/ process.env.APP_DIR)
+  const cwd = process.cwd()
+  if (/[\\/]\.next[\\/]standalone$/.test(cwd)) return resolve(/*turbopackIgnore: true*/ cwd, '..', '..')
+  return cwd
+}
 
 export function uploadDir(): string {
-  const dir = process.env.UPLOAD_DIR || join(/*turbopackIgnore: true*/ process.cwd(), 'upload')
+  const configured = process.env.UPLOAD_DIR
+  const dir = configured
+    ? isAbsolute(configured)
+      ? configured
+      : resolve(/*turbopackIgnore: true*/ appRoot(), configured)
+    : join(/*turbopackIgnore: true*/ appRoot(), 'upload')
   if (!existsSync(/*turbopackIgnore: true*/ dir)) mkdirSync(/*turbopackIgnore: true*/ dir, { recursive: true })
   return dir
 }

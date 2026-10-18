@@ -7,6 +7,12 @@ const nextConfig: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
   serverExternalPackages: ['better-sqlite3'],
+  experimental: {
+    // src/proxy.ts runs on every request, and Next buffers request bodies for it
+    // with a 10 MB default cap. Anything larger (phone videos, big photos) was
+    // truncated → "Failed to parse body as FormData". Match the upload route's 50 MB.
+    proxyClientMaxBodySize: '55mb',
+  },
   async rewrites() {
     return [
       {

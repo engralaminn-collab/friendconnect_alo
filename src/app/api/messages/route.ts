@@ -146,6 +146,18 @@ export async function POST(req: NextRequest) {
       })
       if (!membership) return errorJson('Not a member', 403)
     }
+    if (receiverId) {
+      const blocked = await db.friendship.findFirst({
+        where: {
+          status: 'BLOCKED',
+          OR: [
+            { requesterId: me.id, receiverId },
+            { requesterId: receiverId, receiverId: me.id },
+          ],
+        },
+      })
+      if (blocked) return errorJson('Blocked', 403)
+    }
     const msg = await db.message.create({
       data: {
         senderId: me.id,
@@ -170,6 +182,10 @@ export async function POST(req: NextRequest) {
         content: msg.content,
         type: msg.type,
         fileUrl: msg.fileUrl,
+        fileName: msg.fileName,
+        fileSize: msg.fileSize,
+        mimeType: msg.mimeType,
+        replyToId: msg.replyToId,
         status: msg.status,
         createdAt: msg.createdAt.toISOString(),
       },

@@ -157,8 +157,12 @@ export function ProfileView() {
   )
 
   function startCall(id: string, type: 'audio' | 'video') {
-    // dispatch a custom event the CallOverlay listens to
-    window.dispatchEvent(new CustomEvent('fc:start-call', { detail: { targetUserId: id, type } }))
+    // dispatch a custom event the SocketProvider listens to
+    window.dispatchEvent(
+      new CustomEvent('fc:start-call', {
+        detail: { targetUserId: id, type, peer: { id, name: u.name, photoUrl: u.photoUrl } },
+      })
+    )
   }
 }
 

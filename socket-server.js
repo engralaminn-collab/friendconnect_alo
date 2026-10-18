@@ -431,6 +431,7 @@ io.on('connection', (socket) => {
   socket.on('call:failed', (p) => {
     const me = requireAuth()
     if (me) inCall.delete(me)
+    if (p?.targetUserId) inCall.delete(p.targetUserId)
     relayCall('call:failed', p, ['call:ended'])
   })
   socket.on('call:ended', (p) => {
@@ -452,6 +453,7 @@ io.on('connection', (socket) => {
   socket.on('call:cancelled', (p) => {
     const me = requireAuth()
     if (me) inCall.delete(me)
+    if (p?.targetUserId) inCall.delete(p.targetUserId)
     relayCall('call:ended', { ...p, reason: 'cancelled' })
   })
 

@@ -449,11 +449,26 @@ CREATE INDEX IF NOT EXISTS AuditLog_userId_idx ON "AuditLog"(userId);
 CREATE INDEX IF NOT EXISTS AuditLog_action_idx ON "AuditLog"(action);
 `
 
+/**
+ * Project root used to resolve relative paths (DATABASE_URL=file:./db/…, UPLOAD_DIR=./upload).
+ * The Next.js standalone server does `process.chdir('.next/standalone')`, so resolving
+ * against process.cwd() made Next use `.next/standalone/db/custom.db` while the socket
+ * server used `./db/custom.db` — two different databases. Sessions created at login were
+ * invisible to the socket server (socket auth failed → no calls, no realtime messages),
+ * and every `npm run build` replaced the standalone copy, wiping users and messages.
+ */
+function appRoot() {
+  if (process.env.APP_DIR) return resolve(process.env.APP_DIR)
+  const cwd = process.cwd()
+  if (/[\\/]\.next[\\/]standalone$/.test(cwd)) return resolve(cwd, '..', '..')
+  return cwd
+}
+
 function resolveDbPath() {
   const url = process.env.DATABASE_URL || 'file:./db/custom.db'
   if (url.startsWith('file:')) {
     let p = url.slice(5)
-    if (p.startsWith('./') || !p.startsWith('/')) p = resolve(process.cwd(), p.replace(/^\.\//, ''))
+    if (p.startsWith('./') || !p.startsWith('/')) p = resolve(appRoot(), p.replace(/^\.\//, ''))
     const dir = dirname(p)
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
     return p
@@ -884,4 +899,4 @@ const prisma = {
   $disconnect: async () => {},
 }
 
-module.exports = { prisma, db: prisma, default: prisma, getSqlite }
+module.exports = { prisma, db: prisma, default: prisma, getSqlite, appRoot }

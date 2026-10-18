@@ -1,4 +1,4 @@
-import { cookies } from 'next/headers'
+import { cookies, headers } from 'next/headers'
 import { db } from '@/lib/db'
 import { sessionCookieName, sessionTtlMs, generateToken } from '@/lib/auth'
 import { parseDeviceName } from '@/lib/logger'
@@ -13,8 +13,28 @@ export interface AuthUser {
   twoFactorEnabled?: boolean
 }
 
-function cookieSecure(): boolean {
-  return process.env.NODE_ENV === 'production'
+/**
+ * Mark the session cookie `Secure` only when the request really arrived over HTTPS
+ * (directly or via Caddy/nginx `X-Forwarded-Proto`). Browsers silently drop Secure
+ * cookies on plain http://, so the old "always Secure in production" rule made
+ * login do nothing when the site was opened via http://<server-ip>.
+ * Override with COOKIE_SECURE=true|false.
+ */
+async function cookieSecure(): Promise<boolean> {
+  const forced = process.env.COOKIE_SECURE
+  if (forced === 'true') return true
+  if (forced === 'false') return false
+  if (process.env.NODE_ENV !== 'production') return false
+  try {
+    const h = await headers()
+    const proto = (h.get('x-forwarded-proto') || '').split(',')[0].trim().toLowerCase()
+    if (proto) return proto === 'https'
+    const origin = h.get('origin') || h.get('referer') || ''
+    if (origin) return origin.startsWith('https:')
+  } catch {
+    /* outside a request scope */
+  }
+  return (process.env.APP_ORIGIN || '').startsWith('https:')
 }
 
 export async function getSessionUser(): Promise<AuthUser | null> {
@@ -45,7 +65,7 @@ export async function setSessionCookie(token: string) {
   const cookieStore = await cookies()
   cookieStore.set(sessionCookieName, token, {
     httpOnly: true,
-    secure: cookieSecure(),
+    secure: await cookieSecure(),
     sameSite: 'lax',
     path: '/',
     maxAge: sessionTtlMs / 1000,
@@ -56,7 +76,7 @@ export async function clearSessionCookie() {
   const cookieStore = await cookies()
   cookieStore.set(sessionCookieName, '', {
     httpOnly: true,
-    secure: cookieSecure(),
+    secure: await cookieSecure(),
     sameSite: 'lax',
     path: '/',
     maxAge: 0,
