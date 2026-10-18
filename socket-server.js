@@ -431,6 +431,7 @@ io.on('connection', (socket) => {
   socket.on('call:failed', (p) => {
     const me = requireAuth()
     if (me) inCall.delete(me)
+    if (p?.targetUserId) inCall.delete(p.targetUserId)
     relayCall('call:failed', p, ['call:ended'])
   })
   socket.on('call:ended', (p) => {
@@ -452,6 +453,7 @@ io.on('connection', (socket) => {
   socket.on('call:cancelled', (p) => {
     const me = requireAuth()
     if (me) inCall.delete(me)
+    if (p?.targetUserId) inCall.delete(p.targetUserId)
     relayCall('call:ended', { ...p, reason: 'cancelled' })
   })
 
@@ -540,8 +542,10 @@ setInterval(() => {
   runJobs().catch(() => {})
 }, 30000)
 
-server.listen(PORT, '0.0.0.0', () => {
-  console.log(`FriendConnect realtime on 0.0.0.0:${PORT}`)
+// Behind Caddy/nginx set SOCKET_HOST=127.0.0.1 so the port is not exposed publicly.
+const HOST = process.env.SOCKET_HOST || '0.0.0.0'
+server.listen(PORT, HOST, () => {
+  console.log(`FriendConnect realtime on ${HOST}:${PORT}`)
 })
 
 process.on('SIGTERM', async () => {

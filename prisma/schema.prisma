@@ -1,6 +1,9 @@
 // FriendConnect - Private Social Platform schema
 generator client {
-  provider = "prisma-client-js"
+  provider   = "prisma-client-js"
+  // Rust-free Prisma Client: no query-engine binary, uses a JS driver adapter
+  // (src/lib/db-runtime.js). Works the same on servers and in Next standalone builds.
+  engineType = "client"
 }
 
 datasource db {
@@ -64,10 +67,10 @@ model Profile {
   photoUrl           String?
   bio                String?  @db.Text
   phone              String?
-  location           String?
+  location           String?  @db.Text
   birthday           String?
-  education          String?
-  work               String?
+  education          String?  @db.Text
+  work               String?  @db.Text
   // privacy: PUBLIC | FRIENDS | PRIVATE
   profileVisibility  String   @default("PUBLIC")
   messagePermission  String   @default("FRIENDS")
@@ -123,7 +126,7 @@ model Message {
   content    String   @db.Text
   type       String   @default("text") // text | image | video | audio | document
   fileUrl    String?
-  fileName   String?
+  fileName   String?  @db.Text
   fileSize   Int?
   mimeType   String?
   status     String   @default("SENT") // SENDING | SENT | DELIVERED | SEEN
@@ -131,7 +134,7 @@ model Message {
   seenAt     DateTime?
   // Additive (round 2): soft-delete. "me" = deleted for sender only;
   // "everyone" = deleted for all participants (content cleared).
-  deletedFor String   @default("")
+  deletedFor String   @default("") @db.VarChar(4096)
   forwardedFrom String? // userId of original sender if forwarded
   // Additive (round 3): disappearing messages — when set, message auto-deletes after expiresAt
   expiresAt DateTime?
@@ -250,7 +253,7 @@ model ChatPreference {
   // Additive (round 3): disappearing messages timer. OFF | 24H | 7D
   disappearing String @default("OFF")
   // Additive (round 3): chat wallpaper (CSS background value or preset id)
-  wallpaper String?
+  wallpaper String?  @db.Text
   // Additive (round 4): chat archive
   archived  Boolean  @default(false)
   // Additive (round 10): chat folder name (null = no folder; e.g. "Work", "Family")

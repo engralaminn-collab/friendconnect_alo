@@ -19,7 +19,13 @@ function isSocket(url) {
 }
 
 function proxyHttp(req, res, port) {
-  const headers = { ...req.headers, host: `127.0.0.1:${port}` }
+  const headers = {
+    ...req.headers,
+    host: `127.0.0.1:${port}`,
+    // Let the app know whether the browser used https (secure cookies, etc.).
+    'x-forwarded-proto': req.headers['x-forwarded-proto'] || (req.socket.encrypted ? 'https' : 'http'),
+    'x-forwarded-host': req.headers['x-forwarded-host'] || req.headers.host || '',
+  }
   const p = http.request(
     { hostname: '127.0.0.1', port, path: req.url, method: req.method, headers },
     (pr) => {

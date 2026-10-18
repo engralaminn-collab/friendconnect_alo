@@ -449,11 +449,26 @@ CREATE INDEX IF NOT EXISTS AuditLog_userId_idx ON "AuditLog"(userId);
 CREATE INDEX IF NOT EXISTS AuditLog_action_idx ON "AuditLog"(action);
 `
 
+/**
+ * Project root used to resolve relative paths (DATABASE_URL=file:./db/…, UPLOAD_DIR=./upload).
+ * The Next.js standalone server does `process.chdir('.next/standalone')`, so resolving
+ * against process.cwd() made Next use `.next/standalone/db/custom.db` while the socket
+ * server used `./db/custom.db` — two different databases. Sessions created at login were
+ * invisible to the socket server (socket auth failed → no calls, no realtime messages),
+ * and every `npm run build` replaced the standalone copy, wiping users and messages.
+ */
+function appRoot() {
+  if (process.env.APP_DIR) return resolve(process.env.APP_DIR)
+  const cwd = process.cwd()
+  if (/[\\/]\.next[\\/]standalone$/.test(cwd)) return resolve(cwd, '..', '..')
+  return cwd
+}
+
 function resolveDbPath() {
   const url = process.env.DATABASE_URL || 'file:./db/custom.db'
   if (url.startsWith('file:')) {
     let p = url.slice(5)
-    if (p.startsWith('./') || !p.startsWith('/')) p = resolve(process.cwd(), p.replace(/^\.\//, ''))
+    if (p.startsWith('./') || !p.startsWith('/')) p = resolve(appRoot(), p.replace(/^\.\//, ''))
     const dir = dirname(p)
     if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
     return p
@@ -856,7 +871,7 @@ function taggedRaw(strings, ...values) {
   }
 }
 
-const prisma = {
+const sqlitePrisma = {
   user: delegate('user'),
   profile: delegate('profile'),
   session: delegate('session'),
@@ -884,4 +899,84 @@ const prisma = {
   $disconnect: async () => {},
 }
 
-module.exports = { prisma, db: prisma, default: prisma, getSqlite }
+/* ------------------------------------------------------------------------- *
+ * MySQL / MariaDB: real Prisma Client (Rust-free "client" engine + driver adapter).
+ * Needs `npx prisma generate` (schema.prisma, provider mysql) and
+ * `npx prisma migrate deploy` once on the server. No engine binaries at runtime.
+ *
+ * DB_ENGINE=prisma with a file: URL runs the same Prisma path on SQLite
+ * (needs @prisma/adapter-better-sqlite3 + a client generated from
+ * schema.sqlite.prisma) — used to test the Prisma path without a MySQL server.
+ * ------------------------------------------------------------------------- */
+
+function isMysqlUrl(url) {
+  return /^(mysql|mariadb):\/\//i.test(url || '')
+}
+
+function wantsPrisma() {
+  return isMysqlUrl(process.env.DATABASE_URL) || process.env.DB_ENGINE === 'prisma'
+}
+
+function mysqlConfigFromUrl(url) {
+  const u = new URL(url)
+  const q = u.searchParams
+  return {
+    host: u.hostname || '127.0.0.1',
+    port: Number(u.port || 3306),
+    user: decodeURIComponent(u.username),
+    password: decodeURIComponent(u.password),
+    database: decodeURIComponent(u.pathname.replace(/^\//, '')),
+    connectionLimit: Number(q.get('connection_limit') || process.env.DB_POOL_SIZE || 10),
+    connectTimeout: Number(q.get('connect_timeout') || 10) * 1000,
+    // MySQL 8 default auth (caching_sha2_password) over plain TCP needs the server key.
+    allowPublicKeyRetrieval: true,
+    // Return DATETIME as JS Date in UTC, like Prisma's own engine.
+    timezone: 'Z',
+  }
+}
+
+function createPrismaClient() {
+  const url = process.env.DATABASE_URL || ''
+  let PrismaClient
+  try {
+    ;({ PrismaClient } = require('@prisma/client'))
+  } catch (e) {
+    throw new Error('Prisma Client is not generated. Run `npx prisma generate` (see docs/DEPLOY_LEARN_ALOEDUCATION.md). ' + e.message)
+  }
+  let adapter
+  if (isMysqlUrl(url)) {
+    const { PrismaMariaDb } = require('@prisma/adapter-mariadb')
+    adapter = new PrismaMariaDb(mysqlConfigFromUrl(url))
+  } else {
+    getSqlite() // make sure the SQLite file + tables exist
+    const { PrismaBetterSQLite3 } = require('@prisma/adapter-better-sqlite3')
+    adapter = new PrismaBetterSQLite3({ url: 'file:' + resolveDbPath() })
+  }
+  const log = process.env.PRISMA_LOG ? process.env.PRISMA_LOG.split(',') : ['warn', 'error']
+  return new PrismaClient({ adapter, log })
+}
+
+function getPrismaClient() {
+  // One client per process (survives Next.js dev hot reloads).
+  const g = globalThis
+  if (!g.__fcPrisma) g.__fcPrisma = createPrismaClient()
+  return g.__fcPrisma
+}
+
+// Lazy: the client is only created on first use, so `next build` and tooling
+// can import this module without a database or a generated client.
+const prisma = wantsPrisma()
+  ? new Proxy(
+      {},
+      {
+        get(_t, prop) {
+          if (prop === 'then') return undefined
+          const client = getPrismaClient()
+          const v = client[prop]
+          return typeof v === 'function' ? v.bind(client) : v
+        },
+      }
+    )
+  : sqlitePrisma
+
+module.exports = { prisma, db: prisma, default: prisma, getSqlite, appRoot, wantsPrisma, mysqlConfigFromUrl }

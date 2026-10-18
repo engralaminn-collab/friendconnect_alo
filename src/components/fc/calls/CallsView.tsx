@@ -141,10 +141,12 @@ export function CallsView() {
     loadFriends()
   }, [loadFriends])
 
-  const startCall = useCallback((targetUserId: string, type: 'audio' | 'video') => {
+  const startCall = useCallback((targetUserId: string, type: 'audio' | 'video', peer?: { name: string; photoUrl: string | null }) => {
     setStarting(targetUserId + type)
     window.dispatchEvent(
-      new CustomEvent('fc:start-call', { detail: { targetUserId, type } })
+      new CustomEvent('fc:start-call', {
+        detail: { targetUserId, type, peer: peer ? { id: targetUserId, ...peer } : undefined },
+      })
     )
     setDialogOpen(false)
     setStarting(null)
@@ -272,7 +274,7 @@ export function CallsView() {
                         </div>
                       </div>
                       <button
-                        onClick={() => startCall(f.id, 'audio')}
+                        onClick={() => startCall(f.id, 'audio', { name: f.name, photoUrl: f.photoUrl })}
                         disabled={starting === f.id + 'audio'}
                         className="grid h-9 w-9 place-items-center rounded-full bg-primary/15 text-primary transition hover:bg-primary/25 disabled:opacity-50"
                         title="Audio call"
@@ -281,7 +283,7 @@ export function CallsView() {
                         <Phone size={16} />
                       </button>
                       <button
-                        onClick={() => startCall(f.id, 'video')}
+                        onClick={() => startCall(f.id, 'video', { name: f.name, photoUrl: f.photoUrl })}
                         disabled={starting === f.id + 'video'}
                         className="grid h-9 w-9 place-items-center rounded-full bg-primary/15 text-primary transition hover:bg-primary/25 disabled:opacity-50"
                         title="Video call"

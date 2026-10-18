@@ -2234,7 +2234,7 @@ function ChatRoom({
   // ---- send text ----
   const sendMessage = useCallback(
     (partial: Pick<Message, 'content' | 'type' | 'fileUrl' | 'fileName' | 'fileSize' | 'mimeType'>) => {
-      if (!socket || !meId) return
+      if (!meId) return
       const tempId = newTempId()
       const optimistic: Message = {
         id: tempId,
@@ -2272,7 +2272,35 @@ function ChatRoom({
       // Round 7: include replyToId when the user is replying to a message.
       if (replyTo) payload.replyToId = replyTo.id
       const event = mode === 'direct' ? RT.MESSAGE_SEND : RT.GROUP_MESSAGE_SEND
-      socket.emit(event, payload, (ack: any) => {
+      const markFailed = (error?: string) => {
+        setMessages((prev) =>
+          prev.map((m) => (m.tempId === tempId ? { ...m, status: 'SENT' } : m))
+        )
+        toast.error(error || 'Failed to send message')
+      }
+      // Realtime server unreachable (proxy not forwarding /socket.io, server down,
+      // network switch…): previously the emit was queued forever and the bubble
+      // sat on "sending". Fall back to the REST API so the message is still saved.
+      if (!socket || !socket.connected) {
+        api<{ message: any }>('/api/messages', { method: 'POST', body: JSON.stringify(payload) })
+          .then(({ message }) => {
+            const realMsg: Message = {
+              ...normalizeMessage({ ...payload, ...message }),
+              tempId,
+              senderName: me?.name ?? null,
+              senderPhoto: me?.profile?.photoUrl ?? null,
+            }
+            setMessages((prev) => prev.map((m) => (m.tempId === tempId ? realMsg : m)))
+          })
+          .catch((e: any) => markFailed(e?.message))
+        setReplyTo(null)
+        return
+      }
+      socket.timeout(15000).emit(event, payload, (err: Error | null, ack: any) => {
+        if (err) {
+          markFailed('Message timed out — check your connection.')
+          return
+        }
         if (ack?.ok && ack.message) {
           const realMsg: Message = {
             ...normalizeMessage(ack.message),
@@ -2283,10 +2311,7 @@ function ChatRoom({
           setMessages((prev) => prev.map((m) => (m.tempId === tempId ? realMsg : m)))
         } else {
           // leave optimistic in place with SENT fallback so user can retry
-          setMessages((prev) =>
-            prev.map((m) => (m.tempId === tempId ? { ...m, status: 'SENT' } : m))
-          )
-          toast.error(ack?.error || 'Failed to send message')
+          markFailed(ack?.error)
         }
       })
       // Round 7: clear the reply target after the send has been initiated
@@ -2481,7 +2506,13 @@ function ChatRoom({
 
   const startCall = (type: 'audio' | 'video') => {
     window.dispatchEvent(
-      new CustomEvent('fc:start-call', { detail: { targetUserId: peerId, type } })
+      new CustomEvent('fc:start-call', {
+        detail: {
+          targetUserId: peerId,
+          type,
+          peer: { id: peerId, name: peerInfo?.name || 'Friend', photoUrl: peerInfo?.photoUrl ?? null },
+        },
+      })
     )
   }
 

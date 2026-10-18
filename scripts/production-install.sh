@@ -100,7 +100,7 @@ fi
 echo "[6/10] Migrating database to MySQL..."
 cp prisma/schema.mysql.prisma prisma/schema.prisma
 bunx prisma generate
-bunx prisma migrate deploy 2>/dev/null || { echo "  Running initial migration..."; bunx prisma migrate dev --name init; }
+bunx prisma migrate deploy  # never `migrate dev` in production: it can reset the database
 echo "  ✓ Database migrated"
 
 # ---- 7. Build ----
