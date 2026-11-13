@@ -1,55 +1,49 @@
-import type { Metadata, Viewport } from 'next'
-import './globals.css'
-import { Toaster } from '@/components/ui/toaster'
-import { Toaster as SonnerToaster } from '@/components/ui/sonner'
-import { ThemeProvider } from '@/components/theme-provider'
+import type { Metadata } from "next"
+import { Geist, Geist_Mono } from "next/font/google"
+import "./globals.css"
+import { Toaster } from "@/components/ui/toaster"
+import { Toaster as SonnerToaster } from "@/components/ui/sonner"
+import { Providers } from "@/components/providers"
+import { PWAInstallPrompt } from "@/components/PWAInstallPrompt"
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+})
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+})
 
 export const metadata: Metadata = {
-  title: 'FriendConnect — Reconnect with old friends',
-  description:
-    'FriendConnect is a private social platform to find and reconnect with old friends. Chat, call, and share — privately.',
-  keywords: ['FriendConnect', 'social', 'friends', 'chat', 'calls', 'reconnect'],
-  authors: [{ name: 'FriendConnect' }],
-  manifest: '/manifest.json',
+  title: "FriendConnect — Personal messaging",
+  description: "Private personal messaging, voice & video calls. Install as a standalone app.",
+  keywords: ["chat", "messaging", "calls", "voice", "video", "friendconnect", "self-hosted"],
+  authors: [{ name: "FriendConnect" }],
+  manifest: "/manifest.json",
+  applicationName: "FriendConnect",
+  appleWebApp: { capable: true, title: "FriendConnect", statusBarStyle: "default" },
+  formatDetection: { telephone: false },
   icons: {
-    icon: '/friendconnect-logo.png',
-    shortcut: '/friendconnect-logo.png',
-    apple: '/friendconnect-logo.png',
+    icon: [{ url: "/friendconnect-icon.svg", type: "image/svg+xml" }],
+    apple: [{ url: "/friendconnect-icon.svg" }],
+    shortcut: ["/friendconnect-icon.svg"],
   },
-  appleWebApp: { capable: true, statusBarStyle: 'default', title: 'FriendConnect' },
 }
-
-export const viewport: Viewport = {
-  themeColor: '#F97316',
-  width: 'device-width',
-  initialScale: 1,
-  maximumScale: 1,
-  userScalable: false,
-  viewportFit: 'cover',
-}
-
-const SW_SCRIPT = `
-if ('serviceWorker' in navigator) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {});
-  });
-}
-`
 
 export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <head>
-        <script dangerouslySetInnerHTML={{ __html: SW_SCRIPT }} />
-      </head>
-      <body className="antialiased bg-background text-foreground">
-        <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange={false}>
+      <body className={`${geistSans.variable} ${geistMono.variable} antialiased bg-background text-foreground`}>
+        <Providers>
           {children}
           <Toaster />
-          <SonnerToaster position="top-center" richColors closeButton />
-        </ThemeProvider>
+          <SonnerToaster richColors position="top-center" />
+          <PWAInstallPrompt />
+        </Providers>
       </body>
     </html>
   )

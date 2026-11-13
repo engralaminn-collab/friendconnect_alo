@@ -1,9 +1,5 @@
-import { json } from '@/lib/serialize'
+import { NextResponse } from "next/server";
 
 export async function GET() {
-  return json({
-    name: 'FriendConnect API',
-    version: '1.0.0',
-    docs: '/api/health',
-  })
+  return NextResponse.json({ message: "Hello, world!" });
 }
