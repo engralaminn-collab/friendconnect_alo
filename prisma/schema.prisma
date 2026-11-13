@@ -20,6 +20,7 @@ model User {
   bio           String?
   status        String   @default("Hey there! I'm using FriendConnect.")
   lastSeenAt    DateTime @default(now())
+  publicKey     String?  // E2EE: ECDH P-256 public key (base64), published by client
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -158,6 +159,9 @@ model Message {
   conversationId  String
   senderId        String
   content         String
+  encrypted       Boolean  @default(false)  // E2EE: true if content is ciphertext
+  iv              String?  // E2EE: base64 IV for AES-GCM
+  senderPublicKey String?  // E2EE: sender's ECDH public key (so receiver can derive shared key)
   replyToId       String?
   editedAt        DateTime?
   deletedForAll   Boolean  @default(false)
