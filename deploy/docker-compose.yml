@@ -1,0 +1,155 @@
+# FriendConnect — Free self-hosted communication stack
+# Brings up every component needed to replace MirrorFly (which is paid/enterprise).
+# All components are open-source and free to self-host.
+#
+# Usage:
+#   cd deploy
+#   cp .env.example .env  # then edit .env to set your secrets
+#   docker compose up -d
+#   # Apply Prisma migrations: docker compose run --rm app bun run db:push
+#   # App is at http://localhost:3000 (or behind your reverse proxy at https://your.domain)
+#
+# What you get:
+#   - app         : Next.js FriendConnect app (port 3000)
+#   - chat-service: Socket.IO realtime server (port 3003)
+#   - postgres    : Production database (replaces SQLite)
+#   - redis       : Session cache + Socket.IO adapter + rate limiting
+#   - minio       : S3-compatible object storage for attachments
+#   - mailpit     : SMTP testing/catching (swap for real SMTP in production)
+#   - coturn      : TURN/STUN server for WebRTC (for future voice/video calls)
+
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: friendconnect
+      POSTGRES_USER: ${POSTGRES_USER:-fc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fc} -d friendconnect"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    ports:
+      - "5432:5432"
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-fc_admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change_me_in_production}
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # Web console
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+
+  mailpit:
+    image: axllent/mailpit:latest
+    restart: unless-stopped
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # Web UI (view caught emails)
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+
+  coturn:
+    image: coturn/coturn:latest
+    restart: unless-stopped
+    # For production, you must set the external IP and realm
+    command: >
+      -n --log-file=stdout
+      --listening-port=3478
+      --min-port=49160
+      --max-port=49200
+      --realm=${TURN_REALM:-friendconnect.local}
+      --external-ip=${TURN_EXTERNAL_IP:-127.0.0.1}
+      --user=${TURN_USER:-fc}:${TURN_PASSWORD:-change_me}
+    ports:
+      - "3478:3478/udp"
+      - "3478:3478/tcp"
+      - "49160-49200:49160-49200/udp"
+    volumes:
+      - turn_data:/var/lib/coturn
+
+  chat-service:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.chat-service
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fc}:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/friendconnect?schema=public
+      REDIS_URL: redis://redis:6379
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set this in .env}
+      CHAT_SERVICE_PORT: 3003
+    ports:
+      - "3003:3003"
+
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      chat-service:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-fc}:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/friendconnect?schema=public
+      REDIS_URL: redis://redis:6379
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set this in .env}
+      NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
+      S3_ENDPOINT: http://minio:9000
+      S3_REGION: us-east-1
+      S3_BUCKET: ${S3_BUCKET:-friendconnect-attachments}
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-fc_admin}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-change_me_in_production}
+      SMTP_HOST: mailpit
+      SMTP_PORT: 1025
+      SMTP_FROM: ${SMTP_FROM:-no-reply@friendconnect.local}
+      TURN_URL: turn:${TURN_USER:-fc}:${TURN_PASSWORD:-change_me}@coturn:3478
+    ports:
+      - "3000:3000"
+
+volumes:
+  postgres_data:
+  redis_data:
+  minio_data:
+  turn_data:

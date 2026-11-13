@@ -19,12 +19,6 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     // React rules
     "react-hooks/exhaustive-deps": "off",
     "react-hooks/purity": "off",
-    "react-hooks/set-state-in-effect": "off",
-    "react-hooks/immutability": "off",
-    "react-hooks/refs": "off",
-    "react-hooks/static-components": "off",
-    "react-hooks/preserve-manual-memoization": "off",
-    "@next/next/no-assign-module-variable": "off",
     "react/no-unescaped-entities": "off",
     "react/display-name": "off",
     "react/prop-types": "off",
@@ -50,7 +44,7 @@ const eslintConfig = [...nextCoreWebVitals, ...nextTypescript, {
     "no-useless-escape": "off",
   },
 }, {
-  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills", "socket-server.js", "scripts/**", "prisma/**", "ecosystem.config.cjs", "src/lib/db-runtime.js"]
+  ignores: ["node_modules/**", ".next/**", "out/**", "build/**", "next-env.d.ts", "examples/**", "skills"]
 }];
 
 export default eslintConfig;

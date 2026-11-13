@@ -37,10 +37,6 @@
     ".next/dev/types/**/*.ts"
   ],
   "exclude": [
-    "node_modules",
-    "examples",
-    ".next",
-    "socket-server.js",
-    "src/lib/db-runtime.js"
+    "node_modules"
   ]
 }
