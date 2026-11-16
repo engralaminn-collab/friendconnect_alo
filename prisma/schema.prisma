@@ -20,7 +20,16 @@ model User {
   bio           String?
   status        String   @default("Hey there! I'm using FriendConnect.")
   lastSeenAt    DateTime @default(now())
-  publicKey     String?  // E2EE: ECDH P-256 public key (base64), published by client
+  publicKey     String?  // E2EE: ECDH P-256 public key
+  role           String   @default("user")  // user | admin
+  emailVerified  DateTime?
+  twoFactorEnabled Boolean @default(false)
+  twoFactorSecret String?
+  twoFactorBackup String?
+  otpCode        String?
+  otpExpiry      DateTime?
+  fileUsedBytes  Int      @default(0)
+  fileQuotaBytes Int      @default(104857600)  // 100 MB (base64), published by client
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
@@ -42,6 +51,14 @@ model User {
   reactions     MessageReaction[]
   messageReads  MessageRead[]
   attachments   Attachment[]         @relation("AttachmentOwner")
+  profile       Profile?
+  groups        GroupMember[]
+  groupsOwned   Group[]
+  callsMade     Call[]                @relation("CallCaller")
+  callsReceived Call[]                @relation("CallCallee")
+  files         File[]
+  auditLogs     AuditLog[]
+  chatPrefs     ChatPreference[]
 }
 
 // NextAuth.js standard models
@@ -68,7 +85,7 @@ model Session {
   id           String   @id @default(cuid())
   sessionToken String   @unique
   userId       String
-  expires      DateTime
+  expiresAt    DateTime
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
@@ -254,4 +271,110 @@ model Notification {
   createdAt DateTime @default(now())
 
   owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+}
+
+
+// === Additional models required by API routes ===
+
+model Profile {
+  id           String   @id @default(cuid())
+  userId       String   @unique
+  photoUrl     String?
+  bio          String?
+  phone        String?
+  location     String?
+  birthday     DateTime?
+  education    String?
+  work         String?
+  profileVisibility String @default("PUBLIC")
+  messagePermission String @default("FRIENDS")
+  callPermission    String @default("FRIENDS")
+  readReceipts      Boolean @default(true)
+  photoFilter       String?
+  verified          String   @default("unverified")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model Group {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  avatarUrl   String?
+  ownerId     String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  owner    User         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  members  GroupMember[]
+}
+
+model GroupMember {
+  id        String   @id @default(cuid())
+  groupId   String
+  userId    String
+  role      String   @default("member") // owner | admin | member
+  joinedAt  DateTime @default(now())
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+}
+
+model Call {
+  id          String    @id @default(cuid())
+  callerId    String
+  calleeId    String
+  type        String    // audio | video
+  status      String    @default("missed") // missed | completed | declined | failed
+  startedAt   DateTime?
+  endedAt     DateTime?
+  duration    Int?      // seconds
+  createdAt   DateTime  @default(now())
+
+  caller User @relation("CallCaller", fields: [callerId], references: [id], onDelete: Cascade)
+  callee User @relation("CallCallee", fields: [calleeId], references: [id], onDelete: Cascade)
+}
+
+model File {
+  id         String   @id @default(cuid())
+  ownerId    String
+  filename   String
+  mimeType   String
+  size       Int
+  url        String
+  thumbUrl   String?
+  createdAt  DateTime @default(now())
+
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  entity     String?
+  entityId   String?
+  resource   String?
+  ip         String?
+  userAgent  String?
+  detail     String?
+  meta       String?
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+model ChatPreference {
+  id             String   @id @default(cuid())
+  userId         String
+  conversationId String?
+  archived       Boolean  @default(false)
+  pinned         Boolean  @default(false)
+  muted          Boolean  @default(false)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }

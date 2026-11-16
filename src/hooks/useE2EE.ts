@@ -66,15 +66,16 @@ export function useE2EE(userId: string | null) {
     if (!keyPair) return null
     try {
       // Fetch peer's public key (with cache)
-      let peerKey = peerKeyCache.current.get(peerUserId)
+      let peerKey: string | undefined = peerKeyCache.current.get(peerUserId)
       if (!peerKey) {
-        peerKey = await fetchPeerPublicKey(peerUserId)
+        const fetched = await fetchPeerPublicKey(peerUserId)
+        peerKey = fetched || undefined
         if (!peerKey) {
           throw new Error("Peer has not published a public key — they need to log in with E2EE enabled first")
         }
         peerKeyCache.current.set(peerUserId, peerKey)
       }
-      return await encryptMessage(plaintext, keyPair.privateKeyJwk, peerKey, keyPair.publicKeyB64)
+      return await encryptMessage(plaintext, keyPair.privateKeyJwk, peerKey!, keyPair.publicKeyB64)
     } catch (e: any) {
       console.error("[E2EE] encrypt failed", e)
       throw e

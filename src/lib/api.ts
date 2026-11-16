@@ -64,3 +64,84 @@ export function avatarColor(seed: string): string {
   for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0
   return AVATAR_COLORS[h % AVATAR_COLORS.length]
 }
+
+
+// === Missing exports used by fc/ components ===
+
+// Fetch wrapper with JSON parsing + auth cookie forwarding
+export const api = {
+  async get<T = any>(path: string): Promise<T> {
+    const res = await fetch(path)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.json()
+  },
+  async post<T = any>(path: string, body?: any): Promise<T> {
+    const res = await fetch(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.json()
+  },
+  async patch<T = any>(path: string, body: any): Promise<T> {
+    const res = await fetch(path, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.json()
+  },
+  async delete<T = any>(path: string): Promise<T> {
+    const res = await fetch(path, { method: "DELETE" })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    return res.json()
+  },
+}
+
+// Upload a file via multipart form
+export async function uploadFile(file: File, onProgress?: (pct: number) => void): Promise<{ url: string; filename: string; mimeType: string; size: number }> {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    const fd = new FormData()
+    fd.append("file", file)
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable && onProgress) onProgress(Math.round((e.loaded / e.total) * 100))
+    })
+    xhr.addEventListener("load", () => {
+      try {
+        const body = JSON.parse(xhr.responseText)
+        if (xhr.status >= 200 && xhr.status < 300) resolve(body)
+        else reject(new Error(body?.error || `HTTP ${xhr.status}`))
+      } catch (e) { reject(new Error("Invalid response")) }
+    })
+    xhr.addEventListener("error", () => reject(new Error("Upload failed")))
+    xhr.open("POST", "/api/files/upload")
+    xhr.send(fd)
+  })
+}
+
+// Clock time helper (for message timestamps)
+export function clockTime(date: string | Date): string {
+  const d = typeof date === "string" ? new Date(date) : date
+  return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+}
+
+// Last seen text formatter
+export function lastSeenText(date: string | Date | null): string {
+  if (!date) return "offline"
+  const d = typeof date === "string" ? new Date(date) : date
+  const diff = Date.now() - d.getTime()
+  if (diff < 60_000) return "last seen just now"
+  if (diff < 3600_000) return `last seen ${Math.floor(diff / 60_000)}m ago`
+  if (diff < 86400_000) return `last seen ${Math.floor(diff / 3600_000)}h ago`
+  return `last seen ${d.toLocaleDateString()}`
+}
+
+// Precise last seen formatter
+export function formatLastSeenPrecise(date: string | Date | null): string {
+  if (!date) return "Never"
+  const d = typeof date === "string" ? new Date(date) : date
+  return d.toLocaleString()
+}
