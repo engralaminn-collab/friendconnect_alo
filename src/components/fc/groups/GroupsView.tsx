@@ -1,5 +1,7 @@
 'use client'
 
+import { GroupCallView } from "@/components/fc/calls/GroupCallView"
+
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useApp } from '@/lib/store'
 import { useAuth } from '@/hooks/use-auth'
@@ -174,6 +176,7 @@ function GroupCardSkeleton() {
 
 // ---------- Main view ----------
 export function GroupsView() {
+  const [activeGroupCall, setActiveGroupCall] = useState<{ id: string; name: string } | null>(null)
   const { openGroupChat } = useApp()
 
   const [groups, setGroups] = useState<GroupSummary[]>([])

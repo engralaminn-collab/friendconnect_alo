@@ -4,16 +4,11 @@ import { useState, useRef, useEffect } from "react"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import { EmojiPicker } from "@/components/chat/EmojiPicker"
 import { Paperclip, Send, Smile, X, ImageIcon, Mic } from "lucide-react"
 import type { MessageData } from "./MessageItem"
 
-const EMOJIS = [
-  "😀", "😂", "🥰", "😍", "😎", "🤔", "😴", "🙃",
-  "👍", "👎", "👏", "🙌", "🤝", "🙏", "💪", "🤞",
-  "❤️", "🔥", "✨", "🎉", "🎊", "💯", "⚡", "🌈",
-  "😢", "😡", "😱", "😅", "🤣", "😊", "😘", "🥲",
-  "🌹", "🌸", "🍕", "☕", "⚽", "🎵", "🚀", "💡",
-]
+// Emoji picker now uses the comprehensive EmojiPicker component (1440 emojis)
 
 export function Composer({
   onSend,
@@ -31,8 +26,7 @@ export function Composer({
   onCancelEdit: () => void
 }) {
   const [text, setText] = useState("")
-  const [emojiOpen, setEmojiOpen] = useState(false)
-  const [uploading, setUploading] = useState(false)
+    const [uploading, setUploading] = useState(false)
   const [pendingAttachments, setPendingAttachments] = useState<string[]>([])
   const [pendingPreviews, setPendingPreviews] = useState<{ id: string; url: string; mime: string }[]>([])
   const fileRef = useRef<HTMLInputElement>(null)
@@ -197,30 +191,12 @@ export function Composer({
           {uploading ? <span className="animate-pulse">…</span> : <Paperclip className="w-5 h-5" />}
         </Button>
 
-        <Popover open={emojiOpen} onOpenChange={setEmojiOpen}>
-          <PopoverTrigger asChild>
-            <Button variant="ghost" size="icon" className="rounded-full shrink-0">
-              <Smile className="w-5 h-5" />
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-72" align="start">
-            <div className="grid grid-cols-8 gap-1">
-              {EMOJIS.map((e) => (
-                <button
-                  key={e}
-                  className="text-xl hover:bg-muted rounded p-1"
-                  onClick={() => {
-                    setText((prev) => prev + e)
-                    textareaRef.current?.focus()
-                    setEmojiOpen(false)
-                  }}
-                >
-                  {e}
-                </button>
-              ))}
-            </div>
-          </PopoverContent>
-        </Popover>
+        <EmojiPicker
+          onPick={(emoji) => {
+            setText((prev) => prev + emoji)
+            textareaRef.current?.focus()
+          }}
+        />
 
         <textarea
           ref={textareaRef}

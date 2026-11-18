@@ -44,8 +44,7 @@ class RedisCache implements CacheProvider {
 
   constructor(url: string) {
     // Dynamic import kept server-side; ioredis is a Node runtime dep.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const Redis = require('ioredis')
+        const Redis = require('ioredis')
     this.client = new Redis(url, { retryStrategy: (times: number) => Math.min(times * 500, 2000), maxRetriesPerRequest: 2 })
     this.client.on('error', (err: Error) => logger.error('redis error', { error: err.message }))
     this.client.on('connect', () => logger.info('redis connected'))

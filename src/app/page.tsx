@@ -31,6 +31,7 @@ export default function Home() {
   const [showNewChat, setShowNewChat] = useState(false)
   const [showProfile, setShowProfile] = useState(false)
   const [showNotifications, setShowNotifications] = useState(false)
+  const [showAI, setShowAI] = useState(false)
   const [unreadNotifications, setUnreadNotifications] = useState(0)
   const heartbeatRef = useRef<any>(null)
   const selectedRef = useRef<string | null>(null)

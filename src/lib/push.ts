@@ -17,8 +17,7 @@ export function initWebPush(): WebPush | null {
     return null
   }
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const webpush = require('web-push') as WebPush
+        const webpush = require('web-push') as WebPush
     webpush.setVapidDetails(subject, publicKey, privateKey)
     _webpush = webpush
     logger.info('web-push configured', { subject })
