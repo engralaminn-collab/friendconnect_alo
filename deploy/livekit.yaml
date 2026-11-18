@@ -1,0 +1,10 @@
+# LiveKit configuration
+port: 7880
+rtc:
+  port_range_start: 7882
+  port_range_end: 7892
+  use_external_ip: true
+keys:
+  devkey: secret
+logging:
+  level: info
