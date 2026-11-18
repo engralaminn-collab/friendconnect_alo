@@ -194,6 +194,7 @@ model Message {
   sender       User               @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
   replyTo      Message?           @relation("MessageReply", fields: [replyToId], references: [id], onDelete: SetNull)
   replies      Message[]          @relation("MessageReply")
+  poll         Poll?
   reads        MessageRead[]
   reactions    MessageReaction[]
   attachments  Attachment[]
@@ -406,6 +407,7 @@ model PollVote {
   createdAt DateTime @default(now())
 
   poll Poll @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([pollId, userId])
 }
@@ -434,6 +436,7 @@ model PostComment {
   createdAt DateTime @default(now())
 
   post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
 }
 
 model PostReaction {
