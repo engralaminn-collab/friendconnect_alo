@@ -60,3 +60,7 @@ server.log
 
 # Skills directory
 /skills/!.env.example
+
+# Runtime database and PID files
+db/
+.zscripts/dev.pid
