@@ -59,6 +59,9 @@ model User {
   files         File[]
   auditLogs     AuditLog[]
   chatPrefs     ChatPreference[]
+  posts         Post[]
+  postComments  PostComment[]
+  pollVotes     PollVote[]
 }
 
 // NextAuth.js standard models
@@ -176,6 +179,8 @@ model Message {
   conversationId  String
   senderId        String
   content         String
+  messageType     String   @default("text")  // text | poll | location | admin | custom | system
+  metadata        String?  // JSON string for structured data (poll options, location coords, etc.)
   encrypted       Boolean  @default(false)  // E2EE: true if content is ciphertext
   iv              String?  // E2EE: base64 IV for AES-GCM
   senderPublicKey String?  // E2EE: sender's ECDH public key (so receiver can derive shared key)
@@ -377,4 +382,68 @@ model ChatPreference {
   updatedAt      DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+
+// === Polls ===
+model Poll {
+  id          String   @id @default(cuid())
+  messageId   String   @unique
+  question    String
+  options     String   // JSON array of option strings
+  createdAt   DateTime @default(now())
+  expiresAt   DateTime?
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  votes   PollVote[]
+}
+
+model PollVote {
+  id        String   @id @default(cuid())
+  pollId    String
+  userId    String
+  optionIdx Int
+  createdAt DateTime @default(now())
+
+  poll Poll @relation(fields: [pollId], references: [id], onDelete: Cascade)
+
+  @@unique([pollId, userId])
+}
+
+
+// === Activity Feed Posts ===
+model Post {
+  id          String   @id @default(cuid())
+  authorId    String
+  content     String
+  mediaUrl    String?
+  visibility  String   @default("friends")  // public | friends | private
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  author       User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  comments     PostComment[]
+  reactions    PostReaction[]
+}
+
+model PostComment {
+  id        String   @id @default(cuid())
+  postId    String
+  authorId  String
+  content   String
+  createdAt DateTime @default(now())
+
+  post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+}
+
+model PostReaction {
+  id        String   @id @default(cuid())
+  postId    String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId, emoji])
 }
