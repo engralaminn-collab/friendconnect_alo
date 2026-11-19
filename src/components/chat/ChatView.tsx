@@ -385,10 +385,10 @@ export function ChatView({
             <DropdownMenuItem onClick={() => setSearchOpen(true)}>
               <Search className="w-4 h-4 mr-2" /> Search messages
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => toast.info("Starred messages view coming soon")}>
+            <DropdownMenuItem onClick={() => { window.open("/api/messages/starred", "_blank") }}>
               <Star className="w-4 h-4 mr-2" /> Starred messages
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => toast.info("Mute coming soon")}>
+            <DropdownMenuItem onClick={() => toast.info("Toggle mute in conversation settings")}>
               <BellOff className="w-4 h-4 mr-2" /> Mute notifications
             </DropdownMenuItem>
             {!isGroup && otherUser && (
