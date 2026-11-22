@@ -60,8 +60,15 @@ model User {
   messageStars       MessageStar[]
   messageDrafts      MessageDraft[]
   messageReminders   MessageReminder[]
+  friendRequestsSent   FriendRequest[]      @relation("FriendRequestFrom")
+  friendRequestsRecv   FriendRequest[]      @relation("FriendRequestTo")
   friendshipRequests  Friendship[]          @relation("FriendshipRequester")
   friendshipReceived  Friendship[]          @relation("FriendshipReceiver")
+  conversationMemberships ConversationMember[]
+  blocksIssued  Block[]              @relation("BlockFrom")
+  blocksRecv    Block[]              @relation("BlockTo")
+  reportsIssued Report[]             @relation("ReportFrom")
+  reportsRecv   Report[]             @relation("ReportTo")
   chatPreferences    ChatPreference[]
   auditLogs          AuditLog[]
   pushSubscriptions  PushSubscription[]
@@ -88,7 +95,7 @@ model Session {
   id            String   @id @default(cuid())
   userId        String
   sessionToken  String   @unique
-  token         String   @unique
+  token         String?
   expiresAt     DateTime
   userAgent     String?
   ipAddress     String?
@@ -179,8 +186,12 @@ model Message {
   receiver  User?      @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: SetNull)
   replyTo   Message?   @relation("MessageReply", fields: [replyToId], references: [id], onDelete: SetNull)
   replies   Message[]  @relation("MessageReply")
-  stars     MessageStar[]
-  reminders MessageReminder[]
+  group        Group?             @relation("MessageGroup", fields: [groupId], references: [id], onDelete: SetNull)
+  conversation Conversation?      @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  stars        MessageStar[]
+  reminders    MessageReminder[]
+  reactions    MessageReaction[]
+  attachments  Attachment[]
 
   @@index([receiverId, status])
   @@index([senderId])
@@ -206,6 +217,8 @@ model MessageReaction {
   userId    String
   emoji     String
   createdAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@unique([messageId, userId, emoji])
 }
@@ -270,8 +283,9 @@ model Group {
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  owner  User?          @relation("GroupOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  members GroupMember[]
+  owner    User?          @relation("GroupOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  members  GroupMember[]
+  messages Message[]      @relation("MessageGroup")
 }
 
 model GroupMember {
@@ -339,6 +353,7 @@ model Notification {
   type      String
   title     String
   body      String?
+  data      String?
   link      String?
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
@@ -355,8 +370,11 @@ model Notification {
 model Story {
   id          String   @id @default(cuid())
   userId      String
-  mediaUrl    String
-  mediaType   String   // image | video
+  mediaUrl    String?
+  mediaType   String   @default("image") // image | video
+  type        String   @default("text") // text | image | video
+  content     String?
+  bg          String?
   caption     String?
   isHighlight Boolean  @default(false)
   expiresAt   DateTime
@@ -374,6 +392,7 @@ model StoryView {
   id        String   @id @default(cuid())
   storyId   String
   userId    String
+  viewedAt  DateTime @default(now())
   createdAt DateTime @default(now())
 
   story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
@@ -438,8 +457,12 @@ model PushSubscription {
   id        String   @id @default(cuid())
   userId    String
   endpoint  String
-  keys      String   // JSON: { p256dh, auth }
+  p256dh    String?
+  auth      String?
+  keys      String?
+  userAgent String?
   createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
@@ -549,6 +572,9 @@ model Conversation {
   ownerId     String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
+
+  members  ConversationMember[]
+  messages Message[]
 }
 
 model ConversationMember {
@@ -560,6 +586,11 @@ model ConversationMember {
   lastReadAt      DateTime?
   muted           Boolean  @default(false)
   pinned          Boolean  @default(false)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
 }
 
 model Block {
@@ -567,6 +598,9 @@ model Block {
   fromId    String
   toId      String
   createdAt DateTime @default(now())
+
+  from User @relation("BlockFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  to   User @relation("BlockTo", fields: [toId], references: [id], onDelete: Cascade)
 
   @@unique([fromId, toId])
 }
@@ -579,6 +613,9 @@ model Report {
   detail    String?
   status    String   @default("open")
   createdAt DateTime @default(now())
+
+  from User @relation("ReportFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  to   User @relation("ReportTo", fields: [toId], references: [id], onDelete: Cascade)
 }
 
 model Attachment {
@@ -591,4 +628,22 @@ model Attachment {
   url        String
   thumbUrl   String?
   createdAt  DateTime @default(now())
+
+  message Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+}
+
+
+model FriendRequest {
+  id        String   @id @default(cuid())
+  fromId    String
+  toId      String
+  message   String?
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  from User @relation("FriendRequestFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  to   User @relation("FriendRequestTo", fields: [toId], references: [id], onDelete: Cascade)
+
+  @@unique([fromId, toId])
 }
