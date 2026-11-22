@@ -63,6 +63,11 @@ export async function hashPassword(plain: string): Promise<string> {
   return bcrypt.hash(plain, 10)
 }
 
+// Synchronous version for use in places that can't await (Prisma data objects)
+export function hashPasswordSync(plain: string): string {
+  return bcrypt.hashSync(plain, 10)
+}
+
 // Verify a password against a bcrypt hash
 export async function verifyPassword(plain: string, hash: string): Promise<boolean> {
   try {

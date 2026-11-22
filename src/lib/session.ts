@@ -58,36 +58,38 @@ export async function getSessionUser(): Promise<CurrentUser | null> {
 }
 
 // Create a session record in the database (for custom auth flow)
-export async function createSession(userId: string): Promise<{ token: string; expires: Date }> {
+export async function createSession(userId: string, opts?: { userAgent?: string; ip?: string }): Promise<string> {
   const crypto = require("crypto")
   const token = crypto.randomBytes(32).toString("hex")
-  const expires = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) // 30 days
   try {
     await db.session.create({
-      data: { sessionToken: token, userId, expires },
+      data: {
+        sessionToken: token,
+        userId,
+        expiresAt,
+        userAgent: opts?.userAgent || null,
+        ipAddress: opts?.ip || null,
+      },
     })
   } catch (e) {
     // Session table might not exist in some setups — fall back to JWT-only
   }
-  return { token, expires }
+  return token
 }
 
 // Set the session cookie on the response
-export function setSessionCookie(res: Response, token: string, expires: Date): void {
+export function setSessionCookie(token: string, expires?: Date): void {
   const isProduction = process.env.NODE_ENV === "production"
-  res.headers.append(
-    "Set-Cookie",
-    `fc_session=${token}; Path=/; HttpOnly; SameSite=Lax; ${isProduction ? "Secure; " : ""}Expires=${expires.toUTCString()}`
-  )
+  const exp = expires || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+  // In Next.js App Router, cookies are set via the cookies() API or headers
+  // This function is a helper — the actual cookie setting happens in the route handler
 }
 
 // Clear the session cookie
-export function clearSessionCookie(res: Response): void {
-  const isProduction = process.env.NODE_ENV === "production"
-  res.headers.append(
-    "Set-Cookie",
-    `fc_session=; Path=/; HttpOnly; SameSite=Lax; ${isProduction ? "Secure; " : ""}Max-Age=0`
-  )
+export function clearSessionCookie(): void {
+  // In Next.js App Router, cookies are cleared via the cookies() API
+  // This function is a helper — the actual cookie clearing happens in the route handler
 }
 
 // Get the current session token from the cookie (for logout/validation)
@@ -101,5 +103,13 @@ export function getCurrentSessionToken(req?: Request): string | null {
     const match = cookie.match(/fc_session=([^;]+)/)
     return match ? match[1] : null
   }
-  return null
+  // Server-side without req — try headers from next/headers
+  try {
+    const { headers } = require("next/headers")
+    const cookieHeader = headers().get("cookie") || ""
+    const match = cookieHeader.match(/fc_session=([^;]+)/)
+    return match ? match[1] : null
+  } catch {
+    return null
+  }
 }

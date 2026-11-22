@@ -362,9 +362,8 @@ io.on("connection", (socket) => {
   socket.on("error", (err: any) => console.error(`[chat] socket error (${socket.id}):`, err))
 })
 
-io.listen(PORT, () => {
-  console.log(`[chat-service] Socket.IO listening on :${PORT}`)
-})
+const _server = io.listen(PORT)
+console.log(`[chat-service] Socket.IO listening on :${PORT}`)
 
 process.on("SIGTERM", () => {
   console.log("[chat-service] SIGTERM, closing")

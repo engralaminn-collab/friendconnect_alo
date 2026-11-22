@@ -68,39 +68,38 @@ export function avatarColor(seed: string): string {
 
 // === Missing exports used by fc/ components ===
 
-// Fetch wrapper with JSON parsing + auth cookie forwarding
-export const api = {
-  async get<T = any>(path: string): Promise<T> {
-    const res = await fetch(path)
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return res.json()
-  },
-  async post<T = any>(path: string, body?: any): Promise<T> {
-    const res = await fetch(path, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return res.json()
-  },
-  async patch<T = any>(path: string, body: any): Promise<T> {
-    const res = await fetch(path, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return res.json()
-  },
-  async delete<T = any>(path: string): Promise<T> {
-    const res = await fetch(path, { method: "DELETE" })
-    if (!res.ok) throw new Error(`HTTP ${res.status}`)
-    return res.json()
-  },
+// API error class
+export class ApiError extends Error {
+  status: number
+  constructor(message: string, status: number = 400) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
 }
 
-// Upload a file via multipart form
+// Callable fetch wrapper — supports both api(path) and api(path, { method, body })
+// Also has .get/.post/.patch/.delete methods for convenience
+export async function api<T = any>(path: string, options?: RequestInit): Promise<T> {
+  const res = await fetch(path, options)
+  if (!res.ok) {
+    let msg = `HTTP ${res.status}`
+    try { const body = await res.json(); if (body?.error) msg = body.error } catch {}
+    throw new ApiError(msg, res.status)
+  }
+  if (res.status === 204) return null as any
+  return res.json() as Promise<T>
+}
+
+// Attach method shortcuts to the api function
+;(api as any).get = async <T = any>(path: string): Promise<T> => api<T>(path)
+;(api as any).post = async <T = any>(path: string, body?: any): Promise<T> =>
+  api<T>(path, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: body !== undefined ? JSON.stringify(body) : undefined })
+;(api as any).patch = async <T = any>(path: string, body: any): Promise<T> =>
+  api<T>(path, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+;(api as any).delete = async <T = any>(path: string): Promise<T> => api<T>(path, { method: 'DELETE' })
+
+// Upload a file via multipart form — returns the file object directly
 export async function uploadFile(file: File, onProgress?: (pct: number) => void): Promise<{ url: string; filename: string; mimeType: string; size: number }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
@@ -112,8 +111,11 @@ export async function uploadFile(file: File, onProgress?: (pct: number) => void)
     xhr.addEventListener("load", () => {
       try {
         const body = JSON.parse(xhr.responseText)
-        if (xhr.status >= 200 && xhr.status < 300) resolve(body)
-        else reject(new Error(body?.error || `HTTP ${xhr.status}`))
+        if (xhr.status >= 200 && xhr.status < 300) {
+          // Handle both { file: {...} } and direct {...} response shapes
+          const fileData = body.file || body
+          resolve({ url: fileData.url, filename: fileData.filename || fileData.name || file.name, mimeType: fileData.mimeType, size: fileData.size })
+        } else reject(new Error(body?.error || `HTTP ${xhr.status}`))
       } catch (e) { reject(new Error("Invalid response")) }
     })
     xhr.addEventListener("error", () => reject(new Error("Upload failed")))
@@ -128,8 +130,10 @@ export function clockTime(date: string | Date): string {
   return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
 }
 
-// Last seen text formatter
-export function lastSeenText(date: string | Date | null): string {
+// Last seen text formatter — accepts (online, lastSeen?) for FC component compatibility
+export function lastSeenText(online: boolean | string | Date | null, lastSeen?: string | Date | null): string {
+  if (online === true) return "online"
+  const date = typeof online === 'string' || online instanceof Date ? online : lastSeen
   if (!date) return "offline"
   const d = typeof date === "string" ? new Date(date) : date
   const diff = Date.now() - d.getTime()
@@ -139,9 +143,12 @@ export function lastSeenText(date: string | Date | null): string {
   return `last seen ${d.toLocaleDateString()}`
 }
 
-// Precise last seen formatter
-export function formatLastSeenPrecise(date: string | Date | null): string {
-  if (!date) return "Never"
+// Precise last seen formatter — returns { label, detail } for FC component compatibility
+export function formatLastSeenPrecise(date: string | Date | null | undefined): { label: string; detail: string } {
+  if (!date) return { label: "offline", detail: "Never" }
   const d = typeof date === "string" ? new Date(date) : date
-  return d.toLocaleString()
+  const diff = Date.now() - d.getTime()
+  if (diff < 60_000) return { label: "online", detail: "Active now" }
+  if (diff < 3600_000) return { label: "recently", detail: d.toLocaleString() }
+  return { label: "offline", detail: d.toLocaleString() }
 }

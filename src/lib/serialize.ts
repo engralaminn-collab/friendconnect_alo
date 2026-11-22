@@ -25,7 +25,7 @@ export async function serializeUser(userId: string, viewerId?: string): Promise<
     bio: u.profile?.bio ?? null,
     location: u.profile?.location ?? null,
     online: false, // presence handled via ws; default false
-    lastSeen: u.profile?.lastSeen ? u.profile.lastSeen.toISOString() : null,
+    lastSeen: u.lastSeenAt ? u.lastSeenAt.toISOString() : (u.profile?.lastSeen ? u.profile.lastSeen.toISOString() : null),
   }
 }
 

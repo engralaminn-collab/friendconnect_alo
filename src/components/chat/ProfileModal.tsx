@@ -1,6 +1,6 @@
 "use client"
 
-import { useState, useEffect } from "react"
+import { useState, useEffect, useCallback } from "react"
 import { Avatar } from "./Avatar"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -48,9 +48,9 @@ export function ProfileModal({
       setAvatarUrl(user.avatarUrl || "")
       loadStarred()
     }
-  }, [open, user])
+  }, [open, user, loadStarred])
 
-  async function loadStarred() {
+  const loadStarred = useCallback(async () => {
     try {
       const r = await fetch("/api/messages/star")
       const body = await r.json()
@@ -58,7 +58,7 @@ export function ProfileModal({
     } catch {
       setStarred([])
     }
-  }
+  }, [])
 
   async function handleSave() {
     setSaving(true)

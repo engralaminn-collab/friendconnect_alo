@@ -20,12 +20,24 @@ export async function POST(req: NextRequest) {
     const buffer = Buffer.from(await file.arrayBuffer())
     const base64Audio = buffer.toString("base64")
 
-    const result = await zai.asr.transcribe({
-      audio: base64Audio,
-      mime_type: file.type,
-    })
+    let text = ""
+    try {
+      // Try different ASR method names the SDK might expose
+      if (zai.asr?.transcribe) {
+        const result = await zai.asr.transcribe({ audio: base64Audio, mime_type: file.type })
+        text = result?.text || ""
+      } else if (zai.audio?.transcribe) {
+        const result = await zai.audio.transcribe({ audio: base64Audio, mime_type: file.type })
+        text = result?.text || ""
+      } else {
+        return errorJson("ASR not available in this SDK version", 501)
+      }
+    } catch (e: any) {
+      console.error("[ASR] transcription failed", e?.message)
+      return errorJson(`Transcription failed: ${e?.message}`, 500)
+    }
 
-    return json({ text: result?.text || "" })
+    return json({ text })
   } catch (e: any) {
     console.error("[ASR] error", e)
     return errorJson(`Transcription failed: ${e?.message}`, 500)
