@@ -47,14 +47,12 @@ model User {
   publicKey          String?
 
   // Relations
-  accounts           VerificationToken[]
   sessions           Session[]
   profile            Profile?
   ownedGroups        Group[]                @relation("GroupOwner")
   groupMemberships   GroupMember[]
   sentMessages       Message[]              @relation("MessageSender")
   receivedMessages   Message[]              @relation("MessageReceiver")
-  groupMessages      Message[]              @relation("MessageGroupSender")
   callsMade          Call[]                 @relation("CallCaller")
   callsReceived      Call[]                 @relation("CallReceiver")
   files              File[]
@@ -62,6 +60,8 @@ model User {
   messageStars       MessageStar[]
   messageDrafts      MessageDraft[]
   messageReminders   MessageReminder[]
+  friendshipRequests  Friendship[]          @relation("FriendshipRequester")
+  friendshipReceived  Friendship[]          @relation("FriendshipReceiver")
   chatPreferences    ChatPreference[]
   auditLogs          AuditLog[]
   pushSubscriptions  PushSubscription[]
@@ -70,7 +70,6 @@ model User {
   storyReplies       StoryReply[]
   storyReactions     StoryReaction[]
   broadcastLists     BroadcastList[]        @relation("BroadcastOwner")
-  broadcastMemberships BroadcastMember[]
   posts              Post[]
   postComments       PostComment[]
   postReactions      PostReaction[]
@@ -179,6 +178,8 @@ model Message {
   receiver  User?      @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: SetNull)
   replyTo   Message?   @relation("MessageReply", fields: [replyToId], references: [id], onDelete: SetNull)
   replies   Message[]  @relation("MessageReply")
+  stars     MessageStar[]
+  reminders MessageReminder[]
 
   @@index([receiverId, status])
   @@index([senderId])
@@ -425,6 +426,7 @@ model BroadcastMember {
   createdAt      DateTime @default(now())
 
   broadcastList BroadcastList @relation(fields: [broadcastListId], references: [id], onDelete: Cascade)
+  recipient    User           @relation(fields: [recipientId], references: [id], onDelete: Cascade)
 }
 
 // ============================================================
@@ -488,7 +490,8 @@ model PostComment {
   content   String
   createdAt DateTime @default(now())
 
-  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
 }
 
 model PostReaction {
@@ -499,6 +502,7 @@ model PostReaction {
   createdAt DateTime @default(now())
 
   post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([postId, userId, emoji])
 }
