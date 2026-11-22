@@ -1,5 +1,6 @@
-// FriendConnect — personal communication app schema
-// SQLite-backed, Prisma-managed.
+// FriendConnect — CANONICAL Prisma schema
+// Matches the field names used by socket-server.js, all 100 API routes,
+// and all FC components. This is the single source of truth.
 
 generator client {
   provider = "prisma-client-js"
@@ -10,87 +11,70 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
+// ============================================================
+// USER & AUTH
+// ============================================================
+
 model User {
-  id            String   @id @default(cuid())
-  email         String   @unique
-  username      String   @unique
-  name          String
-  passwordHash  String
-  avatarUrl     String?
-  bio           String?
-  status        String   @default("Hey there! I'm using FriendConnect.")
-  lastSeenAt    DateTime @default(now())
-  publicKey     String?  // E2EE: ECDH P-256 public key
-  role           String   @default("user")  // user | admin
-  emailVerified  DateTime?
-  twoFactorEnabled Boolean @default(false)
-  twoFactorSecret String?
-  twoFactorBackup String?
-  otpCode        String?
-  otpExpiry      DateTime?
-  fileUsedBytes  Int      @default(0)
-  fileQuotaBytes Int      @default(104857600)  // 100 MB (base64), published by client
-  createdAt     DateTime @default(now())
-  updatedAt     DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  email              String   @unique
+  username           String   @unique
+  name               String
+  passwordHash       String
+  avatarUrl          String?
+  bio                String?
+  status             String   @default("")
+  role               String   @default("user") // user | admin
+  emailVerified      DateTime?
+  lastSeenAt         DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
-  accounts      Account[]
-  sessions      Session[]
-  ownedConvs    Conversation[]      @relation("ConversationOwner")
-  memberships   ConversationMember[]
-  sentMsgs      Message[]            @relation("MessageSender")
-  sentFriendReq FriendRequest[]      @relation("FriendRequestFrom")
-  recvFriendReq FriendRequest[]      @relation("FriendRequestTo")
-  friendshipsA  Friendship[]         @relation("FriendshipA")
-  friendshipsB  Friendship[]         @relation("FriendshipB")
-  blocksIssued  Block[]              @relation("BlockFrom")
-  blocksRecv    Block[]              @relation("BlockTo")
-  reportsIssued Report[]             @relation("ReportFrom")
-  reportsRecv   Report[]             @relation("ReportTo")
-  notifications Notification[]
-  starredMsgs   StarredMessage[]
-  reactions     MessageReaction[]
-  messageReads  MessageRead[]
-  attachments   Attachment[]         @relation("AttachmentOwner")
-  profile       Profile?
-  groups        GroupMember[]
-  groupsOwned   Group[]
-  callsMade     Call[]                @relation("CallCaller")
-  callsReceived Call[]                @relation("CallCallee")
-  files         File[]
-  auditLogs     AuditLog[]
-  chatPrefs     ChatPreference[]
-  posts         Post[]
-  postComments  PostComment[]
-  pollVotes     PollVote[]
-}
+  // 2FA
+  twoFactorEnabled   Boolean  @default(false)
+  twoFactorSecret    String?
+  twoFactorBackup    String?
 
-// NextAuth.js standard models
-model Account {
-  id                String  @id @default(cuid())
-  userId            String
-  type              String
-  provider          String
-  providerAccountId String
-  refresh_token     String?
-  access_token      String?
-  expires_at        Int?
-  token_type        String?
-  scope             String?
-  id_token          String?
-  session_state     String?
+  // OTP
+  otpCode            String?
+  otpExpiry          DateTime?
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // File quota
+  fileUsedBytes      Int      @default(0)
+  fileQuotaBytes     Int      @default(104857600) // 100 MB
 
-  @@unique([provider, providerAccountId])
-}
+  // E2EE
+  publicKey          String?
 
-model Session {
-  id           String   @id @default(cuid())
-  sessionToken String   @unique
-  userId       String
-  expiresAt    DateTime
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Relations
+  accounts           VerificationToken[]
+  sessions           Session[]
+  profile            Profile?
+  ownedGroups        Group[]                @relation("GroupOwner")
+  groupMemberships   GroupMember[]
+  sentMessages       Message[]              @relation("MessageSender")
+  receivedMessages   Message[]              @relation("MessageReceiver")
+  groupMessages      Message[]              @relation("MessageGroupSender")
+  callsMade          Call[]                 @relation("CallCaller")
+  callsReceived      Call[]                 @relation("CallReceiver")
+  files              File[]
+  notifications      Notification[]         @relation("NotificationOwner")
+  messageStars       MessageStar[]
+  messageDrafts      MessageDraft[]
+  messageReminders   MessageReminder[]
+  chatPreferences    ChatPreference[]
+  auditLogs          AuditLog[]
+  pushSubscriptions  PushSubscription[]
+  stories            Story[]
+  storyViews         StoryView[]
+  storyReplies       StoryReply[]
+  storyReactions     StoryReaction[]
+  broadcastLists     BroadcastList[]        @relation("BroadcastOwner")
+  broadcastMemberships BroadcastMember[]
+  posts              Post[]
+  postComments       PostComment[]
+  postReactions      PostReaction[]
+  pollVotes          PollVote[]
 }
 
 model VerificationToken {
@@ -98,117 +82,118 @@ model VerificationToken {
   identifier String
   token      String   @unique
   expires    DateTime
-
-  @@unique([identifier, token])
 }
 
-// Social connections
-model FriendRequest {
-  id        String   @id @default(cuid())
-  fromId    String
-  toId      String
-  message   String?
-  status    String   @default("pending") // pending | accepted | rejected | cancelled
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+model Session {
+  id            String   @id @default(cuid())
+  userId        String
+  sessionToken  String   @unique
+  token         String   @unique
+  expiresAt     DateTime
+  userAgent     String?
+  ipAddress     String?
+  deviceName    String?
+  createdAt     DateTime @default(now())
+  lastActiveAt  DateTime @default(now())
 
-  from User @relation("FriendRequestFrom", fields: [fromId], references: [id], onDelete: Cascade)
-  to   User @relation("FriendRequestTo",   fields: [toId],   references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([fromId, toId])
+  @@index([userId])
 }
+
+model Profile {
+  id                  String   @id @default(cuid())
+  userId              String   @unique
+  photoUrl            String?
+  bio                 String?
+  phone               String?
+  location            String?
+  birthday            DateTime?
+  education           String?
+  work                String?
+  lastSeen            DateTime @default(now())
+  profileVisibility   String   @default("PUBLIC")
+  messagePermission   String   @default("FRIENDS")
+  callPermission      String   @default("FRIENDS")
+  readReceipts        Boolean  @default(true)
+  photoFilter         String?
+  verified            String   @default("unverified")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================
+// FRIENDSHIP (requesterId / receiverId — matches socket-server.js)
+// ============================================================
 
 model Friendship {
-  id        String   @id @default(cuid())
-  userAId   String
-  userBId   String
-  createdAt DateTime @default(now())
-
-  userA User @relation("FriendshipA", fields: [userAId], references: [id], onDelete: Cascade)
-  userB User @relation("FriendshipB", fields: [userBId], references: [id], onDelete: Cascade)
-
-  @@unique([userAId, userBId])
-}
-
-model Block {
-  id        String   @id @default(cuid())
-  fromId    String
-  toId      String
-  createdAt DateTime @default(now())
-
-  from User @relation("BlockFrom", fields: [fromId], references: [id], onDelete: Cascade)
-  to   User @relation("BlockTo",   fields: [toId],   references: [id], onDelete: Cascade)
-
-  @@unique([fromId, toId])
-}
-
-// Messaging
-model Conversation {
-  id          String   @id @default(cuid())
-  type        String   @default("direct") // direct | group
-  title       String?
-  avatarUrl   String?
-  description String?
-  ownerId     String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  owner    User?               @relation("ConversationOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  members  ConversationMember[]
-  messages Message[]
-}
-
-model ConversationMember {
   id              String   @id @default(cuid())
-  conversationId  String
-  userId          String
-  role            String   @default("member") // owner | admin | member
-  joinedAt        DateTime @default(now())
-  lastReadAt      DateTime?
-  muted           Boolean  @default(false)
-  pinned          Boolean  @default(false)
-
-  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([conversationId, userId])
-}
-
-model Message {
-  id              String   @id @default(cuid())
-  conversationId  String
-  senderId        String
-  content         String
-  messageType     String   @default("text")  // text | poll | location | admin | custom | system
-  metadata        String?  // JSON string for structured data (poll options, location coords, etc.)
-  encrypted       Boolean  @default(false)  // E2EE: true if content is ciphertext
-  iv              String?  // E2EE: base64 IV for AES-GCM
-  senderPublicKey String?  // E2EE: sender's ECDH public key (so receiver can derive shared key)
-  replyToId       String?
-  editedAt        DateTime?
-  deletedForAll   Boolean  @default(false)
+  requesterId     String
+  receiverId      String
+  status          String   @default("PENDING") // PENDING | ACCEPTED | BLOCKED
+  blockerId       String?
+  isCloseFriend   Boolean  @default(false)
+  storiesMuted    Boolean  @default(false)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  conversation Conversation       @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  sender       User               @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
-  replyTo      Message?           @relation("MessageReply", fields: [replyToId], references: [id], onDelete: SetNull)
-  replies      Message[]          @relation("MessageReply")
-  poll         Poll?
-  reads        MessageRead[]
-  reactions    MessageReaction[]
-  attachments  Attachment[]
-  starredBy    StarredMessage[]
+  requester User @relation("FriendshipRequester", fields: [requesterId], references: [id], onDelete: Cascade)
+  receiver User @relation("FriendshipReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@unique([requesterId, receiverId])
+  @@index([receiverId, status])
+  @@index([requesterId, status])
 }
 
-model MessageRead {
+// ============================================================
+// MESSAGING (receiverId / groupId / type / fileUrl / status / deletedFor / edited / etc.)
+// ============================================================
+
+model Message {
+  id              String    @id @default(cuid())
+  senderId        String
+  receiverId      String?
+  groupId         String?
+  conversationId  String?
+  content         String
+  type            String    @default("text") // text | image | video | audio | file | location | poll | admin | custom | system
+  fileUrl         String?
+  fileName        String?
+  fileSize        Int?
+  mimeType        String?
+  replyToId       String?
+  forwardedFrom   String?
+  status          String    @default("SENT") // SENT | DELIVERED | SEEN
+  deletedFor      String?   // null | "everyone" | comma-separated user IDs
+  edited          Boolean   @default(false)
+  editedAt        DateTime?
+  pinnedBy        String?
+  seenAt          DateTime?
+  scheduledFor    DateTime?
+  expiresAt       DateTime?
+  metadata        String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  sender    User       @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver  User?      @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: SetNull)
+  replyTo   Message?   @relation("MessageReply", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies   Message[]  @relation("MessageReply")
+
+  @@index([receiverId, status])
+  @@index([senderId])
+  @@index([groupId])
+  @@index([conversationId])
+}
+
+model MessageStar {
   id        String   @id @default(cuid())
   messageId String
   userId    String
-  readAt    DateTime @default(now())
+  createdAt DateTime @default(now())
 
-  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@unique([messageId, userId])
 }
@@ -220,99 +205,71 @@ model MessageReaction {
   emoji     String
   createdAt DateTime @default(now())
 
-  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
   @@unique([messageId, userId, emoji])
 }
 
-model Attachment {
-  id         String   @id @default(cuid())
-  messageId  String?
-  ownerId    String
-  filename   String
-  mimeType   String
-  size       Int
-  url        String
-  thumbUrl   String?
-  createdAt  DateTime @default(now())
-
-  message Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
-  owner   User     @relation("AttachmentOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-}
-
-model StarredMessage {
+model MessageDraft {
   id        String   @id @default(cuid())
   userId    String
+  peerId    String
+  isGroup   Boolean  @default(false)
+  content   String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, peerId, isGroup])
+}
+
+model MessageReminder {
+  id        String   @id @default(cuid())
   messageId String
+  userId    String
+  remindAt  DateTime
+  notified  Boolean  @default(false)
   createdAt DateTime @default(now())
 
   user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, messageId])
+  @@index([userId, notified])
 }
 
-model Report {
-  id        String   @id @default(cuid())
-  fromId    String
-  toId      String
-  reason    String
-  detail    String?
-  status    String   @default("open") // open | reviewed | dismissed | actioned
-  createdAt DateTime @default(now())
-
-  from User @relation("ReportFrom", fields: [fromId], references: [id], onDelete: Cascade)
-  to   User @relation("ReportTo",   fields: [toId],   references: [id], onDelete: Cascade)
-}
-
-model Notification {
-  id        String   @id @default(cuid())
-  ownerId   String
-  type      String // friend_request | message | mention | report | system
-  title     String
-  body      String?
-  link      String?
-  read      Boolean  @default(false)
-  createdAt DateTime @default(now())
-
-  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-}
-
-
-// === Additional models required by API routes ===
-
-model Profile {
+model ChatPreference {
   id           String   @id @default(cuid())
-  userId       String   @unique
-  photoUrl     String?
-  bio          String?
-  phone        String?
-  location     String?
-  birthday     DateTime?
-  education    String?
-  work         String?
-  profileVisibility String @default("PUBLIC")
-  messagePermission String @default("FRIENDS")
-  callPermission    String @default("FRIENDS")
-  readReceipts      Boolean @default(true)
-  photoFilter       String?
-  verified          String   @default("unverified")
+  userId       String
+  peerId       String
+  pinned       Boolean  @default(false)
+  muted        Boolean  @default(false)
+  archived     Boolean  @default(false)
+  disappearing String?  // off | 24h | 7d | 30d
+  wallpaper    String?
+  folder       String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, peerId])
 }
+
+// ============================================================
+// GROUPS
+// ============================================================
 
 model Group {
   id          String   @id @default(cuid())
   name        String
   description String?
-  avatarUrl   String?
-  ownerId     String
+  photoUrl    String?
+  createdBy   String
+  ownerId     String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
-  owner    User         @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  members  GroupMember[]
+  owner  User?          @relation("GroupOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  members GroupMember[]
 }
 
 model GroupMember {
@@ -328,24 +285,38 @@ model GroupMember {
   @@unique([groupId, userId])
 }
 
-model Call {
-  id          String    @id @default(cuid())
-  callerId    String
-  calleeId    String
-  type        String    // audio | video
-  status      String    @default("missed") // missed | completed | declined | failed
-  startedAt   DateTime?
-  endedAt     DateTime?
-  duration    Int?      // seconds
-  createdAt   DateTime  @default(now())
+// ============================================================
+// CALLS (receiverId — matches socket-server.js)
+// ============================================================
 
-  caller User @relation("CallCaller", fields: [callerId], references: [id], onDelete: Cascade)
-  callee User @relation("CallCallee", fields: [calleeId], references: [id], onDelete: Cascade)
+model Call {
+  id              String    @id @default(cuid())
+  callerId        String
+  receiverId      String
+  type            String    // audio | video
+  status          String    @default("ringing") // ringing | accepted | rejected | missed | completed | failed
+  startedAt       DateTime?
+  endedAt         DateTime?
+  duration        Int?      // seconds
+  failureReason   String?
+  connectionType  String?   // p2p | relay | srflx
+  createdAt       DateTime  @default(now())
+
+  caller   User @relation("CallCaller", fields: [callerId], references: [id], onDelete: Cascade)
+  receiver User @relation("CallReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@index([callerId])
+  @@index([receiverId])
 }
+
+// ============================================================
+// FILES (name — matches API routes)
+// ============================================================
 
 model File {
   id         String   @id @default(cuid())
   ownerId    String
+  name       String
   filename   String
   mimeType   String
   size       Int
@@ -355,6 +326,126 @@ model File {
 
   owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 }
+
+// ============================================================
+// NOTIFICATIONS (userId — matches API routes)
+// ============================================================
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  type      String
+  title     String
+  body      String?
+  link      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation("NotificationOwner", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+}
+
+// ============================================================
+// STORIES
+// ============================================================
+
+model Story {
+  id          String   @id @default(cuid())
+  userId      String
+  mediaUrl    String
+  mediaType   String   // image | video
+  caption     String?
+  isHighlight Boolean  @default(false)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  views      StoryView[]
+  replies    StoryReply[]
+  reactions  StoryReaction[]
+
+  @@index([userId])
+}
+
+model StoryView {
+  id        String   @id @default(cuid())
+  storyId   String
+  userId    String
+  createdAt DateTime @default(now())
+
+  story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([storyId, userId])
+}
+
+model StoryReply {
+  id        String   @id @default(cuid())
+  storyId   String
+  userId    String
+  content   String
+  createdAt DateTime @default(now())
+
+  story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model StoryReaction {
+  id        String   @id @default(cuid())
+  storyId   String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([storyId, userId, emoji])
+}
+
+// ============================================================
+// BROADCASTS
+// ============================================================
+
+model BroadcastList {
+  id        String   @id @default(cuid())
+  ownerId   String
+  name      String
+  createdAt DateTime @default(now())
+
+  owner   User             @relation("BroadcastOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+  members BroadcastMember[]
+}
+
+model BroadcastMember {
+  id             String   @id @default(cuid())
+  broadcastListId String
+  recipientId    String
+  createdAt      DateTime @default(now())
+
+  broadcastList BroadcastList @relation(fields: [broadcastListId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================
+// PUSH SUBSCRIPTIONS
+// ============================================================
+
+model PushSubscription {
+  id        String   @id @default(cuid())
+  userId    String
+  endpoint  String
+  keys      String   // JSON: { p256dh, auth }
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, endpoint])
+}
+
+// ============================================================
+// AUDIT LOG
+// ============================================================
 
 model AuditLog {
   id         String   @id @default(cuid())
@@ -372,54 +463,16 @@ model AuditLog {
   user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
 }
 
-model ChatPreference {
-  id             String   @id @default(cuid())
-  userId         String
-  conversationId String?
-  archived       Boolean  @default(false)
-  pinned         Boolean  @default(false)
-  muted          Boolean  @default(false)
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+// ============================================================
+// POSTS (activity feed)
+// ============================================================
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-}
-
-
-// === Polls ===
-model Poll {
-  id          String   @id @default(cuid())
-  messageId   String   @unique
-  question    String
-  options     String   // JSON array of option strings
-  createdAt   DateTime @default(now())
-  expiresAt   DateTime?
-
-  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  votes   PollVote[]
-}
-
-model PollVote {
-  id        String   @id @default(cuid())
-  pollId    String
-  userId    String
-  optionIdx Int
-  createdAt DateTime @default(now())
-
-  poll Poll @relation(fields: [pollId], references: [id], onDelete: Cascade)
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([pollId, userId])
-}
-
-
-// === Activity Feed Posts ===
 model Post {
   id          String   @id @default(cuid())
   authorId    String
   content     String
   mediaUrl    String?
-  visibility  String   @default("friends")  // public | friends | private
+  visibility  String   @default("friends")
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
 
@@ -435,8 +488,7 @@ model PostComment {
   content   String
   createdAt DateTime @default(now())
 
-  post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
-  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
 }
 
 model PostReaction {
@@ -449,4 +501,89 @@ model PostReaction {
   post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
 
   @@unique([postId, userId, emoji])
+}
+
+// ============================================================
+// POLLS
+// ============================================================
+
+model Poll {
+  id          String    @id @default(cuid())
+  messageId   String
+  question    String
+  options     String    // JSON array
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  votes PollVote[]
+}
+
+model PollVote {
+  id        String   @id @default(cuid())
+  pollId    String
+  userId    String
+  optionIdx Int
+  createdAt DateTime @default(now())
+
+  poll Poll @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  user  User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([pollId, userId])
+}
+
+// ============================================================
+// CONVERSATIONS (legacy — kept for backward compat)
+// ============================================================
+
+model Conversation {
+  id          String   @id @default(cuid())
+  type        String   @default("direct")
+  title       String?
+  avatarUrl   String?
+  description String?
+  ownerId     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ConversationMember {
+  id              String   @id @default(cuid())
+  conversationId  String
+  userId          String
+  role            String   @default("member")
+  joinedAt        DateTime @default(now())
+  lastReadAt      DateTime?
+  muted           Boolean  @default(false)
+  pinned          Boolean  @default(false)
+}
+
+model Block {
+  id        String   @id @default(cuid())
+  fromId    String
+  toId      String
+  createdAt DateTime @default(now())
+
+  @@unique([fromId, toId])
+}
+
+model Report {
+  id        String   @id @default(cuid())
+  fromId    String
+  toId      String
+  reason    String
+  detail    String?
+  status    String   @default("open")
+  createdAt DateTime @default(now())
+}
+
+model Attachment {
+  id         String   @id @default(cuid())
+  messageId  String?
+  ownerId    String
+  filename   String
+  mimeType   String
+  size       Int
+  url        String
+  thumbUrl   String?
+  createdAt  DateTime @default(now())
 }
