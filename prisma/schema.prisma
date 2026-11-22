@@ -70,6 +70,7 @@ model User {
   storyReplies       StoryReply[]
   storyReactions     StoryReaction[]
   broadcastLists     BroadcastList[]        @relation("BroadcastOwner")
+  broadcastMemberships BroadcastMember[]
   posts              Post[]
   postComments       PostComment[]
   postReactions      PostReaction[]
