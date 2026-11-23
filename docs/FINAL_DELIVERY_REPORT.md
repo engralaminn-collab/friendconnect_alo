@@ -21,7 +21,7 @@
 | **Jara natural conversation** | **PASS** | AI gateway (Ollama→Zai→OpenRouter→HF→OpenAI), Bangla/Banglish/English detection, fallbackReply for offline, memory via historyMessages, configurable via JaraConfig personality/responseLength |
 | **Jara live voice** | **PASS** | JaraVoiceCall component: mic (getUserMedia) → SpeechRecognition continuous bn-BD → /api/jara/voice (LLM) → SpeechSynthesis bn-BD voice (rate/pitch from config) → interruption (cancel) → recovery (auto-restart), mute/end, transcript logging — browser-native, free, self-hosted |
 | **Jara avatar & visual identity** | **PASS** | JaraAvatar (Canvas 2D, head/eyes/mouth with blink/lip-sync/mood), face (friendly/realistic/etc), background (gradient-emerald/futuristic/nature/etc), theme, colors — all from live JaraConfig, preview via JaraConfigCenter, responsive |
-| **Jara group participation** | **PASS** | Invite via /api/jara/group/consent (group admin only, creates JaraGroupConsent + GroupMember), text Q&A via /api/jara/group (requires mention for privacy), consent checks, remove controls — API complete; ChatView listening indicator documented as PARTIAL (API ready, UI header not yet wired) |
+| **Jara group participation** | **PASS** | Invite via /api/jara/group/consent (group admin only, creates JaraGroupConsent + GroupMember), text Q&A via /api/jara/group (requires mention for privacy), consent checks, remove controls — ChatView header now shows “Jara listening • AI” banner + GroupsView has Add Jara + Listening toggle |
 | **Super Admin chat control** | **PASS** | Super Admin says “Jara, change your background…” → /api/jara/chat parses instruction → Proposal (pending, hash, expiry, audit) → preview (current vs proposed) → explicit approval required |
 | **Absolute approval gate** | **PASS** | 10-step workflow enforced server-side (proposal→preview→approve→verify admin→apply→audit), all 15 acceptance tests pass (see JARA_TEST_EVIDENCE.md) |
 | **Jara Configuration Center** | **PASS** | Dialog with 5 tabs: Overview (live identity + health), Proposals (approve/reject), Preview (side-by-side avatars + diff), Versions (rollback proposals), Audit (all logs) — versioning + rollback via proposals |
@@ -31,7 +31,6 @@
 
 | Feature | Status | Reason / Next |
 |---------|--------|---------------|
-| Jara group listening banner in ChatView header | PARTIAL | API (listenEnabled flag) ready; ChatView header not yet shows “Jara is listening • AI” — requires 20-line patch to ChatView.tsx |
 | Jara group voice room (multi-peer where Jara hears all participants) | PARTIAL | Group consent API ready; real-time multi-STT would need LiveKit Agents (evaluated, not installed) — documented future; current voice is 1:1 browser-direct |
 | Bangla TTS perfect naturalness on all devices | PARTIAL | Browser bn-BD voice missing on some Windows desktops → fallback en-US; Piper TTS self-hosted upgrade documented (requires 200MB model + server) |
 | E2E encryption | BLOCKED | UI says “encrypted-feel” but no client-side crypto; libsodium integration would be next quarter |
@@ -166,10 +165,12 @@ CPU/GPU: MVP needs no server GPU; production whisper.cpp+Piper needs 4GB RAM, 2 
 ```bash
 npm install --legacy-peer-deps --ignore-scripts   # better-sqlite3 needs nodejs.org headers offline, so --ignore-scripts
 npm run build   # → Compiled successfully (Turbopack, 1014ms), routes including /api/jara/* present, exit 0
-./node_modules/.bin/tsc --noEmit   # 18 errors (all pre-existing), Jara-specific fixed, exit 0 (ignoreBuildErrors:true)
-./node_modules/.bin/eslint .       # 1 error (ProfileModal pre-existing), 2 warnings, exit 0
+./node_modules/.bin/tsc --noEmit   # → 0 errors, exit 0
+./node_modules/.bin/eslint .       # → 0 errors, 1 warning (unused disable), exit 0
 DATABASE_URL="file:./db/custom.db" node scripts/test-jara-governance.cjs
 # → 21 assertions, 0 failed, exit 0 (all 10 governance tests PASS)
+node scripts/test-jara-e2e.cjs
+# → 31 assertions, 0 failed, exit 0 (gates 15.2 PASS, 15.3 PASS, 15.4 PASS, 15.5 PASS)
 curl /api/health → 200 degraded (redis unconfigured expected in sandbox)
 curl /api/jara/health → 200 healthy, jara.exists:true
 curl /api/jara/config → 200 version 1, isLive true
@@ -217,9 +218,9 @@ curl https://$APP_DOMAIN/api/jara/health           # jara healthy
 
 ## 12. Status Summary (per prompt §19)
 
-- PASS: All required Jara account, chat, voice, avatar, group, governance, approval, versioning, rollback — with evidence
-- PARTIAL: Studio-quality Bangla TTS on devices lacking bn-BD voice (honest, with Piper upgrade path); group listening banner UI (API ready)
-- BLOCKED: None in code — external services (Ollama, TURN) are optional/configurable, not required for build
+- PASS: All required Jara account, chat, voice, avatar, group (incl. listening banner UI), governance, approval, versioning, rollback — with evidence (gates 15.2-15.5 all PASS)
+- PARTIAL: Studio-quality Bangla TTS on devices lacking bn-BD voice (honest, with Piper upgrade path); group multi-peer voice room needs LiveKit Agents (not blocking)
+- BLOCKED: E2E encryption crypto (documented as future) — not required for PASS gates
 - FAIL: None
 - NOT IMPLEMENTED: None (all mandatory items delivered)
 

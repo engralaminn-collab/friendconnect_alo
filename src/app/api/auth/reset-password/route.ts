@@ -10,8 +10,8 @@ export async function POST(req: NextRequest) {
     const otp = String(body.otp || '').trim()
     const password = String(body.password || '')
     if (!identifier || !otp || !password) return errorJson('Missing fields', 400)
-    const pwErr = validatePassword(password)
-    if (pwErr) return errorJson(pwErr, 400)
+    const pwCheck = validatePassword(password)
+    if (!pwCheck.valid) return errorJson(pwCheck.reason || 'Invalid password', 400)
     const user = await db.user.findFirst({
       where: { OR: [{ email: identifier }, { username: identifier }] },
     })

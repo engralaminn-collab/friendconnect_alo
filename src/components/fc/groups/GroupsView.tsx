@@ -397,7 +397,7 @@ function CreateGroupDialog({
     setUploading(true)
     try {
       const data = await uploadFile(file)
-      setPhotoUrl(data.file.url)
+      setPhotoUrl((data as any).file?.url || (data as any).url)
       toast.success('Photo uploaded')
     } catch (e: any) {
       toast.error(e?.message || 'Upload failed')
@@ -622,6 +622,8 @@ function GroupDetailsDialog({
   const [friends, setFriends] = useState<FriendLite[]>([])
   const [selectedAdd, setSelectedAdd] = useState<Set<string>>(new Set())
   const [addLoading, setAddLoading] = useState(false)
+  const [jaraConsent, setJaraConsent] = useState<{ enabled: boolean; listenEnabled: boolean } | null>(null)
+  const [jaraToggling, setJaraToggling] = useState(false)
 
   const load = useCallback(async (id: string) => {
     setLoading(true)
@@ -649,6 +651,28 @@ function GroupDetailsDialog({
       setSelectedAdd(new Set())
     }
   }, [groupId, load])
+
+  useEffect(() => {
+    if (!groupId) { setJaraConsent(null); return }
+    api<{ consent: { enabled: boolean; listenEnabled: boolean } }>(`/api/jara/group/consent?groupId=${encodeURIComponent(groupId)}`)
+      .then((d) => setJaraConsent(d.consent))
+      .catch(() => setJaraConsent({ enabled: false, listenEnabled: false }))
+  }, [groupId])
+
+  const toggleJara = async (enabled: boolean, listenEnabled?: boolean) => {
+    if (!groupId) return
+    setJaraToggling(true)
+    try {
+      const data = await api<{ consent: { enabled: boolean; listenEnabled: boolean } }>(`/api/jara/group/consent`, {
+        method: 'POST',
+        body: JSON.stringify({ groupId, enabled, listenEnabled: listenEnabled ?? jaraConsent?.listenEnabled ?? false }),
+      })
+      setJaraConsent(data.consent)
+      toast.success(enabled ? 'Jara added to group' : 'Jara removed from group')
+      await load(groupId)
+      onChanged()
+    } catch (e: any) { toast.error(e?.message || 'Failed to update Jara') } finally { setJaraToggling(false) }
+  }
 
   const myRole = group?.members.find((m) => m.id === user?.id)?.role
   const isOwner = myRole === 'OWNER'
@@ -803,6 +827,33 @@ function GroupDetailsDialog({
               </>
             ) : (
               <>
+                {/* Jara AI */}
+                <div className="mb-3 rounded-xl border border-border bg-muted/30 p-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <div className="grid h-8 w-8 place-items-center rounded-full bg-emerald-500/15 text-emerald-600 text-xs font-bold">J</div>
+                      <div>
+                        <div className="text-sm font-semibold leading-none">Jara AI</div>
+                        <div className="text-[11px] text-muted-foreground">{jaraConsent?.enabled ? (jaraConsent.listenEnabled ? 'Listening • AI participant' : 'In group • mention @Jara') : 'Not in this group'}</div>
+                      </div>
+                    </div>
+                    {(myRole === 'OWNER' || myRole === 'ADMIN') ? (
+                      <div className="flex items-center gap-2">
+                        {jaraConsent?.enabled && (
+                          <label className="flex items-center gap-1.5 text-xs">
+                            <Checkbox checked={!!jaraConsent.listenEnabled} onCheckedChange={(v) => toggleJara(true, !!v)} disabled={jaraToggling} />
+                            <span className="text-muted-foreground">Listening</span>
+                          </label>
+                        )}
+                        <Button size="sm" variant={jaraConsent?.enabled ? "destructive" : "secondary"} disabled={jaraToggling} onClick={() => toggleJara(!jaraConsent?.enabled)} className="h-7 rounded-full text-xs">
+                          {jaraConsent?.enabled ? 'Remove' : 'Add Jara'}
+                        </Button>
+                      </div>
+                    ) : (
+                      <span className="text-xs text-muted-foreground">{jaraConsent?.enabled ? 'Active' : '—'}</span>
+                    )}
+                  </div>
+                </div>
                 <div className="mb-2 flex items-center justify-between">
                   <h3 className="text-sm font-semibold">
                     Members ({group.members.length})

@@ -325,7 +325,7 @@ function FriendRow({ friend, online, onChat, onProfile, onRemove, onBlock, onTog
               </span>
             )}
           </div>
-          <div className={cn('text-xs', online ? 'text-primary' : 'text-muted-foreground')}>{online ? 'online' : `last seen ${timeAgo(friend.lastSeen)} ago`}</div>
+          <div className={cn('text-xs', online ? 'text-primary' : 'text-muted-foreground')}>{online ? 'online' : (friend.lastSeen ? `last seen ${timeAgo(friend.lastSeen)} ago` : 'offline')}</div>
         </div>
       </button>
       <div className="flex items-center gap-1">

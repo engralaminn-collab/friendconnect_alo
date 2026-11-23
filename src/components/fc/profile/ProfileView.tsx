@@ -748,7 +748,7 @@ function PhotoCropDialog({
       const blob = await cropToBlob()
       if (!blob) throw new Error('Could not crop image')
       const file = new File([blob], 'avatar.jpg', { type: 'image/jpeg' })
-      const { file: uploaded } = await uploadFile(file)
+      const uploaded = await uploadFile(file)
       await api('/api/users/me', {
         method: 'PUT',
         body: JSON.stringify({ photoUrl: uploaded.url }),

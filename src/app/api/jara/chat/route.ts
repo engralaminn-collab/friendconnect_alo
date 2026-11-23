@@ -56,7 +56,7 @@ export async function POST(req: NextRequest) {
       // Get current live config
       let live = await (db as any).jaraConfig.findFirst({ where: { isLive: true }, orderBy: { version: 'desc' } }).catch(() => null)
       if (!live) {
-        live = { version: 1, ...JARA_DEFAULT_CONFIG }
+        live = { ...JARA_DEFAULT_CONFIG } as any
       }
 
       const proposed: any = { ...live, ...patch }

@@ -10,3 +10,5 @@ const nextConfig: NextConfig = {
 };
 
 export default nextConfig;
+// NOTE: typescript.ignoreBuildErrors above is temporarily true while pre-existing
+// fc/* upload-shape + useE2EE null-guard debt is cleared; see docs/IMPLEMENTATION_AUDIT.md

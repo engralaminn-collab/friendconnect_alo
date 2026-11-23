@@ -9,8 +9,8 @@ export async function POST(req: NextRequest) {
   if (!me) return errorJson("Unauthorized", 401)
 
   // Rate limit: 20 AI requests per minute per user
-  const limited = await rateLimit(`ai-chat:${me.id}`, 20, 60).catch(() => null)
-  if (limited === false) return errorJson("Rate limit exceeded", 429)
+  const limited = await rateLimit(`ai-chat:${me.id}`, 20, 60).catch(() => ({ allowed: true, remaining: 20 }))
+  if (limited && !limited.allowed) return errorJson("Rate limit exceeded", 429)
 
   const { messages, systemPrompt } = await req.json()
   if (!Array.isArray(messages) || messages.length === 0) {

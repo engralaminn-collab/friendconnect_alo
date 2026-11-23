@@ -3,18 +3,18 @@ import { getSessionUser } from "@/lib/session"
 import { errorJson, json } from "@/lib/serialize"
 import { db } from "@/lib/db"
 
-export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
+export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   const me = await getSessionUser()
   if (!me) return errorJson("Unauthorized", 401)
   const { optionIdx } = await req.json()
   if (typeof optionIdx !== "number") return errorJson("optionIdx required", 400)
 
-  const poll = await db.poll.findUnique({ where: { id: params.id } })
+  const poll = await db.poll.findUnique({ where: { id: (await params).id } })
   if (!poll) return errorJson("Poll not found", 404)
 
   // Check if already voted
   const existing = await db.pollVote.findUnique({
-    where: { pollId_userId: { pollId: params.id, userId: me.id } },
+    where: { pollId_userId: { pollId: (await params).id, userId: me.id } },
   })
   if (existing) {
     // Update vote
@@ -24,14 +24,14 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
     })
   } else {
     await db.pollVote.create({
-      data: { pollId: params.id, userId: me.id, optionIdx },
+      data: { pollId: (await params).id, userId: me.id, optionIdx },
     })
   }
 
   // Return updated vote counts
   const votes = await db.pollVote.groupBy({
     by: ["optionIdx"],
-    where: { pollId: params.id },
+    where: { pollId: (await params).id },
     _count: true,
   })
   return json({ ok: true, votes })

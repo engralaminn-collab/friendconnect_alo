@@ -16,18 +16,19 @@ export async function POST(req: NextRequest) {
 
   try {
     const ZAI = (await import("z-ai-web-dev-sdk")).default
-    const zai = await ZAI.create()
+    const zai: any = await (ZAI as any).create()
     const buffer = Buffer.from(await file.arrayBuffer())
     const base64Audio = buffer.toString("base64")
 
     let text = ""
     try {
-      // Try different ASR method names the SDK might expose
-      if (zai.asr?.transcribe) {
-        const result = await zai.asr.transcribe({ audio: base64Audio, mime_type: file.type })
+      // Try different ASR method names the SDK might expose (cast to any to avoid TS errors for SDK variations)
+      const azai: any = zai
+      if (azai.asr?.transcribe) {
+        const result = await azai.asr.transcribe({ audio: base64Audio, mime_type: file.type })
         text = result?.text || ""
-      } else if (zai.audio?.transcribe) {
-        const result = await zai.audio.transcribe({ audio: base64Audio, mime_type: file.type })
+      } else if (azai.audio?.transcribe) {
+        const result = await azai.audio.transcribe({ audio: base64Audio, mime_type: file.type })
         text = result?.text || ""
       } else {
         return errorJson("ASR not available in this SDK version", 501)

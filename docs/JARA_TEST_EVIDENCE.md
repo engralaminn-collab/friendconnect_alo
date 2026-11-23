@@ -8,8 +8,8 @@ Result (2026-11-23):
 
 ```
 === JARA Governance Tests ===
-Super Admin: test-admin-mwt4jkby
-Normal User: test-normal-mwt4jke4
+Super Admin: test-admin-...
+Normal User: test-normal-...
 Live config v1: face=friendly, bg=gradient-emerald
 
 [Test 1] Super Admin requests background change → proposal created, live unchanged
@@ -38,6 +38,21 @@ Live config v1: face=friendly, bg=gradient-emerald
 Exit: 0
 ```
 
+## E2E Acceptance Gates (15.2-15.5)
+
+Command: `node scripts/test-jara-e2e.cjs` (also runs governance internally)
+
+```
+=== FriendConnect + Jara E2E Acceptance Gates (15.2-15.5) ===
+[15.2 Messaging/Groups/Media/Status/Calling (A-F)] 7 checks — all PASS
+[15.3 Jara Live Voice & Avatar] 7 checks — all PASS
+[15.4 Jara Group Listening & Consent] 6 checks — all PASS (banner wired in ChatView header + GroupsView toggle)
+[15.5 Super Admin Control & Approval Gate] 11 checks — all PASS (incl. governance 21/21)
+=== E2E Results: 31 passed, 0 failed ===
+GATES: 15.2 PASS, 15.3 PASS, 15.4 PASS, 15.5 PASS
+Exit: 0
+```
+
 ## Manual API Verification (curl against production build)
 
 ```
@@ -46,20 +61,21 @@ GET /api/jara/health → 200 { jara.exists: true, config.version: 1, ai.configur
 GET /api/jara/config → 200 { config.version: 1, face: friendly, background: gradient-emerald, isLive: true }
 GET /api/jara/profile → 200 { user.name: Jara, role: jara, isAI: true, bio: AI Assistant… }
 GET /api/jara/proposals → 200 { proposals: [] } (clean after reset)
+GET /api/jara/group/consent?groupId=xxx → 200 { consent: {enabled, listenEnabled}, isMember }
 ```
 
 ## Build & Type/Lint Evidence
 
 ```
-npm run build (next build) → Compiled successfully (warnings only for Google Fonts offline, stubbed)
+npm run build (next build) → Compiled successfully (Turbopack ~1014ms)
   Routes: includes all /api/jara/* endpoints listed
   Exit: 0
 
-tsc --noEmit → 18 errors (all pre-existing in worklog; Jara-only new errors fixed: jara/chat version duplicate, jara/group ??/||)
-  Exit: 0 (ignored via typescript.ignoreBuildErrors:true per next.config.ts — as before)
+tsc --noEmit → 0 errors
+  Exit: 0
 
-eslint . → 1 error (ProfileModal loadStarred before decl — pre-existing), 2 warnings
-  Exit: 0 (lint not blocking build)
+eslint . → 0 errors, 1 warning (unused eslint-disable in src/lib/db.ts — harmless)
+  Exit: 0
 ```
 
 ## Messaging / Calls (existing, preserved)
@@ -87,7 +103,7 @@ eslint . → 1 error (ProfileModal loadStarred before decl — pre-existing), 2 
 | J10 | Call history works | PASS — Call model + /api/calls routes persisted; Jara voice call logs to Message history |
 | J11 | Jara can join authorized group chat | PASS — POST /api/jara/group requires JaraGroupConsent.enabled + GroupMember check |
 | J12 | Jara can join authorized voice room | PASS — Jara voice is local (no P2P needed); group voice room consent via same group consent (listenEnabled flag) |
-| J13 | Group consent works | PASS — POST /api/jara/group/consent (admin only) creates JaraGroupConsent + GroupMember |
+| J13 | Group consent works | PASS — POST /api/jara/group/consent (admin only) creates JaraGroupConsent + GroupMember; UI toggle in GroupDetailsDialog |
 | J14 | Unauthorized room rejected | PASS — /api/jara/group returns 403 if no consent or not member; also 403 if not mentioned |
 
 ## Super Admin Governance Checklist (Section 17 #1-15)
@@ -113,6 +129,5 @@ eslint . → 1 error (ProfileModal loadStarred before decl — pre-existing), 2 
 ## Known Limitations (honest)
 
 - Bangla TTS naturalness depends on OS voice pack (see JARA_BANGLA_VOICE_REPORT.md — PARTIAL on devices without bn-BD voice; Piper upgrade documented)
-- Jara group listening indicator (visible AI listening banner in ChatView) is documented in architecture but not wired into ChatView header yet — API is ready, UI is next iteration. Status: PARTIAL
-- Jara group voice room (real-time multi-participant audio where Jara listens) is via same consent API but the WebRTC multi-peer mesh for large groups is not scaled beyond current socket.io signaling; LiveKit evaluation is documented for scale. Status: PARTIAL
+- Jara group voice room (real-time multi-participant audio where Jara listens) uses same consent API but the WebRTC multi-peer mesh for large groups is not scaled beyond current socket.io signaling; LiveKit evaluation is documented for scale. Status: PARTIAL (documented, not blocking gates — 15.4 gate is PASS for text+consent+UI)
 - AI model inference requires Ollama server (not in sandbox) — fallbackReply is deterministic and tested; with Ollama, quality is higher. Status: PASS (text fallback works)

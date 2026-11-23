@@ -40,16 +40,6 @@ export function ProfileModal({
   const [saving, setSaving] = useState(false)
   const [starred, setStarred] = useState<any[]>([])
 
-  useEffect(() => {
-    if (open) {
-      setName(user.name)
-      setBio(user.bio || "")
-      setStatus(user.status || "")
-      setAvatarUrl(user.avatarUrl || "")
-      loadStarred()
-    }
-  }, [open, user, loadStarred])
-
   const loadStarred = useCallback(async () => {
     try {
       const r = await fetch("/api/messages/star")
@@ -59,6 +49,16 @@ export function ProfileModal({
       setStarred([])
     }
   }, [])
+
+  useEffect(() => {
+    if (open) {
+      setName(user.name)
+      setBio(user.bio || "")
+      setStatus(user.status || "")
+      setAvatarUrl(user.avatarUrl || "")
+      loadStarred()
+    }
+  }, [open, user, loadStarred])
 
   async function handleSave() {
     setSaving(true)

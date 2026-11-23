@@ -240,7 +240,6 @@ export function JaraVoiceCall({ config, onEnd, onTranscript }: JaraVoiceCallProp
       streamRef.current?.getTracks().forEach(t => t.stop())
       streamRef.current = null
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const toggleMute = useCallback(() => {

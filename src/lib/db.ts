@@ -10,8 +10,7 @@ try {
   _db = globalForPrisma.prisma ?? new PrismaClient({ log: ['query'] as any })
   if (process.env.NODE_ENV !== 'production') (globalThis as any).prisma = _db
 } catch {
-  // Fallback: SQLite runtime (no engine download needed)
-  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  // Fallback: SQLite runtime (no engine download needed); require is intentional
   const runtime = require('./db-runtime.js')
   _db = runtime.prisma
 }
