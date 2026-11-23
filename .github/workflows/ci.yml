@@ -49,15 +49,19 @@ jobs:
   deploy:
     needs: quality
     runs-on: ubuntu-latest
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && vars.DEPLOY_ENABLED == 'true'
+    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && vars.AUTO_DEPLOY_MAIN == 'true'
     steps:
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.0.0
         with:
-          host: ${{ secrets.DEPLOY_HOST }}
-          username: ${{ secrets.DEPLOY_USER }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          host: ${{ secrets.ALO_SERVER_HOST }}
+          username: ${{ secrets.ALO_SERVER_USER }}
+          key: ${{ secrets.ALO_SERVER_SSH_KEY }}
+          port: ${{ vars.ALO_SERVER_SSH_PORT }}
+          envs: FRIENDCONNECT_DIR
           script: |
-            cd ${{ secrets.DEPLOY_PATH }}
+            cd "$FRIENDCONNECT_DIR"
             git pull origin main
             ./scripts/deploy.sh
+        env:
+          FRIENDCONNECT_DIR: ${{ vars.FRIENDCONNECT_DIR }}
