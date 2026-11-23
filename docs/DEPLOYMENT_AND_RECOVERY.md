@@ -86,12 +86,15 @@ MySQL path avoids the SQLite `db-runtime.js` mismatches (friendRequest, Post, et
 ## 6. Health Checks
 
 ```bash
-curl /api/health # database ok required; realtime/redis/email/push may be degraded (expected if not configured)
-curl /api/jara/health # jara.exists true, pendingProposals count
-curl /api/webrtc/config # iceServers list, turnConfigured flag
+curl /api/health          # → {"status":"healthy","checks":{"database":"ok","realtime":"ok",...}} (see Root Cause below)
+curl http://127.0.0.1:3003/health # → {"ok":true,"service":"friendconnect-socket"}
+curl /api/jara/health     # → {"status":"healthy","jara":{"exists":true}}
+curl /api/webrtc/config   # → {"iceServers":[...]}
 ```
 
-Automated: `scripts/healthcheck.sh` (if present) or Caddy `handle /api/health`.
+**Health "degraded" root cause (fixed 2026-11-23 11:10 UTC):** `GET /api/health` returned `degraded` with `realtime:error` because the Socket.IO server (`socket-server.js` on `SOCKET_PORT=3003`) was not running — `src/app/api/health/route.ts` fetches `${SOCKET_INTERNAL_URL}/health` and marks `degraded` when unreachable. Redis/email/push show `unconfigured` (expected, not degraded). Fix: run both processes via `ecosystem.config.cjs` (`pm2 startOrReload ecosystem.config.cjs`) or `DATABASE_URL=... SOCKET_PORT=3003 node socket-server.js &` alongside the Next.js app. After fix: `healthy` with `database:ok realtime:ok`.
+
+Automated: `scripts/healthcheck.sh` (checks both endpoints, auto-restarts via PM2 if either 503).
 
 ## 7. Backup
 
@@ -148,7 +151,7 @@ pm2 restart friendconnect
 
 - [x] `.env` filled, `NEXTAUTH_SECRET` set, DB reachable (PORT 3007)
 - [x] `npm run build` passes (0 TSC, 0 ESLint errors, 33 tables)
-- [x] `curl /api/health` database ok (degraded ok, realtime error expected)
+- [x] `curl /api/health` → `healthy` (database ok, realtime ok — socket server on :3003 required, fixed 2026-11-23)
 - [x] `curl /api/jara/health` jara exists true (v23, now v24 after test)
 - [x] Register Super Admin, promote via DB, test governance 21/21
 - [x] Test Jara chat → proposal → approve → audit → live v24
@@ -158,21 +161,40 @@ pm2 restart friendconnect
 - [ ] Enable Caddy TLS (https required for mic/camera) — needs domain/DNS (not available in sandbox)
 - [ ] Deploy to public URL with PM2 + Caddy — **BLOCKED: no production server/DNS/credentials in sandbox** (see Section 11)
 
-## 11. Production Deployment Status — HONEST
+## 11. Production Deployment Status — HONEST (updated 2026-11-23 11:11 UTC)
 
-**Production URL:** None — application is running locally on `http://127.0.0.1:3007` (and 3005/3006) with SQLite. No public URL exists because:
+**Production URL (configured, not yet deployed from this branch):** `https://learn.aloeducation.com` (docs in `deploy/learn.aloeducation.com/`, `docs/DEPLOY_LEARN_ALOEDUCATION.md`)
 
-- No production server, domain, DNS, or reverse-proxy is configured in this sandbox environment.
-- `APP_DOMAIN`, `APP_ORIGIN`, `TURN_SECRET`, `OLLAMA_URL` for prod are not set; only local `file:./db/custom.db` is verified.
-- Prisma MySQL path is documented but not live-tested (MySQL not available in sandbox).
+**Production server:** Ubuntu `103.231.239.79` user `aloedu` · Node 22 · PM2 · Caddy 2 · MySQL 8 · Redis · Cloudflare Tunnel
 
-**What is live and verified (local production build):**
-- `DATABASE_URL=file:./db/custom.db PORT=3007 node .next/standalone/server.js` — Next.js 16.3 standalone, 33 tables, Jara v24 isLive, 18 users preserved.
-- `GET /api/health` → degraded ok, `GET /api/jara/health` → healthy, `GET /api/webrtc/config` → STUN list, `POST /api/posts` → 201, `GET /api/friends` → 200, `GET /api/notifications` → 200.
-- Pre-deployment backup: `cp db/custom.db db/custom.db.bak` verified; `scripts/backup.sh` documented for MySQL.
+**Health fix applied:** `health degraded → healthy` — Socket.IO server (`socket-server.js` on :3003/3018) now runs alongside Next.js app; `ecosystem.config.cjs` defines both processes.
 
-**To make live (requires external infra — exactly what is missing):**
-- Provision Ubuntu VM, set `DATABASE_URL=mysql://...`, `APP_DOMAIN`, `NEXTAUTH_SECRET`, `TURN_SECRET`, DNS A record, Caddy, `npx prisma migrate deploy`, `pm2 start ecosystem.config.cjs`.
-- All code and migrations are ready; only infra/funding/DNS is blocked.
+**Local production verification (this sandbox, commit 3065cb1 → 37 live):**
+- `DATABASE_URL=file:./db/custom.db PORT=3005 node .next/standalone/server.js` + `SOCKET_PORT=3003 node socket-server.js`
+- `GET /api/health` → **`healthy`** `database:ok realtime:ok` (fixed — was `degraded realtime:error` before socket started)
+- `GET /api/jara/health` → `healthy jara.exists:true v37`
+- `GET /socket.io` proxied via Caddy `/socket.io* → 127.0.0.1:3018` + `XTransformPort=3003` fallback
+- `POST /api/jara/chat`, `POST /api/friends 201`, `GET /api/notifications 200`, `POST /api/posts 201`, `GET /api/blocks 200` — all PASS
+- DB: 33 tables, 21 users, Jara v37 isLive, WAL, FK, backup `cp + wal_checkpoint(TRUNCATE) → /tmp/fc-backup-*.db` verified 21 users, restart persistence verified
 
-**Smoke tests on local prod build:** PASS (see Section 10 checklist x marks). No public production smoke tests — would require public URL.
+**Why public deploy not executed from this sandbox:**
+
+| Missing external dependency | Evidence | Impact |
+|---|---|---|
+| **E2B sandbox has no IPv6 egress** | `learn.aloeducation.com` DNS → only Cloudflare Tunnel IPv6 `fd10:aec2:5dae::`; `curl https://learn.aloeducation.com` → `Network is unreachable` | Cannot verify public URL from sandbox |
+| **Outbound whitelist** | Only `github.com`, `npm`, `pypi` allowed; `curl 103.231.239.79:3017` blocked | No direct IP deploy either |
+| **No SSH credentials** | `gh api .../secrets` → `403 Resource not accessible`; no `~/.ssh/`; CI needs `ALO_SERVER_SSH_KEY`, `ALO_SERVER_HOST`, `ALO_SERVER_USER` | Cannot SSH to `aloedu@103.231.239.79` |
+| **CI only deploys from `main`/`master`** | `.github/workflows/ci.yml` → `if: vars.AUTO_DEPLOY_MAIN == 'true'` on `main` only; this branch is `arena/79557eff-friendconnect-alo` | Must merge to `main` first |
+| **Production `.env` secrets not in sandbox** | `deploy/learn.aloeducation.com/env.production.example` has `CHANGE_ME` for `DATABASE_URL`, `SMTP_PASSWORD`, `NEXTAUTH_SECRET` | Real `.env` on server not accessible |
+
+**Exact command that WOULD deploy (to run on the production server or after merge to main):**
+```bash
+# On 103.231.239.79 as aloedu:
+cd /home/aloedu/friendconnect
+git fetch origin && git checkout arena/79557eff-friendconnect-alo  # or: git checkout main after merge
+git pull
+./scripts/deploy.sh   # → npm ci → prisma generate → migrate → build → pm2 reload → health check (both 200)
+# Or via CI: merge this branch to main → auto-deploy via appleboy/ssh-action
+```
+
+**Smoke tests on local prod build:** PASS (see Section 10 checklist). Public smoke tests: **BLOCKED** — requires merge to main or SSH to production server (see table above).

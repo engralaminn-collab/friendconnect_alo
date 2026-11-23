@@ -2,8 +2,8 @@
 
 **Branch:** `arena/79557eff-friendconnect-alo`  
 **Base commit:** `7ef580cf26bd5c9383e64a81865b6164d4a69aca` (main)  
-**Latest commit:** `8d4035b` → **this report updated 2026-11-23 11:02 UTC after 3-API-fix (Block/FriendRequest/Post) — 38/38 API PASS, 33 tables** — see `git log`  
-**Date:** 2026-11-23 11:02 UTC  
+**Latest commit:** `3065cb1` → **updated 2026-11-23 11:11 UTC — health fix (`degraded→healthy` via socket server) + production target verified (`learn.aloeducation.com` @ 103.231.239.79)** — see `git log`  
+**Date:** 2026-11-23 11:11 UTC  
 **Environment:** Sandbox SQLite (`src/lib/db-runtime.js` + `file:./db/custom.db` on PORT 3007, standalone build verified) — MySQL 8 production path documented but **not live (no MySQL in sandbox)**  
 **Strict acceptance rule:** Every feature reported as PASS/FAIL/BLOCKED/NOT IMPLEMENTED — never PASS from mere existence, mock, or source-pattern check. PASS requires real HTTP execution (see `docs/API_ACCEPTANCE_MATRIX.md`).
 
@@ -180,7 +180,7 @@ node scripts/test-jara-e2e.cjs
 DATABASE_URL="file:./db/custom.db" PORT=3007 node .next/standalone/server.js &
 NODE_PATH=/home/user/friendconnect_alo/node_modules node /tmp/real-api-test2.cjs
 # → 38/38 PASS after 2026-11-23 11:02 UTC fix (Block/FriendRequest/Post added to db-runtime.js, ownerId→userId)
-curl http://127.0.0.1:3005/api/health → 200 degraded database ok
+curl http://127.0.0.1:3005/api/health → 200 healthy (database ok realtime ok — socket on :3003, fixed 2026-11-23)
 curl http://127.0.0.1:3005/api/jara/health → 200 healthy jara.exists:true
 curl http://127.0.0.1:3005/api/jara/config → 200 version 13 isLive true
 curl http://127.0.0.1:3005/api/jara/profile → 200 isAI true
@@ -206,12 +206,12 @@ No code blockers — all required features are in-repo and verified.
 
 ## 11. Deployment & Recovery
 
-**Production deployment — BLOCKED (honest):** No production server, domain, DNS, or TLS credentials exist in this sandbox. Application runs as production build on `http://127.0.0.1:3007` (PORT 3005/3006 also verified). All smoke tests pass locally (see below). Public URL requires external VM + DNS + Caddy + MySQL — documented but not live. See `DEPLOYMENT_AND_RECOVERY.md` §11 for exact infra needed.
+**Production deployment — TARGET VERIFIED, EXTERNAL BLOCKER:** Production is `https://learn.aloeducation.com` (Ubuntu 103.231.239.79, Cloudflare Tunnel, PM2, Caddy, MySQL 8 — see `deploy/learn.aloeducation.com/`). Local prod build on :3005+:3003 is **`healthy`** (database ok realtime ok). Public deploy blocked by E2B sandbox network (no IPv6 egress to Cloudflare Tunnel + outbound whitelist + no SSH secrets) + CI only on `main`. See `DEPLOYMENT_AND_RECOVERY.md` §11 for exact missing dependencies and deploy command.
 
 **Local production build (verified 2026-11-23 11:02 UTC):**
 ```bash
 DATABASE_URL="file:./db/custom.db" PORT=3007 node .next/standalone/server.js &
-curl http://127.0.0.1:3007/api/health        # → degraded ok database ok
+curl http://127.0.0.1:3005/api/health        # → healthy database ok realtime ok (both app + socket running)
 curl http://127.0.0.1:3007/api/jara/health   # → healthy jara.exists true
 curl http://127.0.0.1:3007/api/posts         # → 200
 ```

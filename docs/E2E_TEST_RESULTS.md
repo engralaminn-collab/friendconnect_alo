@@ -18,7 +18,7 @@
 | E2E pattern (Jara) | `node scripts/test-jara-e2e.cjs` | PASS 31/31 | `GATES: 15.2 PASS 15.3 PASS 15.4 PASS 15.5 PASS` |
 | API HTTP | `NODE_PATH=... node /tmp/real-api-test2.cjs` | PASS 34/38 intentional* | `34 passed, 4 failed` → corrected to 38 PASS (4 were correct 403 for non-member admin) |
 | Playwright E2E | `npx playwright test` | BLOCKED | Cannot download chromium (sandbox ECONNRESET to cdn.playwright.dev) — HTTP E2E covers API; browser tests documented below as NOT RUN |
-| Health check | `curl /api/health` | PASS degraded ok | `database: ok` |
+| Health check | `curl /api/health` | PASS healthy (after socket fix) | `database: ok realtime: ok` |
 | Health Jara | `curl /api/jara/health` | PASS healthy | `jara.exists: true` |
 
 *Intentional 34/38: the 4 "failures" in this harness are correct 403 rejections when a non-member admin tries group consent. Retested with group OWNER (Alice) → 38/38 PASS. See API_ACCEPTANCE_MATRIX §5.
