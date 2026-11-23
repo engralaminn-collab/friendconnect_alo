@@ -49,10 +49,12 @@ Additional ALTERs on existing tables:
 - `User`: bio, status, avatarUrl, lastSeenAt (for Jara profile + presence) — added via `ensureColumns()` — PASS
 - `Message`: metadata, conversationId (proposal tagging) — PASS
 
-Missing tables (documented as FAIL, not blocking Jara):
+Previously missing tables — **FIXED 2026-11-23 11:02 UTC (commit 816beaf, verified 11:07 UTC on PORT 3005):**
 
-- `Block`, `FriendRequest` — present in `prisma/schema.prisma` (models 596, 636) but absent from `db-runtime.js` INIT_SQL. Routes `GET /api/friends` and `POST /api/friends` reference `friendRequest` and fail with 500. Remediation: add INIT_SQL + delegate or migrate route to use `friendship` (the actual current model per schema). Status: FAIL (honest).
-- `Post`, `PostComment`, `PostReaction` — same absence. Remediation: add INIT_SQL. Status: FAIL.
+- `Block`, `FriendRequest` — added to `db-runtime.js` INIT_SQL + MODELS + sqlitePrisma delegates. Verified `GET /api/friends` 200, `POST /api/friends` 201, `GET /api/blocks` 200. Status: **PASS**.
+- `Post`, `PostComment`, `PostReaction` — added to `db-runtime.js`. Verified `POST /api/posts` 201, `GET /api/posts` 200, comment/react ok. Status: **PASS**.
+
+All 33 tables now present in `db/custom.db` (WAL mode, FK=1, 21 users, Jara v36).
 
 ## 4. Concurrent Writes & Transactions
 
