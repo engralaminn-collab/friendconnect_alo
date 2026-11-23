@@ -1,6 +1,6 @@
 # Deployment and Recovery
 
-**Branch:** `arena/79557eff-friendconnect-alo` @ `de513f5` → **latest `NEW` after 3-API-fix**  
+**Branch:** `arena/79557eff-friendconnect-alo` @ `8d4035b` → **latest `NEW` after 3-API-fix**  
 **Last verified:** 2026-11-23 11:02 UTC (PORT 3007, SQLite, 38/38 API PASS)  
 **Production deployment:** **BLOCKED — no production infrastructure available in sandbox** (see Section 11)  
 **Targets:** Local SQLite dev (verified live on 3006/3007), MySQL 8 production (documented, not live-tested)

@@ -2,7 +2,7 @@
 
 **Branch:** `arena/79557eff-friendconnect-alo`  
 **Base commit:** `7ef580cf26bd5c9383e64a81865b6164d4a69aca` (main)  
-**Latest commit:** `de513f5` → **this report updated 2026-11-23 11:02 UTC after 3-API-fix (Block/FriendRequest/Post) — 38/38 API PASS, 33 tables** — see `git log`  
+**Latest commit:** `8d4035b` → **this report updated 2026-11-23 11:02 UTC after 3-API-fix (Block/FriendRequest/Post) — 38/38 API PASS, 33 tables** — see `git log`  
 **Date:** 2026-11-23 11:02 UTC  
 **Environment:** Sandbox SQLite (`src/lib/db-runtime.js` + `file:./db/custom.db` on PORT 3007, standalone build verified) — MySQL 8 production path documented but **not live (no MySQL in sandbox)**  
 **Strict acceptance rule:** Every feature reported as PASS/FAIL/BLOCKED/NOT IMPLEMENTED — never PASS from mere existence, mock, or source-pattern check. PASS requires real HTTP execution (see `docs/API_ACCEPTANCE_MATRIX.md`).
