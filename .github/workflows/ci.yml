@@ -61,10 +61,36 @@ jobs:
           username: ${{ secrets.ALO_SERVER_USER }}
           key: ${{ secrets.ALO_SERVER_SSH_KEY }}
           port: ${{ vars.ALO_SERVER_SSH_PORT }}
+          # Host-key verification stays ON. Set ALO_SERVER_FINGERPRINT to the
+          # server's SHA256 host-key fingerprint. Do not "fix" a mismatch by
+          # setting this to an empty string.
+          fingerprint: ${{ secrets.ALO_SERVER_FINGERPRINT }}
           envs: FRIENDCONNECT_DIR
           script: |
+            set -euo pipefail
             cd "$FRIENDCONNECT_DIR"
-            git pull origin main
+
+            # Refuse to deploy over uncommitted local edits on the server —
+            # someone may have hot-fixed production and not committed it.
+            if [ -n "$(git status --porcelain)" ]; then
+              echo "ABORT: working tree on the server is dirty. Commit or stash first."
+              git status --short
+              exit 1
+            fi
+
+            # Back up before touching the database. deploy.sh runs additive
+            # migrations; this gives us a restore point if anything goes wrong.
+            if [ -x ./scripts/backup.sh ]; then
+              echo "==> backup"
+              ./scripts/backup.sh
+            else
+              echo "WARN: scripts/backup.sh missing or not executable"
+            fi
+
+            git pull --ff-only origin main
             ./scripts/deploy.sh
+
+            echo "==> post-deploy health"
+            if [ -x ./scripts/healthcheck.sh ]; then ./scripts/healthcheck.sh; fi
         env:
           FRIENDCONNECT_DIR: ${{ vars.FRIENDCONNECT_DIR }}
