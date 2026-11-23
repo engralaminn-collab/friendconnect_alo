@@ -70,7 +70,7 @@ jobs:
           test -f next.config.ts
 
       - name: Install locked dependencies
-        run: npm ci --no-audit --no-fund
+        run: npm ci --include=dev --no-audit --no-fund
 
       - name: Generate SQLite Prisma Client
         run: npx prisma generate --schema prisma/schema.sqlite.prisma
