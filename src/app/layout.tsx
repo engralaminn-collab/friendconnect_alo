@@ -1,20 +1,13 @@
 import type { Metadata } from "next"
-import { Geist, Geist_Mono } from "next/font/google"
 import "./globals.css"
 import { Toaster } from "@/components/ui/toaster"
 import { Toaster as SonnerToaster } from "@/components/ui/sonner"
 import { Providers } from "@/components/providers"
 import { PWAInstallPrompt } from "@/components/PWAInstallPrompt"
 
-const geistSans = Geist({
-  variable: "--font-geist-sans",
-  subsets: ["latin"],
-})
-
-const geistMono = Geist_Mono({
-  variable: "--font-geist-mono",
-  subsets: ["latin"],
-})
+// Offline-safe: self-contained font variables (Geist unavailable offline)
+const geistSans = { variable: "--font-geist-sans" } as any
+const geistMono = { variable: "--font-geist-mono" } as any
 
 export const metadata: Metadata = {
   title: "FriendConnect — Personal messaging",

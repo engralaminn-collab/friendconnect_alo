@@ -9,12 +9,15 @@ import { NewChatModal } from "@/components/chat/NewChatModal"
 import { ProfileModal } from "@/components/chat/ProfileModal"
 import { NotificationsPanel } from "@/components/chat/NotificationsPanel"
 import { getSocket, getExistingSocket, disconnectSocket } from "@/lib/socket"
-import { MessageCircle, Loader2, MessageSquare } from "lucide-react"
+import { MessageCircle, Loader2, MessageSquare, Bot, Sparkles, Settings, Phone } from "lucide-react"
 import { Button } from "@/components/ui/button"
 import { toast } from "sonner"
 import { IncomingCallModal, type IncomingCallData } from "@/components/chat/IncomingCallModal"
 import { CallView, type ActiveCall } from "@/components/chat/CallView"
 import { nanoid } from "nanoid"
+import { JaraChat } from "@/components/jara/JaraChat"
+import { JaraConfigCenter } from "@/components/jara/JaraConfigCenter"
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 
 export default function Home() {
   const { data: session, status } = useSession()
@@ -33,6 +36,10 @@ export default function Home() {
   const [showNotifications, setShowNotifications] = useState(false)
   const [showAI, setShowAI] = useState(false)
   const [unreadNotifications, setUnreadNotifications] = useState(0)
+  const [jaraConfig, setJaraConfig] = useState<any>(null)
+  const [jaraPending, setJaraPending] = useState<any>(null)
+  const [jaraView, setJaraView] = useState(false)
+  const [showJaraConfig, setShowJaraConfig] = useState(false)
   const heartbeatRef = useRef<any>(null)
   const selectedRef = useRef<string | null>(null)
   const activeCallRef = useRef<ActiveCall | null>(null)
@@ -73,6 +80,17 @@ export default function Home() {
   }
   function handleEndCall() { setActiveCall(null) }
 
+  const fetchJara = useCallback(async () => {
+    try {
+      const [cfgR, propR] = await Promise.all([
+        fetch("/api/jara/config"),
+        fetch("/api/jara/proposals?status=pending&limit=5"),
+      ])
+      if (cfgR.ok) { const d = await cfgR.json(); setJaraConfig(d.config) }
+      if (propR.ok) { const d = await propR.json(); const pending = (d.proposals || []).find((p: any) => p.effectiveStatus === "pending" && !p.isExpired); setJaraPending(pending || null) }
+    } catch {}
+  }, [])
+
   // Bootstrap: fetch current user, conversations, friends
   const bootstrap = useCallback(async () => {
     try {
@@ -92,10 +110,11 @@ export default function Home() {
       setFriends(friendsBody.friends || [])
       setUnreadNotifications(notifBody.unreadCount || 0)
       setBootstrapped(true)
+      fetchJara()
     } catch (e) {
       setBootstrapped(false)
     }
-  }, [])
+  }, [fetchJara])
 
   useEffect(() => {
     if (status === "authenticated") {
@@ -253,26 +272,75 @@ export default function Home() {
   return (
     <div className="h-screen flex bg-background text-foreground overflow-hidden">
       {/* Sidebar - hidden on mobile when a chat is open */}
-      <div className={`${selectedId ? "hidden md:flex" : "flex"} w-full md:w-[340px] lg:w-[380px] shrink-0`}>
-        <Sidebar
-          currentUser={currentUser}
-          conversations={conversations}
-          selectedId={selectedId}
-          onSelect={(id) => {
-            setSelectedId(id)
-            if (socket?.connected) socket.emit("conversation:join", id)
-          }}
-          onOpenProfile={() => setShowProfile(true)}
-          onOpenNewChat={() => setShowNewChat(true)}
-          onConversationChanged={refreshConversations}
-          unreadNotifications={unreadNotifications}
-          onOpenNotifications={() => setShowNotifications(true)}
-        />
+      <div className={`${selectedId || jaraView ? "hidden md:flex" : "flex"} w-full md:w-[340px] lg:w-[380px] shrink-0 flex-col`}>
+        {/* Jara entry - always on top */}
+        <div className="shrink-0 px-2 pt-2">
+          <button
+            onClick={() => { setJaraView(true); setSelectedId(null); fetchJara() }}
+            className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl border-2 transition text-left ${jaraView ? "bg-violet-50 border-violet-300 dark:bg-violet-950/30 dark:border-violet-700" : "bg-gradient-to-r from-violet-50 to-emerald-50 dark:from-violet-950/20 dark:to-emerald-950/20 border-violet-200 dark:border-violet-800 hover:border-violet-300"}`}
+          >
+            <div className="w-11 h-11 rounded-full bg-gradient-to-br from-violet-600 via-indigo-600 to-emerald-500 flex items-center justify-center text-white font-bold shadow-md shrink-0">J</div>
+            <div className="flex-1 min-w-0">
+              <div className="font-semibold text-sm flex items-center gap-1.5">Jara <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-600 text-white font-bold">AI</span> {jaraPending && <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" title="Proposal pending" />}</div>
+              <div className="text-xs text-muted-foreground truncate">{jaraConfig ? `${jaraConfig.face} • ${jaraConfig.background} • v${jaraConfig.version}` : "AI Assistant • Online"}</div>
+            </div>
+            <Bot className="w-4 h-4 text-violet-600 shrink-0" />
+          </button>
+        </div>
+        <div className="flex-1 min-h-0">
+          <Sidebar
+            currentUser={currentUser}
+            conversations={conversations}
+            selectedId={selectedId}
+            onSelect={(id) => {
+              setJaraView(false)
+              setSelectedId(id)
+              if (socket?.connected) socket.emit("conversation:join", id)
+            }}
+            onOpenProfile={() => setShowProfile(true)}
+            onOpenNewChat={() => setShowNewChat(true)}
+            onConversationChanged={refreshConversations}
+            unreadNotifications={unreadNotifications}
+            onOpenNotifications={() => setShowNotifications(true)}
+          />
+        </div>
+        {(currentUser?.role === "admin" || currentUser?.role === "superadmin") && (
+          <div className="shrink-0 p-2 border-t">
+            <Button variant="outline" className="w-full justify-center gap-2 text-xs" onClick={() => setShowJaraConfig(true)}>
+              <Settings className="w-4 h-4" /> Jara Configuration Center {jaraPending && <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse" />}
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Main chat */}
-      <div className={`${selectedId ? "flex" : "hidden md:flex"} flex-1 min-w-0`}>
-        {selectedConversation ? (
+      <div className={`${selectedId || jaraView ? "flex" : "hidden md:flex"} flex-1 min-w-0`}>
+        {jaraView ? (
+          <JaraChat
+            config={jaraConfig}
+            currentUser={currentUser}
+            pendingProposal={jaraPending}
+            onProposalApprove={async (p) => {
+              try {
+                const r = await fetch(`/api/jara/proposals/${p.id}/approve`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ configHash: p.configHash, version: p.version }) })
+                const d = await r.json()
+                if (!r.ok) throw new Error(d.error)
+                toast.success(`Applied v${p.version}`)
+                fetchJara()
+              } catch (e: any) { toast.error(e.message) }
+            }}
+            onProposalReject={async (p) => {
+              try {
+                const r = await fetch(`/api/jara/proposals/${p.id}/reject`, { method: "POST" })
+                const d = await r.json()
+                if (!r.ok) throw new Error(d.error)
+                toast.success("Rejected")
+                fetchJara()
+              } catch (e: any) { toast.error(e.message) }
+            }}
+            onOpenConfig={() => setShowJaraConfig(true)}
+          />
+        ) : selectedConversation ? (
           <ChatView
             key={selectedConversation.id}
             conversation={selectedConversation}
@@ -321,6 +389,12 @@ export default function Home() {
       {activeCall && currentUser && (
         <CallView call={activeCall} socket={socket} remoteOffer={incomingCall?.offer} currentUser={currentUser} onEnd={handleEndCall} />
       )}
+      <Dialog open={showJaraConfig} onOpenChange={setShowJaraConfig}>
+        <DialogContent className="max-w-5xl w-[95vw] max-h-[90vh] p-0 overflow-hidden">
+          <DialogTitle className="sr-only">Jara Configuration Center</DialogTitle>
+          <JaraConfigCenter onClose={() => { setShowJaraConfig(false); fetchJara() }} />
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

@@ -32,5 +32,19 @@ export async function GET(req: Request) {
     },
     take: 20,
   })
+  // Always include Jara if query matches jara
+  if ("jara".includes(lc) || lc.includes("jara") || lc.includes("ai")) {
+    const hasJara = users.some((u: any) => u.id === "jara-ai-system-001" || u.username === "jara")
+    if (!hasJara) {
+      try {
+        let jara = await db.user.findUnique({ where: { id: "jara-ai-system-001" }, select: { id: true, username: true, name: true, avatarUrl: true, status: true, lastSeenAt: true } }).catch(() => null)
+        if (!jara) {
+          // synthetic fallback
+          jara = { id: "jara-ai-system-001", username: "jara", name: "Jara", avatarUrl: "/jara-avatar.svg", status: "AI Assistant • Online", lastSeenAt: new Date() } as any
+        }
+        users.unshift(jara)
+      } catch {}
+    }
+  }
   return NextResponse.json({ users })
 }

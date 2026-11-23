@@ -301,6 +301,68 @@ const MODELS = {
       user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
     },
   },
+  jaraConfig: {
+    table: 'JaraConfig',
+    dates: ['createdAt', 'updatedAt'],
+    bools: ['memoryEnabled', 'isLive'],
+    defaults: () => ({
+      id: cuid(),
+      version: 1,
+      face: 'friendly',
+      avatar: 'default',
+      background: 'gradient-emerald',
+      theme: 'light',
+      voiceModel: 'default',
+      voiceLanguage: 'bn',
+      speakingSpeed: 1.0,
+      pitch: 1.0,
+      personality: 'friendly',
+      responseLength: 'medium',
+      communicationStyle: 'conversational',
+      llmProvider: 'ollama',
+      llmModel: 'llama3.2',
+      sttModel: 'whisper',
+      ttsModel: 'default',
+      memoryEnabled: true,
+      isLive: false,
+      createdAt: now(),
+      updatedAt: now(),
+    }),
+  },
+  jaraProposal: {
+    table: 'JaraProposal',
+    dates: ['createdAt', 'expiresAt', 'approvedAt', 'appliedAt'],
+    defaults: () => ({
+      id: cuid(),
+      status: 'pending',
+      createdAt: now(),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+    }),
+    relations: {
+      auditLogs: { kind: 'many', model: 'jaraAuditLog', from: 'id', to: 'proposalId' },
+    },
+  },
+  jaraAuditLog: {
+    table: 'JaraAuditLog',
+    dates: ['createdAt'],
+    defaults: () => ({ id: cuid(), createdAt: now() }),
+    relations: {
+      proposal: { kind: 'one', model: 'jaraProposal', from: 'proposalId', to: 'id' },
+    },
+  },
+  jaraMemory: {
+    table: 'JaraMemory',
+    dates: ['createdAt', 'updatedAt'],
+    uniques: { userId_key: ['userId', 'key'] },
+    defaults: () => ({ id: cuid(), createdAt: now(), updatedAt: now() }),
+  },
+  jaraGroupConsent: {
+    table: 'JaraGroupConsent',
+    dates: ['createdAt', 'updatedAt', 'consentedAt'],
+    bools: ['enabled', 'listenEnabled'],
+    uniques: { groupId: ['groupId'] },
+    defaults: () => ({ id: cuid(), enabled: false, listenEnabled: false, createdAt: now(), updatedAt: now() }),
+  },
 }
 
 const INIT_SQL = `
@@ -309,7 +371,7 @@ CREATE TABLE IF NOT EXISTS "User" (
   passwordHash TEXT NOT NULL, name TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
   emailVerified INTEGER NOT NULL DEFAULT 0, twoFactorSecret TEXT, twoFactorEnabled INTEGER NOT NULL DEFAULT 0,
   twoFactorBackup TEXT, role TEXT NOT NULL DEFAULT 'user', fileQuotaBytes INTEGER NOT NULL DEFAULT 104857600,
-  fileUsedBytes INTEGER NOT NULL DEFAULT 0, otpCode TEXT, otpExpiry TEXT
+  fileUsedBytes INTEGER NOT NULL DEFAULT 0, otpCode TEXT, otpExpiry TEXT, bio TEXT, status TEXT DEFAULT '', avatarUrl TEXT, lastSeenAt TEXT
 );
 CREATE TABLE IF NOT EXISTS "Profile" (
   id TEXT PRIMARY KEY, userId TEXT UNIQUE NOT NULL, photoUrl TEXT, bio TEXT, phone TEXT, location TEXT,
@@ -442,11 +504,33 @@ CREATE TABLE IF NOT EXISTS "PushSubscription" (
   auth TEXT NOT NULL, userAgent TEXT, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
   FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS "JaraConfig" (
+  id TEXT PRIMARY KEY, version INTEGER UNIQUE NOT NULL, face TEXT NOT NULL DEFAULT 'friendly', avatar TEXT NOT NULL DEFAULT 'default', avatarUrl TEXT, background TEXT NOT NULL DEFAULT 'gradient-emerald', backgroundUrl TEXT, theme TEXT NOT NULL DEFAULT 'light', colors TEXT, animation TEXT, clothing TEXT, voiceModel TEXT NOT NULL DEFAULT 'default', voiceLanguage TEXT NOT NULL DEFAULT 'bn', voiceAccent TEXT, speakingSpeed REAL NOT NULL DEFAULT 1.0, pitch REAL NOT NULL DEFAULT 1.0, personality TEXT NOT NULL DEFAULT 'friendly', responseLength TEXT NOT NULL DEFAULT 'medium', communicationStyle TEXT NOT NULL DEFAULT 'conversational', llmProvider TEXT NOT NULL DEFAULT 'ollama', llmModel TEXT NOT NULL DEFAULT 'llama3.2', sttModel TEXT NOT NULL DEFAULT 'whisper', ttsModel TEXT NOT NULL DEFAULT 'default', memoryEnabled INTEGER NOT NULL DEFAULT 1, isLive INTEGER NOT NULL DEFAULT 0, createdBy TEXT, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS "JaraProposal" (
+  id TEXT PRIMARY KEY, version INTEGER NOT NULL, previousVersion INTEGER, configJson TEXT NOT NULL, configHash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', createdBy TEXT NOT NULL, createdAt TEXT NOT NULL, expiresAt TEXT NOT NULL, approvedBy TEXT, approvedAt TEXT, appliedAt TEXT, changeSummary TEXT,
+  FOREIGN KEY (createdBy) REFERENCES "User"(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS "JaraAuditLog" (
+  id TEXT PRIMARY KEY, proposalId TEXT, version INTEGER, action TEXT NOT NULL, actorId TEXT, actorRole TEXT, detail TEXT, ip TEXT, userAgent TEXT, createdAt TEXT NOT NULL,
+  FOREIGN KEY (proposalId) REFERENCES "JaraProposal"(id) ON DELETE SET NULL
+);
+CREATE TABLE IF NOT EXISTS "JaraMemory" (
+  id TEXT PRIMARY KEY, userId TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
+  UNIQUE (userId, key),
+  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS "JaraGroupConsent" (
+  id TEXT PRIMARY KEY, groupId TEXT UNIQUE NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, listenEnabled INTEGER NOT NULL DEFAULT 0, consentedBy TEXT, consentedAt TEXT, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
+  FOREIGN KEY (groupId) REFERENCES "Group"(id) ON DELETE CASCADE
+);
 CREATE INDEX IF NOT EXISTS Call_callerId_idx ON "Call"(callerId);
 CREATE INDEX IF NOT EXISTS Call_receiverId_idx ON "Call"(receiverId);
 CREATE INDEX IF NOT EXISTS Story_userId_idx ON "Story"(userId);
 CREATE INDEX IF NOT EXISTS AuditLog_userId_idx ON "AuditLog"(userId);
 CREATE INDEX IF NOT EXISTS AuditLog_action_idx ON "AuditLog"(action);
+CREATE INDEX IF NOT EXISTS JaraProposal_status_idx ON "JaraProposal"(status);
+CREATE INDEX IF NOT EXISTS JaraAuditLog_action_idx ON "JaraAuditLog"(action);
 `
 
 /**
@@ -477,6 +561,48 @@ function resolveDbPath() {
 }
 
 let sqlite
+let jaraSeeded = false
+function ensureJaraSeed(db) {
+  if (jaraSeeded) return
+  jaraSeeded = true
+  try {
+    // Ensure User extra columns exist (for existing DBs created before this patch)
+    try { db.exec('ALTER TABLE "User" ADD COLUMN bio TEXT'); } catch {}
+    try { db.exec('ALTER TABLE "User" ADD COLUMN status TEXT DEFAULT \'\''); } catch {}
+    try { db.exec('ALTER TABLE "User" ADD COLUMN avatarUrl TEXT'); } catch {}
+    try { db.exec('ALTER TABLE "User" ADD COLUMN lastSeenAt TEXT'); } catch {}
+    // Add missing Message columns needed by Jara (metadata) and general app
+    try { db.exec('ALTER TABLE "Message" ADD COLUMN metadata TEXT'); } catch {}
+    try { db.exec('ALTER TABLE "Message" ADD COLUMN conversationId TEXT'); } catch {}
+    const jaraId = 'jara-ai-system-001'
+    const exists = db.prepare('SELECT id FROM "User" WHERE id = ?').get(jaraId)
+    if (!exists) {
+      const nowStr = new Date().toISOString()
+      db.prepare(`INSERT INTO "User" (id, email, username, passwordHash, name, createdAt, updatedAt, emailVerified, role, bio, status, avatarUrl, lastSeenAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        jaraId, 'jara@friendconnect.local', 'jara', '__JARA_SYSTEM__', 'Jara', nowStr, nowStr, 1, 'jara', 'I am Jara — your friendly AI assistant. 🤖 I can chat in English, Bangla, and Banglish!', 'AI Assistant • Online', '/jara-avatar.svg', nowStr
+      )
+      db.prepare(`INSERT INTO "Profile" (id, userId, bio, profileVisibility, messagePermission, callPermission, readReceipts, verified, lastSeen, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+        'profile-jara-001', jaraId, 'AI Assistant — I am Jara, here to help you!', 'PUBLIC', 'EVERYONE', 'EVERYONE', 1, 'verified', nowStr, nowStr
+      )
+    }
+    const liveExists = db.prepare('SELECT id FROM "JaraConfig" WHERE isLive = 1').get()
+    if (!liveExists) {
+      const hasAny = db.prepare('SELECT id FROM "JaraConfig" LIMIT 1').get()
+      if (!hasAny) {
+        const nowStr = new Date().toISOString()
+        const cfgId = 'cfg-' + Date.now().toString(36) + Math.random().toString(36).slice(2,8)
+        db.prepare(`INSERT INTO "JaraConfig" (id, version, face, avatar, background, theme, colors, voiceModel, voiceLanguage, speakingSpeed, pitch, personality, responseLength, communicationStyle, llmProvider, llmModel, sttModel, ttsModel, memoryEnabled, isLive, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+          cfgId, 1, 'friendly', 'default', 'gradient-emerald', 'light', JSON.stringify({ primary: '#10b981', accent: '#0ea5e9' }), 'default', 'bn', 1.0, 1.0, 'friendly', 'medium', 'conversational', 'ollama', 'llama3.2', 'whisper', 'default', 1, 1, nowStr, nowStr
+        )
+      } else {
+        db.prepare('UPDATE "JaraConfig" SET isLive = 1 WHERE version = (SELECT MIN(version) FROM "JaraConfig")').run()
+      }
+    }
+  } catch (e) {
+    console.warn('[jara] seed failed', e.message)
+  }
+}
+
 function getSqlite() {
   if (sqlite) return sqlite
   const Database = require('better-sqlite3')
@@ -486,6 +612,8 @@ function getSqlite() {
   sqlite.pragma('journal_mode = WAL')
   sqlite.exec(INIT_SQL)
   ensureColumns(sqlite)
+  // seed Jara synchronously where possible (async seed will run on first delegate call too)
+  try { ensureJaraSeed(sqlite) } catch (e) { console.warn('[jara] seed warn', e.message) }
   return sqlite
 }
 
@@ -895,6 +1023,11 @@ const sqlitePrisma = {
   messageReminder: delegate('messageReminder'),
   auditLog: delegate('auditLog'),
   pushSubscription: delegate('pushSubscription'),
+  jaraConfig: delegate('jaraConfig'),
+  jaraProposal: delegate('jaraProposal'),
+  jaraAuditLog: delegate('jaraAuditLog'),
+  jaraMemory: delegate('jaraMemory'),
+  jaraGroupConsent: delegate('jaraGroupConsent'),
   $queryRaw: taggedRaw,
   $disconnect: async () => {},
 }
