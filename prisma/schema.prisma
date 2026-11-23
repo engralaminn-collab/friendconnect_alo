@@ -655,6 +655,10 @@ model FriendRequest {
 model JaraConfig {
   id                String   @id @default(cuid())
   version           Int      @unique @default(1)
+  // Identity
+  displayName       String   @default("Jara AI")
+  aiDisclosure      String   @default("I am Jara AI, a digital human assistant. I am not a real human.")
+  isEnabled         Boolean  @default(true) // emergency disable / kill switch
   // Visual identity
   face              String   @default("friendly") // realistic | illustrated | anime | friendly | professional
   avatar            String   @default("default")  // 2d | 3d | default
@@ -665,6 +669,7 @@ model JaraConfig {
   colors            String?  // JSON string
   animation         String?  // JSON string
   clothing          String?  // JSON string
+  defaultAppearanceProfileId String?
   // Voice
   voiceModel        String   @default("default")
   voiceLanguage     String   @default("bn")
@@ -681,6 +686,14 @@ model JaraConfig {
   sttModel          String   @default("whisper")
   ttsModel          String   @default("default")
   memoryEnabled     Boolean  @default(true)
+  // Communication permissions
+  smsEnabled        Boolean  @default(false)
+  callsEnabled      Boolean  @default(true)
+  meetingsEnabled   Boolean  @default(false)
+  allowGroupListening Boolean @default(false)
+  humanHandoffEnabled Boolean @default(true)
+  recordingConsentRequired Boolean @default(true)
+  approvedKnowledgeMode String @default("open") // open | approved_only
   // Metadata
   isLive            Boolean  @default(false)
   createdBy         String?
@@ -709,21 +722,28 @@ model JaraProposal {
 }
 
 model JaraAuditLog {
-  id         String   @id @default(cuid())
-  proposalId String?
-  version    Int?
-  action     String   // propose | approve | reject | expire | apply | rollback | attempt_blocked
-  actorId    String?
-  actorRole  String?
-  detail     String?
-  ip         String?
-  userAgent  String?
-  createdAt  DateTime @default(now())
+  id                String   @id @default(cuid())
+  proposalId        String?
+  version           Int?
+  action            String   // propose | approve | reject | expire | apply | rollback | attempt_blocked | config_change | emergency_disable | emergency_enable
+  actorId           String?
+  actorRole         String?
+  detail            String?
+  previousValue     String?  // JSON/string snapshot
+  newValue          String?  // JSON/string snapshot
+  authorizationResult String? // allowed | denied | pending
+  changeReason      String?
+  requestId         String?
+  sessionId         String?
+  ip                String?
+  userAgent         String?
+  createdAt         DateTime @default(now())
 
   proposal JaraProposal? @relation(fields: [proposalId], references: [id], onDelete: SetNull)
 
   @@index([action])
   @@index([createdAt])
+  @@index([actorId])
 }
 
 model JaraMemory {
@@ -747,4 +767,289 @@ model JaraGroupConsent {
   consentedAt   DateTime?
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+}
+
+// ============================================================
+// JARA — Command Center Extensions (additive, backward-compatible)
+// ============================================================
+
+model JaraAppearanceProfile {
+  id              String   @id @default(cuid())
+  name            String
+  description     String?
+  profileType     String   @default("custom") // office | outdoor | studio | meeting_room | custom
+  isDefault       Boolean  @default(false)
+  isTemporary     Boolean  @default(false)
+  expiresAt       DateTime?
+  // Visual
+  face            String   @default("friendly")
+  avatar          String   @default("default")
+  avatarUrl       String?
+  background      String   @default("gradient-emerald")
+  backgroundUrl   String?
+  theme           String   @default("light")
+  colors          String?  // JSON
+  clothing        String?  // JSON
+  animation       String?  // JSON
+  // Voice/persona overrides (optional)
+  voiceModel      String?
+  voiceLanguage   String?  // bn | en | mixed
+  speakingSpeed   Float?
+  pitch           Float?
+  personality     String?
+  communicationStyle String?
+  // Governance
+  createdBy       String?
+  updatedBy       String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  callAssignments JaraCallPresentation[]
+
+  @@index([isDefault])
+  @@index([isActive])
+}
+
+model JaraCallPresentation {
+  id              String   @id @default(cuid())
+  sessionType     String   // audio_call | video_call | meeting | sms | chat
+  sessionId       String?  // call/meeting/session id
+  roomId          String?
+  profileId       String?
+  profileSnapshot String?  // JSON snapshot of profile at assignment time
+  isTemporary     Boolean  @default(true)
+  expiresAt       DateTime?
+  status          String   @default("active") // active | expired | cancelled | completed
+  createdBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  profile JaraAppearanceProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+
+  @@index([sessionType, sessionId])
+  @@index([status])
+}
+
+model JaraSmsConfig {
+  id                    String   @id @default(cuid())
+  enabled               Boolean  @default(false)
+  provider              String   @default("none") // none | twilio | vonage | local_gateway
+  senderId              String?
+  webhookSecret         String?
+  inboundEnabled        Boolean  @default(false)
+  outboundEnabled       Boolean  @default(false)
+  requireHumanApproval  Boolean  @default(true)
+  allowedCountries      String?  // JSON array
+  rateLimitPerHour      Int      @default(20)
+  optOutKeywords        String?  // JSON array
+  createdBy             String?
+  updatedBy             String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
+}
+
+model JaraSmsContact {
+  id              String   @id @default(cuid())
+  phoneNumber     String
+  name            String?
+  email           String?
+  consentStatus   String   @default("unknown") // unknown | granted | revoked | opted_out
+  consentAt       DateTime?
+  consentSource   String?
+  optedOutAt      DateTime?
+  notes           String?
+  createdBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  messages JaraSmsMessage[]
+
+  @@unique([phoneNumber])
+  @@index([consentStatus])
+}
+
+model JaraSmsMessage {
+  id              String   @id @default(cuid())
+  contactId       String?
+  direction       String   @default("outbound") // inbound | outbound
+  fromNumber      String?
+  toNumber        String?
+  body            String
+  language        String?  // bn | en | mixed
+  status          String   @default("draft") // draft | pending_approval | approved | queued | sent | delivered | failed | received | blocked
+  provider        String?
+  providerMessageId String?
+  errorMessage    String?
+  requiresApproval Boolean @default(true)
+  approvedBy      String?
+  approvedAt      DateTime?
+  consentChecked  Boolean  @default(false)
+  metadata        String?  // JSON
+  createdBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  contact JaraSmsContact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
+
+  @@index([direction, status])
+  @@index([createdAt])
+}
+
+model JaraDonorContribution {
+  id              String   @id @default(cuid())
+  fullName        String
+  email           String
+  country         String?
+  contributionType String  @default("support") // monetary | non_monetary | volunteer | other
+  amount          String?  // store as string; no auto-charge
+  currency        String?
+  message         String?
+  consentToContact Boolean @default(false)
+  privacyAccepted Boolean  @default(false)
+  status          String   @default("pending_review") // pending_review | verified | acknowledged | rejected
+  verifiedBy      String?
+  verifiedAt      DateTime?
+  acknowledgementSentAt DateTime?
+  isPublic        Boolean  @default(false) // never expose by default
+  adminNotes      String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status])
+  @@index([createdAt])
+}
+
+model JaraConsentRecord {
+  id              String   @id @default(cuid())
+  subjectType     String   // user | contact | meeting_participant | donor
+  subjectId       String?
+  subjectLabel    String?
+  consentType     String   // sms | call_recording | video_recording | data_processing | contact
+  status          String   @default("granted") // granted | revoked | pending
+  source          String?  // ui | sms | api | admin
+  details         String?
+  grantedAt       DateTime?
+  revokedAt       DateTime?
+  recordedBy      String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([subjectType, subjectId])
+  @@index([consentType, status])
+}
+
+model JaraMeetingIntegration {
+  id              String   @id @default(cuid())
+  platform        String   // zoom | google_meet | microsoft_teams | livekit | custom
+  displayName     String
+  enabled         Boolean  @default(false)
+  config          String?  // JSON, secrets must be redacted/encrypted outside DB in production
+  authStatus      String   @default("not_configured") // not_configured | configured | error
+  lastCheckedAt   DateTime?
+  createdBy       String?
+  updatedBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([platform, enabled])
+}
+
+model JaraKnowledgeSource {
+  id              String   @id @default(cuid())
+  title           String
+  sourceType      String   @default("text") // text | url | file | faq | policy
+  content         String?
+  sourceUrl       String?
+  language        String?  // bn | en | mixed
+  tags            String?  // JSON array
+  isApproved      Boolean  @default(false)
+  approvedBy      String?
+  approvedAt      DateTime?
+  status          String   @default("draft") // draft | approved | archived
+  createdBy       String?
+  updatedBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status, isApproved])
+}
+
+model JaraAsset {
+  id              String   @id @default(cuid())
+  kind            String   @default("background") // background | clothing | avatar | branding | environment
+  name            String
+  description     String?
+  fileUrl         String?
+  storageKey      String?
+  mimeType        String?
+  fileSize        Int?
+  width           Int?
+  height          Int?
+  sha256          String?
+  isApproved      Boolean  @default(false)
+  approvedBy      String?
+  approvedAt      DateTime?
+  status          String   @default("pending_review") // pending_review | approved | rejected | archived
+  source          String   @default("upload") // upload | generated | system
+  ownerId         String?
+  metadata        String?  // JSON
+  createdBy         String?
+  updatedBy         String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([kind, status])
+  @@index([isApproved])
+}
+
+model JaraMeetingProfile {
+  id              String   @id @default(cuid())
+  title           String
+  purpose         String?
+  meetingType     String   @default("custom_video_call") // internal | business_presentation | student_consultation | interview | online_class | training | client_meeting | custom_video_call
+  scheduledAt     DateTime?
+  durationMinutes Int?
+  platform        String   @default("internal") // internal | zoom | google_meet | microsoft_teams | custom
+  participants    String?  // JSON array
+  // Presentation
+  appearanceProfileId String?
+  clothing        String?  // JSON or preset id
+  background      String?
+  backgroundUrl   String?
+  avatarStyle     String?
+  presentationStyle String?
+  voiceLanguage   String?  // bn | en | mixed
+  voiceProfile    String?
+  speakingStyle   String?
+  // Content/instructions
+  script          String?
+  talkingPoints   String?  // JSON array or text
+  instructions    String?
+  // Media references (trusted local paths/asset IDs)
+  referenceImageAssetId String?
+  referenceVideoAssetId String?
+  voiceSampleAssetId    String?
+  referenceImageUrl     String?
+  referenceVideoUrl     String?
+  voiceSampleUrl        String?
+  // Status/governance
+  status          String   @default("draft") // draft | preview | approved | scheduled | active | completed | cancelled
+  scope           String   @default("meeting_specific") // meeting_specific | temporary_next_call | persistent
+  approvedBy      String?
+  approvedAt      DateTime?
+  cancelledAt     DateTime?
+  startedAt       DateTime?
+  endedAt         DateTime?
+  configVersion   Int      @default(1)
+  configSnapshot  String?  // JSON snapshot at approval/start
+  rendererStatus  String   @default("unconfigured") // unconfigured | browser_fallback | gpu_worker | livekit_avatar
+  createdBy       String?
+  updatedBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@index([status])
+  @@index([scheduledAt])
+  @@index([createdBy])
 }

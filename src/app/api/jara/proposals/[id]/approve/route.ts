@@ -138,6 +138,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     // Create new live config from proposed (strip id fields that shouldn't persist as-is)
     const newConfigData: any = {
       version: proposal.version,
+      displayName: proposedConfig.displayName || 'Jara AI',
+      aiDisclosure: proposedConfig.aiDisclosure || 'I am Jara AI, a digital human assistant. I am not a real human.',
+      isEnabled: proposedConfig.isEnabled ?? true,
       face: proposedConfig.face || 'friendly',
       avatar: proposedConfig.avatar || 'default',
       avatarUrl: proposedConfig.avatarUrl || null,
@@ -147,6 +150,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       colors: proposedConfig.colors ? (typeof proposedConfig.colors === 'string' ? proposedConfig.colors : JSON.stringify(proposedConfig.colors)) : null,
       animation: proposedConfig.animation ? (typeof proposedConfig.animation === 'string' ? proposedConfig.animation : JSON.stringify(proposedConfig.animation)) : null,
       clothing: proposedConfig.clothing ? (typeof proposedConfig.clothing === 'string' ? proposedConfig.clothing : JSON.stringify(proposedConfig.clothing)) : null,
+      defaultAppearanceProfileId: proposedConfig.defaultAppearanceProfileId || null,
       voiceModel: proposedConfig.voiceModel || 'default',
       voiceLanguage: proposedConfig.voiceLanguage || 'bn',
       voiceAccent: proposedConfig.voiceAccent || null,
@@ -160,6 +164,13 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       sttModel: proposedConfig.sttModel || 'whisper',
       ttsModel: proposedConfig.ttsModel || 'default',
       memoryEnabled: proposedConfig.memoryEnabled ?? true,
+      smsEnabled: proposedConfig.smsEnabled ?? false,
+      callsEnabled: proposedConfig.callsEnabled ?? true,
+      meetingsEnabled: proposedConfig.meetingsEnabled ?? false,
+      allowGroupListening: proposedConfig.allowGroupListening ?? false,
+      humanHandoffEnabled: proposedConfig.humanHandoffEnabled ?? true,
+      recordingConsentRequired: proposedConfig.recordingConsentRequired ?? true,
+      approvedKnowledgeMode: proposedConfig.approvedKnowledgeMode || 'open',
       isLive: true,
       createdBy: me.id,
     }

@@ -143,6 +143,13 @@ export default function Home() {
     } catch {}
   }, [])
 
+  useEffect(() => {
+    const h = () => { fetchJara(); refreshConversations() }
+    window.addEventListener('jara:config-updated', h)
+    window.addEventListener('jara:proposal-created', h)
+    return () => { window.removeEventListener('jara:config-updated', h); window.removeEventListener('jara:proposal-created', h) }
+  }, [fetchJara, refreshConversations])
+
   // Connect socket after bootstrap
   useEffect(() => {
     if (!bootstrapped || !currentUser) return

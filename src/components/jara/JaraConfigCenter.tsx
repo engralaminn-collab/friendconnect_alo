@@ -99,6 +99,19 @@ export function JaraConfigCenter({ onClose }: { onClose?: () => void }) {
     }
   }
 
+  async function toggleEmergency() {
+    const next = live?.isEnabled === false
+    const reason = prompt(next ? "Reason for re-enabling Jara AI?" : "Reason for emergency disabling Jara AI?", next ? "Recovered" : "Emergency disable")
+    if (reason == null) return
+    try {
+      const r = await fetch("/api/jara/emergency", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ enabled: next, reason }) })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || "Failed")
+      toast.success(next ? "Jara AI enabled" : "Jara AI emergency disabled")
+      await refresh()
+    } catch (e: any) { toast.error(e.message) }
+  }
+
   if (loading) {
     return <div className="flex items-center justify-center h-64"><Loader2 className="w-6 h-6 animate-spin text-emerald-500" /></div>
   }
@@ -172,6 +185,23 @@ export function JaraConfigCenter({ onClose }: { onClose?: () => void }) {
                     <p className="text-[11px] text-muted-foreground">
                       Bangla voice uses Web Speech API (free, self-hosted). For higher quality, configure Ollama + Whisper.cpp + Piper TTS on your server.
                     </p>
+                  </CardContent>
+                </Card>
+
+                <Card className={live?.isEnabled === false ? "border-red-300 bg-red-50 dark:bg-red-950/20" : "border-emerald-200"}>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm flex items-center gap-2"><Shield className="w-4 h-4" /> Emergency Control</CardTitle>
+                    <CardDescription className="text-xs">Super Admin kill switch for Jara AI</CardDescription>
+                  </CardHeader>
+                  <CardContent className="space-y-2 text-xs">
+                    <div className="flex items-center justify-between">
+                      <span>Status</span>
+                      <Badge className={live?.isEnabled === false ? "bg-red-600 text-white" : "bg-emerald-600 text-white"}>{live?.isEnabled === false ? "DISABLED" : "ENABLED"}</Badge>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground">Emergency disable blocks Jara chat, voice, group, and automated actions server-side until re-enabled.</p>
+                    <Button size="sm" variant={live?.isEnabled === false ? "default" : "destructive"} className="w-full" onClick={toggleEmergency}>
+                      {live?.isEnabled === false ? "Re-enable Jara AI" : "Emergency Disable Jara AI"}
+                    </Button>
                   </CardContent>
                 </Card>
 
