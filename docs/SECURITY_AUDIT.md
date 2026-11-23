@@ -93,9 +93,9 @@ Jara never silently listens: `listenEnabled` flag is explicit, badge shows "Jara
 
 | Risk | Severity | Remediation |
 |------|----------|-------------|
-| `friendRequest`/`Block` model mismatch causes 500 on `GET /api/friends` | Medium | Add FriendRequest/Block tables to INIT_SQL or migrate route to use `friendship` model (current canonical) |
-| Notification ownerId vs userId column mismatch | Low | Map ownerId→userId in API or rename column |
-| Post tables missing | Low | Add Post family INIT_SQL |
+| `friendRequest`/`Block` model mismatch | **FIXED 2026-11-23** | Added tables to INIT_SQL — now PASS 200 |
+| Notification ownerId vs userId | **FIXED 2026-11-23** | Changed ownerId→userId in API — now PASS 200 |
+| Post tables missing | **FIXED 2026-11-23** | Added Post family INIT_SQL — now PASS 201/200 |
 | LLM API keys in .env.example empty | Info | Documented: set ZAI_API_KEY/OPENAI_API_KEY/OLLAMA_URL for LLM; fallbackReply honest when unconfigured |
 | TURN not configured | Info | `isTurnConfigured()` returns false honestly; STUN works for same-network, Coturn for cross-network via env |
 

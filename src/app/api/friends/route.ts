@@ -20,14 +20,14 @@ export async function GET() {
   ])
 
   const friendships = await db.friendship.findMany({
-    where: { OR: [{ userAId: me.id }, { userBId: me.id }] },
+    where: { OR: [{ requesterId: me.id, status: 'ACCEPTED' }, { receiverId: me.id, status: 'ACCEPTED' }] },
     include: {
-      userA: { select: { id: true, username: true, name: true, avatarUrl: true, status: true, lastSeenAt: true } },
-      userB: { select: { id: true, username: true, name: true, avatarUrl: true, status: true, lastSeenAt: true } },
+      requester: { select: { id: true, username: true, name: true, avatarUrl: true, status: true, lastSeenAt: true } },
+      receiver: { select: { id: true, username: true, name: true, avatarUrl: true, status: true, lastSeenAt: true } },
     },
     orderBy: { createdAt: "desc" },
   })
-  const friends = friendships.map((f) => (f.userAId === me.id ? f.userB : f.userA))
+  const friends = friendships.map((f: any) => (f.requesterId === me.id ? f.receiver : f.requester))
 
   return NextResponse.json({
     sent: sent.map((r) => ({ id: r.id, to: r.to, createdAt: r.createdAt })),
@@ -63,7 +63,7 @@ export async function POST(req: Request) {
   if (existing) return NextResponse.json({ error: "Request already pending" }, { status: 409 })
 
   const alreadyFriend = await db.friendship.findFirst({
-    where: { OR: [{ userAId: me.id, userBId: toId }, { userAId: toId, userBId: me.id }] },
+    where: { OR: [{ requesterId: me.id, receiverId: toId }, { requesterId: toId, receiverId: me.id }] },
   })
   if (alreadyFriend) return NextResponse.json({ error: "Already friends" }, { status: 409 })
 
@@ -73,11 +73,10 @@ export async function POST(req: Request) {
 
   await db.notification.create({
     data: {
-      ownerId: toId,
+      userId: toId,
       type: "friend_request",
       title: "New friend request",
       body: `${me.username} sent you a friend request`,
-      link: "/?view=requests",
     },
   })
 

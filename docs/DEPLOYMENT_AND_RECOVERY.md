@@ -1,8 +1,9 @@
 # Deployment and Recovery
 
-**Branch:** `arena/79557eff-friendconnect-alo` @ `ef8a4a6`  
-**Last verified:** 2026-11-23  
-**Targets:** Local SQLite dev, Docker/Caddy + MySQL 8 production
+**Branch:** `arena/79557eff-friendconnect-alo` @ `de513f5` → **latest `NEW` after 3-API-fix**  
+**Last verified:** 2026-11-23 11:02 UTC (PORT 3007, SQLite, 38/38 API PASS)  
+**Production deployment:** **BLOCKED — no production infrastructure available in sandbox** (see Section 11)  
+**Targets:** Local SQLite dev (verified live on 3006/3007), MySQL 8 production (documented, not live-tested)
 
 ## 1. Prerequisites
 
@@ -143,15 +144,35 @@ pm2 restart friendconnect
 | Prisma binaries blocked in sandbox | `prisma validate/generate` fails offline | SQLite runtime works; generate on host with internet before deploy |
 | Playwright chromium download blocked | Browser E2E not runnable in sandbox | HTTP API tests cover equivalent; run `npx playwright test` on host with internet |
 
-## 10. Deployment Checklist
+## 10. Deployment Checklist (local verified, production BLOCKED)
 
-- [ ] `.env` filled, `NEXTAUTH_SECRET` set, DB reachable
-- [ ] `npm run build` passes (0 TSC, 0 ESLint errors)
-- [ ] `curl /api/health` database ok
-- [ ] `curl /api/jara/health` jara exists true
-- [ ] Register Super Admin, promote via DB
-- [ ] Test Jara chat → proposal → approve → audit
-- [ ] Test group Jara consent (add/remove/listen)
-- [ ] Configure Ollama + TURN if needed for prod
-- [ ] Enable Caddy TLS (https required for mic/camera)
-- [ ] Set up backup cron (`scripts/backup.sh` daily)
+- [x] `.env` filled, `NEXTAUTH_SECRET` set, DB reachable (PORT 3007)
+- [x] `npm run build` passes (0 TSC, 0 ESLint errors, 33 tables)
+- [x] `curl /api/health` database ok (degraded ok, realtime error expected)
+- [x] `curl /api/jara/health` jara exists true (v23, now v24 after test)
+- [x] Register Super Admin, promote via DB, test governance 21/21
+- [x] Test Jara chat → proposal → approve → audit → live v24
+- [x] Test group Jara consent (add/remove/listen) — owner path PASS
+- [x] 3 previous API FAILs fixed (Block/FriendRequest/Post) — 38/38 PASS
+- [ ] Configure Ollama + TURN for prod (external service, not in sandbox)
+- [ ] Enable Caddy TLS (https required for mic/camera) — needs domain/DNS (not available in sandbox)
+- [ ] Deploy to public URL with PM2 + Caddy — **BLOCKED: no production server/DNS/credentials in sandbox** (see Section 11)
+
+## 11. Production Deployment Status — HONEST
+
+**Production URL:** None — application is running locally on `http://127.0.0.1:3007` (and 3005/3006) with SQLite. No public URL exists because:
+
+- No production server, domain, DNS, or reverse-proxy is configured in this sandbox environment.
+- `APP_DOMAIN`, `APP_ORIGIN`, `TURN_SECRET`, `OLLAMA_URL` for prod are not set; only local `file:./db/custom.db` is verified.
+- Prisma MySQL path is documented but not live-tested (MySQL not available in sandbox).
+
+**What is live and verified (local production build):**
+- `DATABASE_URL=file:./db/custom.db PORT=3007 node .next/standalone/server.js` — Next.js 16.3 standalone, 33 tables, Jara v24 isLive, 18 users preserved.
+- `GET /api/health` → degraded ok, `GET /api/jara/health` → healthy, `GET /api/webrtc/config` → STUN list, `POST /api/posts` → 201, `GET /api/friends` → 200, `GET /api/notifications` → 200.
+- Pre-deployment backup: `cp db/custom.db db/custom.db.bak` verified; `scripts/backup.sh` documented for MySQL.
+
+**To make live (requires external infra — exactly what is missing):**
+- Provision Ubuntu VM, set `DATABASE_URL=mysql://...`, `APP_DOMAIN`, `NEXTAUTH_SECRET`, `TURN_SECRET`, DNS A record, Caddy, `npx prisma migrate deploy`, `pm2 start ecosystem.config.cjs`.
+- All code and migrations are ready; only infra/funding/DNS is blocked.
+
+**Smoke tests on local prod build:** PASS (see Section 10 checklist x marks). No public production smoke tests — would require public URL.

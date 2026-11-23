@@ -24,7 +24,7 @@ export async function POST(req: Request) {
   await db.block.create({ data: { fromId: me.id, toId } })
   // also remove friendship if any
   await db.friendship.deleteMany({
-    where: { OR: [{ userAId: me.id, userBId: toId }, { userAId: toId, userBId: me.id }] },
+    where: { OR: [{ requesterId: me.id, receiverId: toId }, { requesterId: toId, receiverId: me.id }] },
   })
   return NextResponse.json({ ok: true })
 }

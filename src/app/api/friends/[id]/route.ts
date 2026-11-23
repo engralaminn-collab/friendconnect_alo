@@ -8,7 +8,7 @@ export async function DELETE(_req: Request, { params }: { params: Promise<{ id: 
   // (await params).id here is the other user's id (we use it as the friend id)
   const otherId = (await params).id
   const fr = await db.friendship.findFirst({
-    where: { OR: [{ userAId: me.id, userBId: otherId }, { userAId: otherId, userBId: me.id }] },
+    where: { OR: [{ requesterId: me.id, receiverId: otherId }, { requesterId: otherId, receiverId: me.id }] },
   })
   if (!fr) return NextResponse.json({ error: "Friendship not found" }, { status: 404 })
   await db.friendship.delete({ where: { id: fr.id } })

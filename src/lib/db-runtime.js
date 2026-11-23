@@ -101,6 +101,55 @@ const MODELS = {
       receiver: { kind: 'one', model: 'user', from: 'receiverId', to: 'id' },
     },
   },
+  block: {
+    table: 'Block',
+    dates: ['createdAt'],
+    uniques: { fromId_toId: ['fromId', 'toId'] },
+    defaults: () => ({ id: cuid(), createdAt: now() }),
+    relations: {
+      from: { kind: 'one', model: 'user', from: 'fromId', to: 'id' },
+      to: { kind: 'one', model: 'user', from: 'toId', to: 'id' },
+    },
+  },
+  friendRequest: {
+    table: 'FriendRequest',
+    dates: ['createdAt', 'updatedAt'],
+    uniques: { fromId_toId: ['fromId', 'toId'] },
+    defaults: () => ({ id: cuid(), status: 'pending', createdAt: now(), updatedAt: now() }),
+    relations: {
+      from: { kind: 'one', model: 'user', from: 'fromId', to: 'id' },
+      to: { kind: 'one', model: 'user', from: 'toId', to: 'id' },
+    },
+  },
+  post: {
+    table: 'Post',
+    dates: ['createdAt', 'updatedAt'],
+    defaults: () => ({ id: cuid(), visibility: 'friends', createdAt: now(), updatedAt: now() }),
+    relations: {
+      author: { kind: 'one', model: 'user', from: 'authorId', to: 'id' },
+      comments: { kind: 'many', model: 'postComment', from: 'id', to: 'postId' },
+      reactions: { kind: 'many', model: 'postReaction', from: 'id', to: 'postId' },
+    },
+  },
+  postComment: {
+    table: 'PostComment',
+    dates: ['createdAt'],
+    defaults: () => ({ id: cuid(), createdAt: now() }),
+    relations: {
+      post: { kind: 'one', model: 'post', from: 'postId', to: 'id' },
+      author: { kind: 'one', model: 'user', from: 'authorId', to: 'id' },
+    },
+  },
+  postReaction: {
+    table: 'PostReaction',
+    dates: ['createdAt'],
+    uniques: { postId_userId_emoji: ['postId', 'userId', 'emoji'] },
+    defaults: () => ({ id: cuid(), createdAt: now() }),
+    relations: {
+      post: { kind: 'one', model: 'post', from: 'postId', to: 'id' },
+      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
+    },
+  },
   message: {
     table: 'Message',
     dates: ['createdAt', 'seenAt', 'expiresAt', 'editedAt', 'scheduledFor'],
@@ -523,6 +572,35 @@ CREATE TABLE IF NOT EXISTS "JaraMemory" (
 CREATE TABLE IF NOT EXISTS "JaraGroupConsent" (
   id TEXT PRIMARY KEY, groupId TEXT UNIQUE NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, listenEnabled INTEGER NOT NULL DEFAULT 0, consentedBy TEXT, consentedAt TEXT, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
   FOREIGN KEY (groupId) REFERENCES "Group"(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS "Block" (
+  id TEXT PRIMARY KEY, fromId TEXT NOT NULL, toId TEXT NOT NULL, createdAt TEXT NOT NULL,
+  UNIQUE (fromId, toId),
+  FOREIGN KEY (fromId) REFERENCES "User"(id) ON DELETE CASCADE,
+  FOREIGN KEY (toId) REFERENCES "User"(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS "FriendRequest" (
+  id TEXT PRIMARY KEY, fromId TEXT NOT NULL, toId TEXT NOT NULL, message TEXT, status TEXT NOT NULL DEFAULT 'pending',
+  createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
+  UNIQUE (fromId, toId),
+  FOREIGN KEY (fromId) REFERENCES "User"(id) ON DELETE CASCADE,
+  FOREIGN KEY (toId) REFERENCES "User"(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS "Post" (
+  id TEXT PRIMARY KEY, authorId TEXT NOT NULL, content TEXT NOT NULL, mediaUrl TEXT, visibility TEXT NOT NULL DEFAULT 'friends',
+  createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
+  FOREIGN KEY (authorId) REFERENCES "User"(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS "PostComment" (
+  id TEXT PRIMARY KEY, postId TEXT NOT NULL, authorId TEXT NOT NULL, content TEXT NOT NULL, createdAt TEXT NOT NULL,
+  FOREIGN KEY (postId) REFERENCES "Post"(id) ON DELETE CASCADE,
+  FOREIGN KEY (authorId) REFERENCES "User"(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS "PostReaction" (
+  id TEXT PRIMARY KEY, postId TEXT NOT NULL, userId TEXT NOT NULL, emoji TEXT NOT NULL, createdAt TEXT NOT NULL,
+  UNIQUE (postId, userId, emoji),
+  FOREIGN KEY (postId) REFERENCES "Post"(id) ON DELETE CASCADE,
+  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS Call_callerId_idx ON "Call"(callerId);
 CREATE INDEX IF NOT EXISTS Call_receiverId_idx ON "Call"(receiverId);
@@ -1004,6 +1082,11 @@ const sqlitePrisma = {
   profile: delegate('profile'),
   session: delegate('session'),
   friendship: delegate('friendship'),
+  block: delegate('block'),
+  friendRequest: delegate('friendRequest'),
+  post: delegate('post'),
+  postComment: delegate('postComment'),
+  postReaction: delegate('postReaction'),
   message: delegate('message'),
   group: delegate('group'),
   groupMember: delegate('groupMember'),
