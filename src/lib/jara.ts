@@ -30,6 +30,9 @@ export type JaraVoiceLanguage = 'bn' | 'en' | 'mixed'
 export interface JaraConfigData {
   id?: string
   version: number
+  displayName?: string
+  aiDisclosure?: string
+  isEnabled?: boolean
   face: string
   avatar: string
   avatarUrl?: string | null
@@ -39,6 +42,7 @@ export interface JaraConfigData {
   colors?: string | null // JSON
   animation?: string | null
   clothing?: string | null
+  defaultAppearanceProfileId?: string | null
   voiceModel: string
   voiceLanguage: string
   voiceAccent?: string | null
@@ -52,6 +56,13 @@ export interface JaraConfigData {
   sttModel: string
   ttsModel: string
   memoryEnabled: boolean
+  smsEnabled?: boolean
+  callsEnabled?: boolean
+  meetingsEnabled?: boolean
+  allowGroupListening?: boolean
+  humanHandoffEnabled?: boolean
+  recordingConsentRequired?: boolean
+  approvedKnowledgeMode?: string
   isLive: boolean
   createdBy?: string | null
   createdAt?: string | Date
@@ -60,6 +71,9 @@ export interface JaraConfigData {
 
 export const JARA_DEFAULT_CONFIG: Omit<JaraConfigData, 'version' | 'isLive'> & { version: number; isLive: boolean } = {
   version: 1,
+  displayName: 'Jara AI',
+  aiDisclosure: 'I am Jara AI, a digital human assistant. I am not a real human.',
+  isEnabled: true,
   face: 'friendly',
   avatar: 'default',
   avatarUrl: null,
@@ -69,6 +83,7 @@ export const JARA_DEFAULT_CONFIG: Omit<JaraConfigData, 'version' | 'isLive'> & {
   colors: JSON.stringify({ primary: '#10b981', accent: '#0ea5e9', background: '#ffffff' }),
   animation: null,
   clothing: null,
+  defaultAppearanceProfileId: null,
   voiceModel: 'default',
   voiceLanguage: 'bn',
   voiceAccent: null,
@@ -82,6 +97,13 @@ export const JARA_DEFAULT_CONFIG: Omit<JaraConfigData, 'version' | 'isLive'> & {
   sttModel: 'whisper',
   ttsModel: 'default',
   memoryEnabled: true,
+  smsEnabled: false,
+  callsEnabled: true,
+  meetingsEnabled: false,
+  allowGroupListening: false,
+  humanHandoffEnabled: true,
+  recordingConsentRequired: true,
+  approvedKnowledgeMode: 'open',
   isLive: true,
 }
 
@@ -112,33 +134,84 @@ export const ALLOWED_PERSONALITIES = ['friendly', 'professional', 'conversationa
 export const ALLOWED_VOICES = ['default', 'natural-bn', 'natural-en', 'warm', 'energetic', 'calm', 'friendly-voice']
 export const ALLOWED_LANGUAGES = ['bn', 'en', 'mixed', 'bangla', 'english', 'banglish']
 export const ALLOWED_LLM_PROVIDERS = ['ollama', 'zai', 'openrouter', 'huggingface', 'openai-compatible', 'localai']
-export const ALLOWED_LLM_MODELS = ['llama3.2', 'qwen2.5', 'mistral', 'phi3', 'gemma2', 'deepseek-r1', 'glm-4.6', 'gpt-4o-mini']
-export const ALLOWED_STT = ['whisper', 'whisper.cpp', 'default', 'bangla-whisper']
-export const ALLOWED_TTS = ['default', 'coqui', 'piper', 'edge-tts', 'openai-tts']
+export const ALLOWED_LLM_MODELS = ['llama3.2', 'qwen2.5', 'qwen3', 'mistral', 'phi3', 'gemma2', 'deepseek-r1', 'glm-4.6', 'gpt-4o-mini', 'bangla-llama', 'banglallama-7b']
+export const ALLOWED_STT = ['whisper', 'whisper.cpp', 'faster-whisper', 'indicconformer', 'funasr', 'default', 'bangla-whisper']
+export const ALLOWED_TTS = ['default', 'coqui', 'piper', 'edge-tts', 'openai-tts', 'orpheus', 'chatterbox', 'bangla-tts', 'openvoice']
 
 // Parse natural language instruction into config patch
-export function parseInstructionToPatch(instruction: string): { patch: Partial<JaraConfigData>; summary: string[]; confidence: number } {
+export type JaraInstructionScope = 'persistent' | 'temporary_next_call' | 'temporary'
+
+export function parseInstructionToPatch(instruction: string): { patch: Partial<JaraConfigData>; summary: string[]; confidence: number; scope: JaraInstructionScope; restoreDefault?: boolean } {
   const lower = instruction.toLowerCase()
   const patch: Partial<JaraConfigData> = {}
   const summary: string[] = []
   let confidence = 0.5
+  let scope: JaraInstructionScope = 'persistent'
+  let restoreDefault = false
 
-  // Background
-  if (lower.includes('background')) {
-    if (lower.includes('futuristic')) {
-      if (lower.includes('blue')) { patch.background = 'blue-futuristic'; summary.push('Background → Blue futuristic environment'); }
-      else if (lower.includes('dark')) { patch.background = 'dark-futuristic'; summary.push('Background → Dark futuristic environment'); }
-      else { patch.background = 'futuristic'; summary.push('Background → Beautiful futuristic environment'); }
+  // Scope / temporariness
+  if (/(next call|next meeting|next video call|next audio call|for this call|for this meeting|today'?s call|আজকের .*কল|পরের .*কল|পরের .*মিটিং|পরবর্তী .*কল|পরবর্তী .*মিটিং|এই কল|এই মিটিং)/i.test(instruction)) {
+    scope = 'temporary_next_call'
+  }
+  if (/(permanent|from now on|always|default|স্থায়ী|স্থায়ী|আজ থেকে|সবসময়|সবসময়|ডিফল্ট)/i.test(instruction) && !/(next call|next meeting|for this call|এই কল|এই মিটিং|পরের)/i.test(instruction)) {
+    scope = 'persistent'
+  }
+
+  // Restore default
+  if (/(restore|আগের|পূর্বের|ডিফল্ট .*ফির|default .*back|previous .*look|official default|আগের .*লুক)/i.test(instruction)) {
+    restoreDefault = true
+    confidence = 0.9
+    summary.push('Restore approved default appearance/profile')
+  }
+
+  // Background / environment
+  if (/(background|ব্যাকগ্রাউন্ড|পরিবেশ|environment)/i.test(instruction)) {
+    if (/(alo labs|অফিসিয়াল|অফিসিয়াল|official office|office background|অফিস|meeting room|কনফারেন্স)/i.test(instruction)) {
+      patch.background = 'alo-office'
+      patch.backgroundUrl = patch.backgroundUrl || null
+      summary.push('Background → ALO Labs official office environment')
+      confidence = 0.95
+    } else if (/(outdoor|আউটডোর|বাইরে|outside|park|garden)/i.test(instruction)) {
+      patch.background = 'outdoor'
+      summary.push('Background → Approved outdoor environment')
+      confidence = 0.95
+    } else if (/(futuristic|ফিউচারিস্টিক)/i.test(instruction)) {
+      if (/(blue|নীল)/i.test(instruction)) { patch.background = 'blue-futuristic'; summary.push('Background → Blue futuristic environment') }
+      else if (/(dark|ডার্ক)/i.test(instruction)) { patch.background = 'dark-futuristic'; summary.push('Background → Dark futuristic environment') }
+      else { patch.background = 'futuristic'; summary.push('Background → Futuristic environment') }
       confidence = 0.9
-    } else if (lower.includes('nature')) { patch.background = 'nature'; summary.push('Background → Nature'); confidence = 0.9 }
-    else if (lower.includes('ocean') || lower.includes('sea')) { patch.background = 'ocean'; summary.push('Background → Ocean'); confidence = 0.9 }
-    else if (lower.includes('space') || lower.includes('galaxy')) { patch.background = 'space'; summary.push('Background → Space'); confidence = 0.9 }
-    else if (lower.includes('forest')) { patch.background = 'forest'; summary.push('Background → Forest'); confidence = 0.9 }
-    else if (lower.includes('city')) { patch.background = 'city'; summary.push('Background → City'); confidence = 0.9 }
-    else if (lower.includes('sunset')) { patch.background = 'sunset'; summary.push('Background → Sunset'); confidence = 0.9 }
-    else if (lower.includes('emerald') || lower.includes('green')) { patch.background = 'gradient-emerald'; summary.push('Background → Emerald gradient'); confidence = 0.85 }
-    else if (lower.includes('blue')) { patch.background = 'gradient-blue'; summary.push('Background → Blue gradient'); confidence = 0.85 }
-    else if (lower.includes('purple')) { patch.background = 'gradient-purple'; summary.push('Background → Purple gradient'); confidence = 0.85 }
+    } else if (/(nature|প্রকৃতি)/i.test(instruction)) { patch.background = 'nature'; summary.push('Background → Nature'); confidence = 0.9 }
+    else if (/(ocean|sea|সমুদ্র)/i.test(instruction)) { patch.background = 'ocean'; summary.push('Background → Ocean'); confidence = 0.9 }
+    else if (/(space|galaxy|স্পেস)/i.test(instruction)) { patch.background = 'space'; summary.push('Background → Space'); confidence = 0.9 }
+    else if (/(forest|বন)/i.test(instruction)) { patch.background = 'forest'; summary.push('Background → Forest'); confidence = 0.9 }
+    else if (/(city|শহর)/i.test(instruction)) { patch.background = 'city'; summary.push('Background → City'); confidence = 0.9 }
+    else if (/(sunset|সূর্যাস্ত)/i.test(instruction)) { patch.background = 'sunset'; summary.push('Background → Sunset'); confidence = 0.9 }
+    else if (/(studio)/i.test(instruction)) { patch.background = 'studio'; summary.push('Background → Studio'); confidence = 0.9 }
+    else if (/(emerald|green)/i.test(instruction)) { patch.background = 'gradient-emerald'; summary.push('Background → Emerald gradient'); confidence = 0.85 }
+    else if (/(blue|নীল)/i.test(instruction)) { patch.background = 'gradient-blue'; summary.push('Background → Blue gradient'); confidence = 0.85 }
+    else if (/(purple|বেগুনি)/i.test(instruction)) { patch.background = 'gradient-purple'; summary.push('Background → Purple gradient'); confidence = 0.85 }
+    else { patch.background = 'alo-office'; summary.push('Background → Official office environment'); confidence = 0.7 }
+  }
+
+  // Clothing / outfit
+  if (/(clothing|clothes|outfit|dress|পোশাক|স্যুট|কাপড়|কাপড়)/i.test(instruction)) {
+    if (/(formal|business suit|suit|ফরমাল|বিজনেস স্যুট|অফিসিয়াল পোশাক|অফিসিয়াল পোশাক)/i.test(instruction)) {
+      patch.clothing = JSON.stringify({ type: 'formal-business-suit', label: 'Formal business suit', style: 'professional' })
+      summary.push('Clothing → Formal business suit')
+      confidence = 0.95
+    } else if (/(casual|ক্যাজুয়াল|ক্যাজুয়াল)/i.test(instruction)) {
+      patch.clothing = JSON.stringify({ type: 'business-casual', label: 'Business casual', style: 'casual' })
+      summary.push('Clothing → Business casual')
+      confidence = 0.9
+    } else if (/(traditional|ঐতিহ্যবাহী|পাঞ্জাবি|শাড়ি|শাড়ি)/i.test(instruction)) {
+      patch.clothing = JSON.stringify({ type: 'traditional', label: 'Traditional attire', style: 'traditional' })
+      summary.push('Clothing → Traditional attire')
+      confidence = 0.9
+    } else {
+      patch.clothing = JSON.stringify({ type: 'formal-business-suit', label: 'Formal business suit', style: 'professional' })
+      summary.push('Clothing → Updated outfit')
+      confidence = 0.7
+    }
   }
 
   // Face / Avatar
@@ -166,28 +239,37 @@ export function parseInstructionToPatch(instruction: string): { patch: Partial<J
     else if (lower.includes('purple')) { patch.colors = JSON.stringify({ primary: '#8b5cf6', accent: '#ec4899' }); summary.push('Colors → Purple palette'); confidence = 0.8 }
   }
 
-  // Voice
-  if (lower.includes('voice')) {
-    if (lower.includes('bangla') || lower.includes('bengali') || lower.includes('bn')) {
+  // Voice / language
+  if (/(voice|speak|talk|language|ভাষা|কথা বল|বাংলায় কথা|ইংরেজিতে কথা)/i.test(instruction)) {
+    if (/(bangla|bengali|বাংলা|বাংলায়)/i.test(instruction) && /(english|ইংরেজি)/i.test(instruction)) {
+      patch.voiceLanguage = 'mixed'
+      summary.push('Language → Bangla primary, English when needed (mixed)')
+      confidence = 0.92
+    } else if (/(bangla|bengali|বাংলা|বাংলায়)/i.test(instruction)) {
       patch.voiceLanguage = 'bn'
-      if (lower.includes('natural')) patch.voiceModel = 'natural-bn'
-      summary.push('Voice → Natural Bangla voice'); confidence = 0.9
-    } else if (lower.includes('english') || lower.includes('en ')) {
+      if (/(natural|স্বাভাবিক)/i.test(instruction)) patch.voiceModel = 'natural-bn'
+      summary.push('Language/Voice → Bangla')
+      confidence = 0.9
+    } else if (/(english|ইংরেজি)/i.test(instruction)) {
       patch.voiceLanguage = 'en'
-      summary.push('Voice → English voice'); confidence = 0.9
+      summary.push('Language/Voice → English')
+      confidence = 0.9
     }
-    if (lower.includes('fast') || lower.includes('faster')) { patch.speakingSpeed = 1.2; summary.push('Speaking speed → Faster'); }
-    if (lower.includes('slow') || lower.includes('slower')) { patch.speakingSpeed = 0.85; summary.push('Speaking speed → Slower'); }
+    if (/(fast|faster|দ্রুত)/i.test(instruction)) { patch.speakingSpeed = 1.2; summary.push('Speaking speed → Faster') }
+    if (/(slow|slower|ধীরে)/i.test(instruction)) { patch.speakingSpeed = 0.85; summary.push('Speaking speed → Slower') }
   }
 
-  // Personality
-  if (lower.includes('personality') || lower.includes('be more') || lower.includes('behave')) {
-    if (lower.includes('friendly') && lower.includes('professional')) { patch.personality = 'friendly'; (patch as any).communicationStyle = 'professional'; summary.push('Personality → Friendly and professional'); confidence = 0.9 }
-    else if (lower.includes('friendly')) { patch.personality = 'friendly'; summary.push('Personality → Friendly'); confidence = 0.9 }
-    else if (lower.includes('professional')) { patch.personality = 'professional'; summary.push('Personality → Professional'); confidence = 0.9 }
-    else if (lower.includes('playful')) { patch.personality = 'playful'; summary.push('Personality → Playful'); confidence = 0.9 }
-    else if (lower.includes('formal')) { patch.personality = 'formal'; summary.push('Personality → Formal'); confidence = 0.9 }
-    else if (lower.includes('helpful')) { patch.personality = 'helpful'; summary.push('Personality → Helpful'); confidence = 0.9 }
+  // Personality / tone
+  if (/(personality|be more|behave|tone|style|ভদ্র|বন্ধুত্বপূর্ণ|প্রফেশনাল|পেশাদার|বন্ধুসুলভ)/i.test(instruction)) {
+    const friendly = /(friendly|বন্ধুত্বপূর্ণ|বন্ধুসুলভ)/i.test(instruction)
+    const professional = /(professional|প্রফেশনাল|পেশাদার)/i.test(instruction)
+    const polite = /(polite|ভদ্র)/i.test(instruction)
+    if ((friendly || polite) && professional) { patch.personality = 'friendly'; (patch as any).communicationStyle = 'professional'; summary.push('Personality → Friendly and professional'); confidence = 0.92 }
+    else if (friendly) { patch.personality = 'friendly'; summary.push('Personality → Friendly'); confidence = 0.9 }
+    else if (professional) { patch.personality = 'professional'; summary.push('Personality → Professional'); confidence = 0.9 }
+    else if (/(playful|মজার)/i.test(instruction)) { patch.personality = 'playful'; summary.push('Personality → Playful'); confidence = 0.9 }
+    else if (/(formal|আনুষ্ঠানিক)/i.test(instruction)) { patch.personality = 'formal'; summary.push('Personality → Formal'); confidence = 0.9 }
+    else if (/(helpful|সহায়ক|সহায়ক)/i.test(instruction)) { patch.personality = 'helpful'; summary.push('Personality → Helpful'); confidence = 0.9 }
   }
 
   // AI Model
@@ -197,10 +279,25 @@ export function parseInstructionToPatch(instruction: string): { patch: Partial<J
       else patch.llmModel = 'llama3.2'
       patch.llmProvider = 'ollama'
       summary.push(`AI Model → ${patch.llmModel} (Ollama)`); confidence = 0.9
-    } else if (lower.includes('qwen')) { patch.llmModel = 'qwen2.5'; patch.llmProvider = 'ollama'; summary.push('AI Model → Qwen 2.5'); confidence = 0.9 }
+    } else if (lower.includes('qwen3') || lower.includes('qwen 3')) { patch.llmModel = 'qwen3'; patch.llmProvider = 'ollama'; summary.push('AI Model → Qwen3'); confidence = 0.9 }
+    else if (lower.includes('qwen')) { patch.llmModel = 'qwen2.5'; patch.llmProvider = 'ollama'; summary.push('AI Model → Qwen 2.5'); confidence = 0.9 }
+    else if (lower.includes('banglallama') || lower.includes('bangla llama') || lower.includes('bangla-llama')) { patch.llmModel = 'bangla-llama'; patch.llmProvider = 'ollama'; summary.push('AI Model → BanglaLlama'); confidence = 0.9 }
     else if (lower.includes('mistral')) { patch.llmModel = 'mistral'; patch.llmProvider = 'ollama'; summary.push('AI Model → Mistral'); confidence = 0.9 }
     else if (lower.includes('deepseek')) { patch.llmModel = 'deepseek-r1'; patch.llmProvider = 'ollama'; summary.push('AI Model → DeepSeek R1'); confidence = 0.9 }
     else if (lower.includes('gpt')) { patch.llmModel = 'gpt-4o-mini'; patch.llmProvider = 'openai-compatible'; summary.push('AI Model → GPT-4o mini'); confidence = 0.9 }
+  }
+
+  if (restoreDefault) {
+    patch.face = JARA_DEFAULT_CONFIG.face
+    patch.avatar = JARA_DEFAULT_CONFIG.avatar
+    patch.background = JARA_DEFAULT_CONFIG.background
+    patch.backgroundUrl = JARA_DEFAULT_CONFIG.backgroundUrl as any
+    patch.theme = JARA_DEFAULT_CONFIG.theme
+    patch.clothing = JARA_DEFAULT_CONFIG.clothing as any
+    patch.voiceLanguage = JARA_DEFAULT_CONFIG.voiceLanguage
+    patch.personality = JARA_DEFAULT_CONFIG.personality
+    patch.communicationStyle = JARA_DEFAULT_CONFIG.communicationStyle
+    patch.defaultAppearanceProfileId = null as any
   }
 
   if (summary.length === 0) {
@@ -211,7 +308,7 @@ export function parseInstructionToPatch(instruction: string): { patch: Partial<J
     }
   }
 
-  return { patch, summary, confidence }
+  return { patch, summary, confidence, scope, restoreDefault }
 }
 
 export function buildChangeSummary(current: JaraConfigData, proposed: JaraConfigData): string[] {

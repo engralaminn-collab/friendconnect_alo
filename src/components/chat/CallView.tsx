@@ -8,6 +8,14 @@ import {
 } from "lucide-react"
 import type { CallType } from "@/lib/webrtc"
 import { WebRTCManager } from "@/lib/webrtc"
+import { JaraAvatar } from "@/components/jara/JaraAvatar"
+
+const BG_MAP: Record<string, string> = {
+  'gradient-emerald':'from-emerald-400 via-teal-500 to-cyan-600','gradient-blue':'from-blue-500 via-indigo-500 to-violet-600','gradient-purple':'from-violet-500 via-purple-600 to-fuchsia-600','futuristic':'from-slate-900 via-indigo-900 to-violet-900','alo-office':'from-slate-100 via-sky-100 to-emerald-100','outdoor':'from-sky-400 via-emerald-300 to-lime-200','studio':'from-zinc-200 via-slate-100 to-white','nature':'from-green-600 via-emerald-700 to-teal-800','city':'from-slate-700 via-zinc-800 to-slate-900','space':'from-black via-indigo-950 to-violet-950','ocean':'from-sky-600 via-blue-700 to-indigo-800','sunset':'from-orange-400 via-pink-500 to-violet-600','forest':'from-green-800 via-emerald-900 to-teal-900','minimal':'from-zinc-100 via-white to-zinc-50',
+}
+function bgClassFor(bg?: string) { return BG_MAP[bg || ''] || BG_MAP['gradient-emerald'] }
+function safeColors(c: any) { try { return c ? (typeof c === 'string' ? JSON.parse(c) : c) : null } catch { return null } }
+function clothingLabel(c: any) { try { const obj = typeof c === 'string' && c.startsWith('{') ? JSON.parse(c) : null; return obj?.label || obj?.type || (c ? 'custom' : 'default') } catch { return 'default' } }
 
 export interface ActiveCall {
   callId: string
@@ -39,6 +47,8 @@ export function CallView({
   const [seconds, setSeconds] = useState(0)
   const [status, setStatus] = useState<string>("Connecting…")
   const [error, setError] = useState<string | null>(null)
+  const [presentation, setPresentation] = useState<any>(null)
+  const isJaraPeer = call.peer.id === 'jara-ai-system-001' || /jara/i.test(call.peer.name || '')
 
   // Setup WebRTC on mount
   useEffect(() => {
@@ -126,6 +136,7 @@ export function CallView({
         }
         const onEnded = (data: { callId: string; fromUserId: string }) => {
           if (data.callId !== call.callId) return
+          releasePresentation('completed')
           cleanup()
           onEnd()
         }
@@ -159,6 +170,21 @@ export function CallView({
     }
   }, [call.callId, call.peer.id, call.role, call.callType, socket, remoteOffer, onEnd])
 
+  // Resolve per-session Jara presentation (server-authorized, per-call isolation)
+  useEffect(() => {
+    let cancelled = false
+    async function loadPresentation() {
+      try {
+        const sessionType = call.callType === 'video' ? 'video_call' : 'audio_call'
+        const r = await fetch(`/api/jara/presentation?sessionId=${encodeURIComponent(call.callId)}&sessionType=${sessionType}`)
+        const d = await r.json().catch(() => null)
+        if (!cancelled && r.ok && d?.presentation) setPresentation(d.presentation)
+      } catch {}
+    }
+    loadPresentation()
+    return () => { cancelled = true }
+  }, [call.callId, call.callType])
+
   // Call timer
   useEffect(() => {
     if (status !== "Connected") return
@@ -166,8 +192,13 @@ export function CallView({
     return () => clearInterval(t)
   }, [status])
 
+  function releasePresentation(outcome: 'completed' | 'cancelled' | 'failed') {
+    fetch('/api/jara/presentation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'release', sessionId: call.callId, outcome }) }).catch(() => {})
+  }
+
   function handleEnd() {
     socket.emit("call:end", { toUserId: call.peer.id, callId: call.callId })
+    releasePresentation('completed')
     const mgr = mgrRef.current
     if ((mgr as any)?._cleanup) (mgr as any)._cleanup()
     if (mgr) mgr.end()
@@ -190,13 +221,30 @@ export function CallView({
   return (
     <div className="fixed inset-0 z-50 bg-zinc-950 text-white flex flex-col">
       {/* Remote video (full-screen) */}
-      {isVideo && (
+      {isVideo && !isJaraPeer && (
         <video
           ref={remoteVideoRef}
           autoPlay
           playsInline
           className="absolute inset-0 w-full h-full object-cover"
         />
+      )}
+      {isVideo && isJaraPeer && (
+        <div className={`absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br ${bgClassFor(presentation?.appearance?.background)}`}>
+          <div className="absolute inset-0 bg-black/10" />
+          <JaraAvatar
+            face={presentation?.appearance?.face || 'friendly'}
+            background={presentation?.appearance?.background || 'gradient-emerald'}
+            theme={presentation?.appearance?.theme || 'light'}
+            clothing={presentation?.appearance?.clothing || null}
+            mood={status === 'Connected' ? 'speaking' : 'listening'}
+            size={220}
+            colors={safeColors(presentation?.appearance?.colors)}
+          />
+          <div className="mt-4 text-white text-lg font-semibold relative">{presentation?.identity?.displayName || call.peer.name}</div>
+          <div className="text-white/80 text-xs relative">AI digital human • {presentation?.temporary ? 'Temporary' : 'Default'} profile • {clothingLabel(presentation?.appearance?.clothing)}</div>
+          <div className="text-amber-300/90 text-[11px] relative mt-1">Browser fallback renderer — real GPU avatar video track not configured</div>
+        </div>
       )}
 
       {/* Remote audio (always, even in audio-only) */}
@@ -216,12 +264,35 @@ export function CallView({
 
       {/* Audio-only: large avatar */}
       {!isVideo && (
-        <div className="flex-1 flex flex-col items-center justify-center gap-4">
-          <Avatar name={call.peer.name} src={call.peer.avatarUrl} size={160} />
-          <div className="text-2xl font-semibold">{call.peer.name}</div>
-          <div className="text-emerald-400">{status}</div>
+        <div className="flex-1 flex flex-col items-center justify-center gap-4 relative overflow-hidden">
+          {isJaraPeer && presentation?.appearance?.background && (
+            <div className={`absolute inset-0 bg-gradient-to-br ${bgClassFor(presentation.appearance.background)} opacity-30`} />
+          )}
+          {isJaraPeer ? (
+            <JaraAvatar
+              face={presentation?.appearance?.face || 'friendly'}
+              background={presentation?.appearance?.background || 'gradient-emerald'}
+              theme={presentation?.appearance?.theme || 'light'}
+              clothing={presentation?.appearance?.clothing || null}
+              mood={status === 'Connected' ? 'speaking' : 'listening'}
+              size={180}
+              colors={safeColors(presentation?.appearance?.colors)}
+            />
+          ) : (
+            <Avatar name={call.peer.name} src={call.peer.avatarUrl} size={160} />
+          )}
+          <div className="text-2xl font-semibold relative">{call.peer.name}</div>
+          <div className="text-emerald-400 relative">{status}</div>
+          {presentation && (
+            <div className="text-xs text-zinc-300/90 relative px-3 py-1 rounded-full bg-black/30">
+              {presentation.temporary ? 'Temporary' : 'Default'} profile • {presentation.appearance?.background} • {clothingLabel(presentation.appearance?.clothing)}
+            </div>
+          )}
+          {isJaraPeer && (
+            <div className="text-[11px] text-amber-300/90 relative">Renderer: browser fallback (canvas preview) — no GPU avatar video track</div>
+          )}
           {status === "Connected" && (
-            <div className="text-zinc-400">
+            <div className="text-zinc-400 relative">
               {Math.floor(seconds / 60)}:{(seconds % 60).toString().padStart(2, "0")}
             </div>
           )}

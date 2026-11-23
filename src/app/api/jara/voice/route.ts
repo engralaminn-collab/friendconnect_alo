@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
 import { aiChat, isAIConfigured } from '@/lib/ai'
+import { assertJaraEnabled } from '@/lib/jara-admin'
 
 // POST /api/jara/voice — transcribe (if audio provided) + generate Jara reply
 // In this self-hosted browser-based architecture, STT happens client-side (Web Speech API / Whisper.cpp)
@@ -9,6 +10,7 @@ import { aiChat, isAIConfigured } from '@/lib/ai'
 export async function POST(req: NextRequest) {
   const me = await getSessionUser()
   if (!me) return errorJson('Unauthorized', 401)
+  try { await assertJaraEnabled('voice') } catch (e: any) { return errorJson(e?.status === 503 ? 'Jara AI is currently disabled by a Super Admin.' : (e?.message || 'Jara unavailable'), e?.status || 403) }
 
   let body: any
   try { body = await req.json() } catch { return errorJson('Invalid JSON', 400) }

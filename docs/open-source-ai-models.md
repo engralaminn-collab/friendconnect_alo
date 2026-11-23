@@ -145,3 +145,20 @@ MULTI_AGENT_API_KEY=your-key
 - AI outputs treated as untrusted
 - No automatic action without user approval
 - Self-hosted models (Ollama) keep data on your server
+
+## Jara AI Model Catalog
+
+For the broader Jara/ALO Labs model evaluation catalog (digital human, Bengali TTS/ASR, LLM, realtime meeting, and infrastructure priorities), see [JARA_AI_MODELS.md](./JARA_AI_MODELS.md).
+
+| Priority | Area | Candidate repositories |
+|---|---|---|
+| P0 | Bengali voice (TTS) | Orpheus Bengali Fine-tuning, Chatterbox Bangla |
+| P0 | Bengali ASR | AI4Bharat IndicConformer |
+| P0 | AI Brain (LLM) | Qwen3, BanglaLlama |
+| P1 | Digital Human | Mynah, MuseTalk |
+| P1 | Facial animation | LivePortrait |
+| P1 | Real-time meeting | LiveKit, Pipecat |
+| P2 | Local inference | Ollama, llama.cpp |
+| P2 | High-performance inference | vLLM |
+| P2 | Agent memory | LangGraph |
+| P2 | Voice cloning | OpenVoice |

@@ -12,6 +12,7 @@ interface JaraAvatarProps {
   speakingLevel?: number // 0..1 for lip-sync
   size?: number
   colors?: { primary: string; accent: string; background?: string } | null
+  clothing?: string | null
 }
 
 const FACE_STYLES: Record<string, { emoji: string; label: string }> = {
@@ -40,9 +41,12 @@ const BACKGROUNDS: Record<string, string> = {
   "sunset": "from-orange-400 via-pink-500 to-violet-600",
   "forest": "from-green-800 via-emerald-900 to-teal-900",
   "minimal": "from-zinc-100 via-white to-zinc-50",
+  "alo-office": "from-slate-100 via-sky-100 to-emerald-100",
+  "outdoor": "from-sky-400 via-emerald-300 to-lime-200",
+  "studio": "from-zinc-200 via-slate-100 to-white",
 }
 
-export function JaraAvatar({ face = "friendly", background = "gradient-emerald", theme = "light", mood = "idle", speakingLevel = 0, size = 160, colors }: JaraAvatarProps) {
+export function JaraAvatar({ face = "friendly", background = "gradient-emerald", theme = "light", mood = "idle", speakingLevel = 0, size = 160, colors, clothing = null }: JaraAvatarProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const [blinkPhase, setBlinkPhase] = useState(0)
   const animRef = useRef<number>(0)
@@ -240,6 +244,29 @@ export function JaraAvatar({ face = "friendly", background = "gradient-emerald",
         ctx.fill()
       }
 
+      // Clothing (simple visual indicator)
+      const clothingStr = typeof clothing === 'string' ? clothing : ''
+      let clothingType = ''
+      try { clothingType = clothingStr.startsWith('{') ? JSON.parse(clothingStr).type || '' : clothingStr } catch { clothingType = clothingStr }
+      if (clothingType) {
+        const isFormal = /formal|business|suit|professional/.test(clothingType)
+        const isCasual = /casual/.test(clothingType)
+        const isTraditional = /traditional/.test(clothingType)
+        ctx.fillStyle = isFormal ? '#1e293b' : isCasual ? '#0f766e' : isTraditional ? '#7c3aed' : '#334155'
+        ctx.beginPath()
+        ctx.moveTo(cx - headW * 0.62, h)
+        ctx.quadraticCurveTo(cx - headW * 0.35, cy + headH * 0.42, cx, cy + headH * 0.38)
+        ctx.quadraticCurveTo(cx + headW * 0.35, cy + headH * 0.42, cx + headW * 0.62, h)
+        ctx.closePath()
+        ctx.fill()
+        if (isFormal) {
+          ctx.strokeStyle = '#e2e8f0'; ctx.lineWidth = 2
+          ctx.beginPath(); ctx.moveTo(cx, cy + headH * 0.38); ctx.lineTo(cx - headW * 0.12, h); ctx.stroke()
+          ctx.beginPath(); ctx.moveTo(cx, cy + headH * 0.38); ctx.lineTo(cx + headW * 0.12, h); ctx.stroke()
+          ctx.fillStyle = '#dc2626'; ctx.beginPath(); ctx.moveTo(cx, cy + headH * 0.42); ctx.lineTo(cx - 4, cy + headH * 0.52); ctx.lineTo(cx, cy + headH * 0.58); ctx.lineTo(cx + 4, cy + headH * 0.52); ctx.closePath(); ctx.fill()
+        }
+      }
+
       // Mood indicator halo
       if (md === "speaking") {
         ctx.strokeStyle = `rgba(16,185,129,${0.35 + lvl * 0.35})`
@@ -276,7 +303,7 @@ export function JaraAvatar({ face = "friendly", background = "gradient-emerald",
     }
     draw()
     return () => cancelAnimationFrame(animRef.current)
-  }, [face, background, theme, colors, blinkPhase])
+  }, [face, background, theme, colors, blinkPhase, clothing])
 
   const bgClass = BACKGROUNDS[background] || BACKGROUNDS["gradient-emerald"]
   const faceInfo = FACE_STYLES[face] || FACE_STYLES.friendly

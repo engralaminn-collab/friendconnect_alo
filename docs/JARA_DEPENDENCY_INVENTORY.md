@@ -3,6 +3,8 @@
 Generated: 2026-11-23
 Scope: Jara AI Companion + Governance + Voice + Avatar
 
+See [JARA_AI_MODELS.md](./JARA_AI_MODELS.md) for the broader ALO Labs/Jara open-source model catalog and implementation priorities.
+
 ## 1. Core Platform Dependencies (existing FriendConnect)
 
 | Package | Version | License | Purpose | Maintenance |

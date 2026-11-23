@@ -4,11 +4,13 @@ import { errorJson, json } from '@/lib/serialize'
 import { db } from '@/lib/db'
 import { JARA_ID } from '@/lib/jara'
 import { aiChat, isAIConfigured } from '@/lib/ai'
+import { assertJaraEnabled } from '@/lib/jara-admin'
 
 // POST /api/jara/group — Jara responds in a group (requires consent + membership)
 export async function POST(req: NextRequest) {
   const me = await getSessionUser()
   if (!me) return errorJson('Unauthorized', 401)
+  try { await assertJaraEnabled('group') } catch (e: any) { return errorJson(e?.status === 503 ? 'Jara AI is currently disabled by a Super Admin.' : (e?.message || 'Jara unavailable'), e?.status || 403) }
 
   let body: any
   try { body = await req.json() } catch { return errorJson('Invalid JSON', 400) }

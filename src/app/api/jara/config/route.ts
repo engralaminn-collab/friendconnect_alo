@@ -15,6 +15,9 @@ export async function GET(req: NextRequest) {
       return json({
         config: {
           version: 1,
+          displayName: 'Jara AI',
+          aiDisclosure: 'I am Jara AI, a digital human assistant. I am not a real human.',
+          isEnabled: true,
           face: 'friendly',
           avatar: 'default',
           background: 'gradient-emerald',
@@ -32,6 +35,13 @@ export async function GET(req: NextRequest) {
           sttModel: 'whisper',
           ttsModel: 'default',
           memoryEnabled: true,
+          smsEnabled: false,
+          callsEnabled: true,
+          meetingsEnabled: false,
+          allowGroupListening: false,
+          humanHandoffEnabled: true,
+          recordingConsentRequired: true,
+          approvedKnowledgeMode: 'open',
           isLive: true,
         },
         isDefault: true,

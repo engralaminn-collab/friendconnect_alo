@@ -5,6 +5,8 @@ import { db } from '@/lib/db'
 import { aiChat, isAIConfigured } from '@/lib/ai'
 import { rateLimit } from '@/lib/cache'
 import { JARA_ID, parseInstructionToPatch, hashConfig, proposalExpiresAt, JARA_DEFAULT_CONFIG } from '@/lib/jara'
+import { getRendererCapability } from '@/lib/jara-renderer'
+import { assertJaraEnabled, applyJaraConfigPatch, isSuperAdmin as isSuperAdminRole, writeJaraAudit, requestMeta } from '@/lib/jara-admin'
 import { createHash } from 'crypto'
 
 // POST /api/jara/chat — chat with Jara (text)
@@ -16,6 +18,13 @@ export async function POST(req: NextRequest) {
   const limited = await rateLimit(`jara-chat:${me.id}`, 30, 60).catch(() => false)
   if (limited === false) return errorJson('Rate limit exceeded', 429)
 
+  try {
+    await assertJaraEnabled('chat')
+  } catch (e: any) {
+    if (e?.status === 503) return errorJson('Jara AI is currently disabled by a Super Admin.', 503)
+    return errorJson(e?.message || 'Jara unavailable', e?.status || 403)
+  }
+
   let body: any
   try { body = await req.json() } catch { return errorJson('Invalid JSON', 400) }
 
@@ -26,7 +35,7 @@ export async function POST(req: NextRequest) {
   if (!chatMessages.length) return errorJson('Messages required', 400)
 
   const lastUserMsg = [...chatMessages].reverse().find(m => m.role === 'user')?.content || ''
-  const isSuperAdmin = me.role === 'admin' || me.role === 'superadmin'
+  const isSuperAdmin = isSuperAdminRole(me)
 
   // Persist user message as Message with Jara as receiver (for history)
   try {
@@ -41,107 +50,130 @@ export async function POST(req: NextRequest) {
     })
   } catch {}
 
-  // Detect Super Admin configuration intent
+  const looksLikeMeetingCreate =
+    /(create|make|setup|set up|build|schedule|draft).*(custom meeting|meeting|video call|meeting profile|meeting studio)|কাস্টম মিটিং|মিটিং তৈরি|মিটিং প্রোফাইল|নতুন মিটিং/i.test(lastUserMsg)
+    && /meeting|মিটিং|video call|ভিডিও কল/i.test(lastUserMsg)
+
+  if (looksLikeMeetingCreate) {
+    if (!isSuperAdmin) {
+      const refusal = 'Only an authenticated Super Admin can create Jara meeting profiles.'
+      await writeJaraAudit({ action: 'attempt_blocked', actorId: me.id, actorRole: me.role, detail: `Blocked non-admin meeting create: ${String(lastUserMsg).slice(0,200)}`, authorizationResult: 'denied', ...requestMeta(req) })
+      try { await (db as any).message.create({ data: { senderId: JARA_ID, receiverId: me.id, content: refusal, type: 'text', status: 'SENT' } }) } catch {}
+      return json({ response: refusal, kind: 'denied' })
+    }
+    const { patch, summary, scope } = parseInstructionToPatch(lastUserMsg)
+    const titleMatch = lastUserMsg.match(/(?:meeting|মিটিং)\s*[:\-]\s*([^\n,.]+)/i)
+    const title = (titleMatch?.[1] || `Custom Meeting ${new Date().toLocaleString()}`).slice(0, 200)
+    const meeting = await (db as any).jaraMeetingProfile.create({ data: {
+      title,
+      purpose: String(lastUserMsg).slice(0, 500),
+      meetingType: /interview|ইন্টারভিউ/i.test(lastUserMsg) ? 'interview' : /training|ট্রেনিং/i.test(lastUserMsg) ? 'training' : /class|ক্লাস/i.test(lastUserMsg) ? 'online_class' : /presentation|প্রেজেন্টেশন/i.test(lastUserMsg) ? 'business_presentation' : 'custom_video_call',
+      platform: 'internal',
+      clothing: patch.clothing ? JSON.stringify({ type: patch.clothing }) : null,
+      background: patch.background || null,
+      avatarStyle: patch.face || 'professional',
+      presentationStyle: (patch as any).communicationStyle || 'professional',
+      voiceLanguage: patch.voiceLanguage || 'bn',
+      instructions: String(lastUserMsg).slice(0, 5000),
+      status: 'draft',
+      scope: scope === 'temporary_next_call' ? 'temporary_next_call' : 'meeting_specific',
+      rendererStatus: getRendererCapability().mode,
+      configSnapshot: JSON.stringify({ patch, summary, source: 'chat' }),
+      createdBy: me.id, updatedBy: me.id,
+    } }).catch((e:any) => { throw e })
+    await writeJaraAudit({ action: 'config_change', actorId: me.id, actorRole: me.role, detail: `Created meeting draft from chat: ${meeting.title}`, newValue: { id: meeting.id, status: meeting.status }, authorizationResult: 'allowed', ...requestMeta(req) })
+    const reply = `✅ Meeting draft created (server-confirmed): "${meeting.title}" [${meeting.id}]. Status: draft. ${summary.length ? 'Parsed presentation: ' + summary.join(', ') + '. ' : ''}Renderer is browser fallback; real GPU avatar video track is not configured. Open "Create Custom Meeting / Video Call" to upload reference media, preview, approve, or schedule.`
+    try { await (db as any).message.create({ data: { senderId: JARA_ID, receiverId: me.id, content: reply, type: 'text', status: 'SENT' } }) } catch {}
+    return json({ response: reply, kind: 'meeting_draft_created', meeting: { id: meeting.id, status: meeting.status, title: meeting.title } })
+  }
+
   const looksLikeConfigInstruction =
-    isSuperAdmin &&
-    (/(change|update|switch|set|restore|use|make)\s+(your|my|the)?\s*(background|face|avatar|appearance|theme|color|voice|personality|model|style|clothing)/i.test(lastUserMsg) ||
-     /jara[,\s]+(change|update|switch|use)/i.test(lastUserMsg))
+    /(change|update|switch|set|restore|use|make|apply|give|put|wear|speak|talk|enable|disable|ফিরিয়ে|পরিবর্তন|করো|করুন|ব্যবহার করো|পোশাক|ব্যাকগ্রাউন্ড|ভাষা|কথা বল|ডিফল্ট)/i.test(lastUserMsg)
 
   if (looksLikeConfigInstruction) {
-    // Parse instruction into patch
-    const { patch, summary, confidence } = parseInstructionToPatch(lastUserMsg)
+    // Privileged config changes: only authenticated Super Admin
+    if (!isSuperAdmin) {
+      const refusal = 'আমি আপনার অনুরোধটি বুঝতে পেরেছি, কিন্তু এই ধরনের কনফিগারেশন পরিবর্তন শুধুমাত্র authenticated Super Admin করতে পারবেন। / I understood your request, but privileged Jara configuration changes can only be made by an authenticated Super Admin.'
+      await writeJaraAudit({ action: 'attempt_blocked', actorId: me.id, actorRole: me.role, detail: `Blocked non-admin config instruction: ${String(lastUserMsg).slice(0, 200)}`, authorizationResult: 'denied', ...requestMeta(req) })
+      try { await (db as any).message.create({ data: { senderId: JARA_ID, receiverId: me.id, content: refusal, type: 'text', status: 'SENT' } }) } catch {}
+      return json({ response: refusal, kind: 'denied' })
+    }
 
-    // If we detected something, prepare a proposal (but don't apply)
-    if (summary.length > 0 && confidence > 0.35) {
-      // Get current live config
+    const { patch, summary, confidence, scope, restoreDefault } = parseInstructionToPatch(lastUserMsg)
+    const consequentialKeys = new Set(['llmProvider','llmModel','sttModel','ttsModel','smsEnabled','callsEnabled','meetingsEnabled','allowGroupListening','approvedKnowledgeMode','isEnabled'])
+    const hasConsequential = Object.keys(patch).some(k => consequentialKeys.has(k))
+    const isAmbiguous = summary.length === 0 || confidence < 0.55
+
+    if (isAmbiguous) {
+      const clarify = `I want to make sure I understand correctly before changing anything. You said: "${String(lastUserMsg).slice(0, 200)}". Please clarify what you want me to change (appearance, clothing, background, voice/language, personality, or communication setting), and whether it should be permanent or only for the next call/meeting.`
+      try { await (db as any).message.create({ data: { senderId: JARA_ID, receiverId: me.id, content: clarify, type: 'text', status: 'SENT' } }) } catch {}
+      return json({ response: clarify, kind: 'clarify' })
+    }
+
+    // Temporary next-call: do NOT change default live config
+    if (scope === 'temporary_next_call') {
+      const live = await (db as any).jaraConfig.findFirst({ where: { isLive: true }, orderBy: { version: 'desc' } }).catch(() => null)
+      const base = live || { ...JARA_DEFAULT_CONFIG }
+      const profile = await (db as any).jaraAppearanceProfile.create({ data: {
+        name: `Next call - ${new Date().toLocaleString()}`,
+        description: summary.join('; '),
+        profileType: patch.background === 'outdoor' ? 'outdoor' : patch.background === 'alo-office' ? 'office' : 'custom',
+        isDefault: false, isTemporary: true,
+        expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
+        face: patch.face || base.face || 'friendly',
+        avatar: patch.avatar || base.avatar || 'default',
+        background: patch.background || base.background || 'gradient-emerald',
+        backgroundUrl: patch.backgroundUrl ?? base.backgroundUrl ?? null,
+        theme: patch.theme || base.theme || 'light',
+        clothing: patch.clothing || base.clothing || null,
+        colors: patch.colors || base.colors || null,
+        voiceLanguage: patch.voiceLanguage || base.voiceLanguage || 'bn',
+        personality: patch.personality || base.personality || 'friendly',
+        communicationStyle: (patch as any).communicationStyle || base.communicationStyle || 'conversational',
+        createdBy: me.id, updatedBy: me.id, isActive: true,
+      } })
+      const sessionType = /audio call|অডিও কল/.test(lastUserMsg.toLowerCase()) ? 'audio_call' : /meeting|মিটিং/.test(lastUserMsg.toLowerCase()) ? 'meeting' : 'video_call'
+      await (db as any).jaraCallPresentation.create({ data: {
+        sessionType, sessionId: null, roomId: null, profileId: profile.id,
+        profileSnapshot: JSON.stringify(profile), isTemporary: true, expiresAt: profile.expiresAt,
+        status: 'active', createdBy: me.id,
+      } }).catch(() => {})
+      await writeJaraAudit({ action: 'config_change', actorId: me.id, actorRole: me.role, detail: `Temporary next-call appearance profile created: ${summary.join('; ')}`, newValue: { profileId: profile.id, scope, patch }, authorizationResult: 'allowed', changeReason: lastUserMsg.slice(0, 300), ...requestMeta(req) })
+      const reply = `বুঝেছি। / Understood. I prepared a temporary appearance for your next call/meeting: ${summary.join(', ')}. Your default appearance is unchanged. This temporary profile expires at ${profile.expiresAt?.toLocaleString()} or after it is used.`
+      try { await (db as any).message.create({ data: { senderId: JARA_ID, receiverId: me.id, content: reply, type: 'text', status: 'SENT', metadata: JSON.stringify({ kind: 'temporary-profile', profileId: profile.id }) } }) } catch {}
+      return json({ response: reply, kind: 'applied_temporary', profile })
+    }
+
+    // Consequential changes: proposal flow for explicit review
+    if (hasConsequential) {
       let live = await (db as any).jaraConfig.findFirst({ where: { isLive: true }, orderBy: { version: 'desc' } }).catch(() => null)
-      if (!live) {
-        live = { ...JARA_DEFAULT_CONFIG } as any
-      }
-
+      if (!live) live = { ...JARA_DEFAULT_CONFIG } as any
       const proposed: any = { ...live, ...patch }
-      // Don't copy id/createdAt etc into hash
       const hashable: any = { ...proposed }
       delete hashable.id; delete hashable.createdAt; delete hashable.updatedAt; delete hashable.createdBy; delete hashable.isLive
       const configHash = hashConfig(hashable)
-      const configJson = JSON.stringify(proposed)
-
-      const nextVersion = live.version + 1
+      const nextVersion = (live.version || 1) + 1
       const expiresAt = proposalExpiresAt()
+      const proposal = await (db as any).jaraProposal.create({ data: { version: nextVersion, previousVersion: live.version, configJson: JSON.stringify(proposed), configHash, status: 'pending', createdBy: me.id, expiresAt, changeSummary: summary.join('; ') } })
+      await writeJaraAudit({ action: 'propose', actorId: me.id, actorRole: me.role, proposalId: proposal.id, version: nextVersion, detail: `Proposal created for consequential change: ${summary.join('; ')}`, authorizationResult: 'pending', ...requestMeta(req) })
+      const reply = `I understand: ${summary.join(', ')}. Because this is a consequential/security-sensitive change, I prepared proposal v${nextVersion} for explicit review before applying it. Proposal ID: \`${proposal.id}\` | Hash: \`${configHash.slice(0,12)}…\``
+      try { await (db as any).message.create({ data: { senderId: JARA_ID, receiverId: me.id, content: reply, type: 'text', status: 'SENT', metadata: JSON.stringify({ proposalId: proposal.id, kind: 'jara-proposal' }) } }) } catch {}
+      return json({ response: reply, kind: 'proposal', proposal: { id: proposal.id, version: nextVersion, configHash, status: 'pending', changeSummary: summary.join('; ') } })
+    }
 
-      // Create proposal
-      const proposal = await (db as any).jaraProposal.create({
-        data: {
-          version: nextVersion,
-          previousVersion: live.version,
-          configJson,
-          configHash,
-          status: 'pending',
-          createdBy: me.id,
-          expiresAt,
-          changeSummary: summary.join('; '),
-        },
-      })
-
-      await (db as any).jaraAuditLog.create({
-        data: {
-          proposalId: proposal.id,
-          version: nextVersion,
-          action: 'propose',
-          actorId: me.id,
-          actorRole: me.role,
-          detail: `Proposal v${nextVersion} created: ${summary.join('; ')}`,
-          ip: req.headers.get('x-forwarded-for') || 'unknown',
-          userAgent: req.headers.get('user-agent') || '',
-        },
-      })
-
-      // Build Jara's understanding response (does NOT apply change)
-      const understanding = `I understand you want me to: ${summary.join(', ')}.`
-
-      // Get live config summary for comparison
-      const currentSummary = `Current: face=${live.face}, background=${live.background}, theme=${live.theme}, voice=${live.voiceLanguage}, personality=${live.personality}, model=${live.llmModel}`
-      const proposedSummary = `Proposed (v${nextVersion}): ${Object.entries(patch).map(([k, v]) => `${k}=${v}`).join(', ')}`
-
-      const reply =
-        `${understanding}\n\n` +
-        `I've prepared a new configuration proposal (v${nextVersion}). Your current appearance is unchanged — please review the preview.\n\n` +
-        `📋 **Current:** ${currentSummary}\n` +
-        `✨ **Proposed:** ${proposedSummary}\n\n` +
-        `**What will change:**\n${summary.map(s => `• ${s}`).join('\n')}\n\n` +
-        `⏰ This proposal expires at ${expiresAt.toLocaleString()}.\n\n` +
-        `Do you approve this exact configuration? Reply "Approved. Apply this change." or use the Approve button in the preview.\n\n` +
-        `Proposal ID: \`${proposal.id}\` | Hash: \`${configHash.slice(0, 12)}…\``
-
-      // Save Jara's proposal message too
-      try {
-        await (db as any).message.create({
-          data: {
-            senderId: JARA_ID,
-            receiverId: me.id,
-            content: reply,
-            type: 'text',
-            status: 'SENT',
-            metadata: JSON.stringify({ proposalId: proposal.id, configHash, version: nextVersion, kind: 'jara-proposal' }),
-          },
-        })
-      } catch {}
-
-      return json({
-        response: reply,
-        kind: 'proposal',
-        proposal: {
-          id: proposal.id,
-          version: nextVersion,
-          previousVersion: live.version,
-          configHash,
-          status: 'pending',
-          expiresAt: expiresAt.toISOString(),
-          changeSummary: summary.join('; '),
-          currentConfig: live,
-          proposedConfig: proposed,
-        },
-      })
+    // Routine reversible Super Admin change: apply directly
+    try {
+      const applied = await applyJaraConfigPatch({ actor: { id: me.id, role: me.role }, patch, reason: lastUserMsg.slice(0, 300), source: 'chat', req })
+      const reply = restoreDefault
+        ? `Done. I restored my approved default appearance/configuration. (Live config v${applied.version}, applied after server confirmation.)`
+        : `Done. I applied your requested change: ${summary.join(', ')}. (Live config v${applied.version}, applied after server confirmation${scope === 'persistent' ? ', saved as persistent/default' : ''}.)`
+      try { await (db as any).message.create({ data: { senderId: JARA_ID, receiverId: me.id, content: reply, type: 'text', status: 'SENT', metadata: JSON.stringify({ kind: 'config-applied', version: applied.version }) } }) } catch {}
+      return json({ response: reply, kind: 'applied', config: applied.config, version: applied.version, changeSummary: summary })
+    } catch (e: any) {
+      await writeJaraAudit({ action: 'config_change', actorId: me.id, actorRole: me.role, detail: `Direct apply failed: ${e?.message}`, authorizationResult: 'denied', changeReason: lastUserMsg.slice(0, 300), ...requestMeta(req) })
+      const errReply = `I understood your request (${summary.join(', ')}), but I could not apply it: ${e?.message || 'unknown error'}. No configuration was reported as applied.`
+      try { await (db as any).message.create({ data: { senderId: JARA_ID, receiverId: me.id, content: errReply, type: 'text', status: 'SENT' } }) } catch {}
+      return json({ response: errReply, kind: 'error' }, 500)
     }
   }
 
@@ -172,7 +204,7 @@ export async function POST(req: NextRequest) {
     `${langInstruction} ` +
     `You must clearly identify yourself as AI — never pretend to be human. Keep responses ${jaraConfig.responseLength === 'short' ? 'short (1-2 sentences)' : jaraConfig.responseLength === 'long' ? 'detailed' : 'concise but helpful (2-4 sentences)'}. ` +
     `You are helpful, kind, and remember context within the conversation. If the user speaks Bangla, respond in Bangla. If Banglish, respond in Banglish. If English, respond in English. ` +
-    `If the user asks about changing your appearance, voice, or model, explain you can prepare a proposal for the Super Admin to approve — you never change live config automatically.`
+    `Only an authenticated Super Admin can change your configuration through server-authorized functions. If a user asks to change your appearance/voice/settings, explain that Super Admin can instruct you directly in chat and you will apply authorized routine changes after server confirmation. Never claim a config change succeeded unless the server confirmed it.`
 
   // Try AI provider, fallback to echo-style friendly response
   let aiResponse = ''
