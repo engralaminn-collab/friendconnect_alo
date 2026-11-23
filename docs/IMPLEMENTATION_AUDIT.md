@@ -10,8 +10,8 @@
 - Total API routes: 70+ (including 11 new Jara routes)
 - Prisma models: 27 (22 base + 5 Jara)
 - Frontend components: 86 TSX
-- Build: PASS (with `ignoreBuildErrors:true` — see Finding #1)
-- TypeScript: 20 errrors remaining (pre-existing, down from 32 after fixing route param types)
+- Build: PASS (`ignoreBuildErrors:false` — strict) — see Finding #1)
+- TypeScript: 0 errors (strict: `ignoreBuildErrors:false` verified) (pre-existing, down from 32 after fixing route param types)
 - ESLint: 1 error (pre-existing ProfileModal) + 2 warnings
 - DB: SQLite via `better-sqlite3` + MySQL path via Prisma adapters — both verified to seed Jara
 

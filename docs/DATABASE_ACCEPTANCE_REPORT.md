@@ -3,7 +3,7 @@
 **Date:** 2026-11-23  
 **DB:** `db/custom.db` SQLite (dev) via `better-sqlite3` + `src/lib/db-runtime.js`  
 **Production target:** MySQL 8 via `DATABASE_URL=mysql://...` + `prisma migrate deploy` (same schema)  
-**Branch:** `arena/79557eff-friendconnect-alo` @ `ef8a4a6`
+**Branch:** `arena/79557eff-friendconnect-alo` @ `816beaf`
 
 ## 1. Migration Approach
 

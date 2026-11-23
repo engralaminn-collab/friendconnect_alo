@@ -1,7 +1,7 @@
 # Security Audit — FriendConnect + Jara AI
 
 **Date:** 2026-11-23  
-**Branch:** `arena/79557eff-friendconnect-alo` @ `ef8a4a6`  
+**Branch:** `arena/79557eff-friendconnect-alo` @ `816beaf`  
 **Auditor:** Automated + manual HTTP verification  
 **Scope:** Authentication, authorization, Jara governance, group consent, data protection
 
