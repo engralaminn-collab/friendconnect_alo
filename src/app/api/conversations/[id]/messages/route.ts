@@ -2,11 +2,11 @@ import { NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/session"
 import { db } from "@/lib/db"
 
-export async function GET(req: Request, { params }: { params: { id: string } }) {
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const me = await getCurrentUser()
   if (!me) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   const membership = await db.conversationMember.findUnique({
-    where: { conversationId_userId: { conversationId: params.id, userId: me.id } },
+    where: { conversationId_userId: { conversationId: (await params).id, userId: me.id } },
   })
   if (!membership) return NextResponse.json({ error: "Not a member" }, { status: 403 })
   const { searchParams } = new URL(req.url)
@@ -14,7 +14,7 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   const limit = Math.min(Number(searchParams.get("limit") || 50), 100)
 
   const messages = await db.message.findMany({
-    where: { conversationId: params.id, deletedForAll: false },
+    where: { conversationId: (await params).id, deletedForAll: false },
     orderBy: { createdAt: "desc" },
     take: limit,
     ...(cursor
@@ -31,11 +31,11 @@ export async function GET(req: Request, { params }: { params: { id: string } }) 
   return NextResponse.json({ messages: messages.reverse(), nextCursor: messages.length === limit ? messages[messages.length - 1].id : null })
 }
 
-export async function POST(req: Request, { params }: { params: { id: string } }) {
+export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const me = await getCurrentUser()
   if (!me) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   const membership = await db.conversationMember.findUnique({
-    where: { conversationId_userId: { conversationId: params.id, userId: me.id } },
+    where: { conversationId_userId: { conversationId: (await params).id, userId: me.id } },
   })
   if (!membership) return NextResponse.json({ error: "Not a member" }, { status: 403 })
 
@@ -47,7 +47,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 
   const msg = await db.message.create({
     data: {
-      conversationId: params.id,
+      conversationId: (await params).id,
       senderId: me.id,
       content: content?.trim() || "",
       replyToId: replyToId || null,
@@ -67,15 +67,15 @@ export async function POST(req: Request, { params }: { params: { id: string } })
 }
 
 // Mark conversation as read
-export async function PATCH(req: Request, { params }: { params: { id: string } }) {
+export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const me = await getCurrentUser()
   if (!me) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
   const membership = await db.conversationMember.findUnique({
-    where: { conversationId_userId: { conversationId: params.id, userId: me.id } },
+    where: { conversationId_userId: { conversationId: (await params).id, userId: me.id } },
   })
   if (!membership) return NextResponse.json({ error: "Not a member" }, { status: 403 })
   await db.conversationMember.update({
-    where: { conversationId_userId: { conversationId: params.id, userId: me.id } },
+    where: { conversationId_userId: { conversationId: (await params).id, userId: me.id } },
     data: { lastReadAt: new Date() },
   })
   return NextResponse.json({ ok: true })

@@ -431,3 +431,96 @@ model PushSubscription {
 
   @@index([userId])
 }
+
+// ---- JARA: Permanent AI User + Governance ----
+model JaraConfig {
+  id                String   @id @default(cuid())
+  version           Int      @unique @default(1)
+  face              String   @default("friendly") @db.VarChar(100)
+  avatar            String   @default("default") @db.VarChar(100)
+  avatarUrl         String?  @db.Text
+  background        String   @default("gradient-emerald") @db.VarChar(100)
+  backgroundUrl     String?  @db.Text
+  theme             String   @default("light") @db.VarChar(50)
+  colors            String?  @db.Text
+  animation         String?  @db.Text
+  clothing          String?  @db.Text
+  voiceModel        String   @default("default") @db.VarChar(100)
+  voiceLanguage     String   @default("bn") @db.VarChar(20)
+  voiceAccent       String?  @db.VarChar(50)
+  speakingSpeed     Float    @default(1.0)
+  pitch             Float    @default(1.0)
+  personality       String   @default("friendly") @db.VarChar(100)
+  responseLength    String   @default("medium") @db.VarChar(20)
+  communicationStyle String  @default("conversational") @db.VarChar(100)
+  llmProvider       String   @default("ollama") @db.VarChar(100)
+  llmModel          String   @default("llama3.2") @db.VarChar(100)
+  sttModel          String   @default("whisper") @db.VarChar(100)
+  ttsModel          String   @default("default") @db.VarChar(100)
+  memoryEnabled     Boolean  @default(true)
+  isLive            Boolean  @default(false)
+  createdBy         String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model JaraProposal {
+  id              String   @id @default(cuid())
+  version         Int
+  previousVersion Int?
+  configJson      String   @db.LongText
+  configHash      String   @db.VarChar(128)
+  status          String   @default("pending") @db.VarChar(50)
+  createdBy       String
+  createdAt       DateTime @default(now())
+  expiresAt       DateTime
+  approvedBy      String?
+  approvedAt      DateTime?
+  appliedAt       DateTime?
+  changeSummary   String?  @db.Text
+  auditLogs       JaraAuditLog[]
+
+  @@index([status])
+  @@index([createdBy])
+}
+
+model JaraAuditLog {
+  id         String   @id @default(cuid())
+  proposalId String?
+  version    Int?
+  action     String   @db.VarChar(100)
+  actorId    String?
+  actorRole  String?  @db.VarChar(50)
+  detail     String?  @db.Text
+  ip         String?  @db.VarChar(100)
+  userAgent  String?  @db.Text
+  createdAt  DateTime @default(now())
+
+  proposal JaraProposal? @relation(fields: [proposalId], references: [id], onDelete: SetNull)
+
+  @@index([action])
+  @@index([createdAt])
+}
+
+model JaraMemory {
+  id        String   @id @default(cuid())
+  userId    String
+  key       String   @db.VarChar(255)
+  value     String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, key])
+  @@index([userId])
+}
+
+model JaraGroupConsent {
+  id            String   @id @default(cuid())
+  groupId       String   @unique
+  enabled       Boolean  @default(false)
+  listenEnabled Boolean  @default(false)
+  consentedBy   String?
+  consentedAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}

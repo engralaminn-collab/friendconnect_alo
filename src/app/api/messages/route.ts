@@ -61,8 +61,9 @@ export async function GET(req: NextRequest) {
     }
 
     if (!userId) return errorJson('userId or groupId required', 400)
-    // ensure not blocked
-    const blocked = await db.friendship.findFirst({
+    // ensure not blocked (skip for Jara — Jara is always accessible)
+    const isJara = userId === 'jara-ai-system-001' || userId === 'jara'
+    const blocked = !isJara ? await db.friendship.findFirst({
       where: {
         status: 'BLOCKED',
         OR: [
@@ -70,7 +71,7 @@ export async function GET(req: NextRequest) {
           { requesterId: userId, receiverId: me.id },
         ],
       },
-    })
+    }) : null
     if (blocked) return errorJson('Cannot view messages', 403)
 
     const q = req.nextUrl.searchParams.get('q')
@@ -147,7 +148,8 @@ export async function POST(req: NextRequest) {
       if (!membership) return errorJson('Not a member', 403)
     }
     if (receiverId) {
-      const blocked = await db.friendship.findFirst({
+      const isJara = receiverId === 'jara-ai-system-001' || receiverId === 'jara'
+      const blocked = !isJara ? await db.friendship.findFirst({
         where: {
           status: 'BLOCKED',
           OR: [
@@ -155,7 +157,7 @@ export async function POST(req: NextRequest) {
             { requesterId: receiverId, receiverId: me.id },
           ],
         },
-      })
+      }) : null
       if (blocked) return errorJson('Blocked', 403)
     }
     const msg = await db.message.create({

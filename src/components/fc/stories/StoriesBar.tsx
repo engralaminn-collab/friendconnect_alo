@@ -526,7 +526,7 @@ function CreateStoryDialog({ open, onOpenChange, onCreated }: CreateStoryDialogP
     }
     setSubmitting(true)
     try {
-      const { file: uploaded } = await uploadFile(file)
+      const uploaded = await uploadFile(file)
       await api('/api/stories', {
         method: 'POST',
         body: JSON.stringify({ type: 'image', content: uploaded.url, bg: null }),

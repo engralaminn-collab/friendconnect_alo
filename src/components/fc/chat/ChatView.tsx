@@ -1521,6 +1521,8 @@ function ChatRoom({
   // Member names lookup for the group typing indicator ("Aria is typing…").
   // Built once per group chat open via GET /api/groups/:id.
   const [groupMembers, setGroupMembers] = useState<Map<string, string>>(new Map())
+  // Jara consent: shows "Jara is listening" banner in group chats when enabled
+  const [jaraConsent, setJaraConsent] = useState<{ enabled: boolean; listenEnabled: boolean } | null>(null)
   // Derived count of group members currently typing (defined here so the
   // auto-scroll effect below can reference it without a temporal-dead-zone error).
   const groupTypingCount = groupTypingUsers.size
@@ -1728,6 +1730,16 @@ function ChatRoom({
     return () => {
       cancelled = true
     }
+  }, [mode, peerId])
+
+  // Fetch Jara consent for group header banner
+  useEffect(() => {
+    if (mode !== 'group') { setJaraConsent(null); return }
+    let cancelled = false
+    api<{ consent: { enabled: boolean; listenEnabled: boolean } }>(`/api/jara/group/consent?groupId=${encodeURIComponent(peerId)}`)
+      .then((d) => { if (!cancelled) setJaraConsent(d.consent || null) })
+      .catch(() => { if (!cancelled) setJaraConsent(null) })
+    return () => { cancelled = true }
   }, [mode, peerId])
 
   // ---- jump to bottom after first load ----
@@ -2171,7 +2183,7 @@ function ChatRoom({
       // Optimistic: leave current wallpaper untouched until upload + POST succeed.
       const prev = wallpaper
       try {
-        const { file: uploaded } = await uploadFile(file)
+        const uploaded = await uploadFile(file)
         // Single-quote the url so special chars in the URL don't break the CSS value.
         const value = `url('${uploaded.url}')`
         setWallpaper(value)
@@ -2354,13 +2366,13 @@ function ChatRoom({
     async (file: File) => {
       setUploading(true)
       try {
-        const { file: uploaded } = await uploadFile(file)
+        const uploaded = await uploadFile(file)
         const type = fileTypeFromMime(uploaded.mimeType)
         sendMessage({
           content: '',
           type,
           fileUrl: uploaded.url,
-          fileName: uploaded.name,
+          fileName: uploaded.filename,
           fileSize: uploaded.size,
           mimeType: uploaded.mimeType,
         })
@@ -2561,8 +2573,14 @@ function ChatRoom({
             </div>
           )}
           <div className="min-w-0">
-            <div className="truncate text-sm font-semibold leading-tight">
-              {peerInfo?.name || (loading ? 'Loading…' : 'Unknown')}
+            <div className="truncate text-sm font-semibold leading-tight flex items-center gap-1.5">
+              <span className="truncate">{peerInfo?.name || (loading ? 'Loading…' : 'Unknown')}</span>
+              {mode === 'group' && jaraConsent?.enabled && (
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold text-emerald-600" title={jaraConsent.listenEnabled ? 'Jara is listening to this group' : 'Jara is a member'}>
+                  <span className={"h-1.5 w-1.5 rounded-full bg-emerald-500 " + (jaraConsent.listenEnabled ? "animate-pulse" : "")} aria-hidden />
+                  Jara {jaraConsent.listenEnabled ? 'listening \u2022 AI' : 'in group \u2022 AI'}
+                </span>
+              )}
             </div>
             <div
               className={cn(

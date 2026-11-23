@@ -647,3 +647,104 @@ model FriendRequest {
 
   @@unique([fromId, toId])
 }
+
+// ============================================================
+// JARA — Permanent AI User + Governance
+// ============================================================
+
+model JaraConfig {
+  id                String   @id @default(cuid())
+  version           Int      @unique @default(1)
+  // Visual identity
+  face              String   @default("friendly") // realistic | illustrated | anime | friendly | professional
+  avatar            String   @default("default")  // 2d | 3d | default
+  avatarUrl         String?
+  background        String   @default("gradient-emerald")
+  backgroundUrl     String?
+  theme             String   @default("light") // light | dark | futuristic
+  colors            String?  // JSON string
+  animation         String?  // JSON string
+  clothing          String?  // JSON string
+  // Voice
+  voiceModel        String   @default("default")
+  voiceLanguage     String   @default("bn")
+  voiceAccent       String?
+  speakingSpeed     Float    @default(1.0)
+  pitch             Float    @default(1.0)
+  // Personality
+  personality       String   @default("friendly")
+  responseLength    String   @default("medium") // short | medium | long
+  communicationStyle String  @default("conversational")
+  // AI configuration
+  llmProvider       String   @default("ollama")
+  llmModel          String   @default("llama3.2")
+  sttModel          String   @default("whisper")
+  ttsModel          String   @default("default")
+  memoryEnabled     Boolean  @default(true)
+  // Metadata
+  isLive            Boolean  @default(false)
+  createdBy         String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model JaraProposal {
+  id              String   @id @default(cuid())
+  version         Int
+  previousVersion Int?
+  configJson      String   // JSON of proposed config
+  configHash      String   // SHA256 hash for integrity
+  status          String   @default("pending") // pending | approved | rejected | expired | applied
+  createdBy       String
+  createdAt       DateTime @default(now())
+  expiresAt       DateTime
+  approvedBy      String?
+  approvedAt      DateTime?
+  appliedAt       DateTime?
+  changeSummary   String?
+  auditLogs       JaraAuditLog[]
+
+  @@index([status])
+  @@index([createdBy])
+}
+
+model JaraAuditLog {
+  id         String   @id @default(cuid())
+  proposalId String?
+  version    Int?
+  action     String   // propose | approve | reject | expire | apply | rollback | attempt_blocked
+  actorId    String?
+  actorRole  String?
+  detail     String?
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  proposal JaraProposal? @relation(fields: [proposalId], references: [id], onDelete: SetNull)
+
+  @@index([action])
+  @@index([createdAt])
+}
+
+model JaraMemory {
+  id        String   @id @default(cuid())
+  userId    String
+  key       String
+  value     String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, key])
+  @@index([userId])
+}
+
+model JaraGroupConsent {
+  id            String   @id @default(cuid())
+  groupId       String   @unique
+  enabled       Boolean  @default(false)
+  listenEnabled Boolean  @default(false)
+  consentedBy   String?
+  consentedAt   DateTime?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}

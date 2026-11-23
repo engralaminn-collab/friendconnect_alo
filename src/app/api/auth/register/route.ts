@@ -24,6 +24,11 @@ export async function POST(req: Request) {
     const emailLc = email.toLowerCase()
     const usernameLc = username.toLowerCase()
 
+    // Protect Jara system identity
+    if (usernameLc === 'jara' || emailLc === 'jara@friendconnect.local' || emailLc.startsWith('jara@')) {
+      return NextResponse.json({ error: "Username reserved — cannot impersonate system identity" }, { status: 403 })
+    }
+
     const exists = await db.user.findFirst({
       where: { OR: [{ email: emailLc }, { username: usernameLc }] },
       select: { id: true },

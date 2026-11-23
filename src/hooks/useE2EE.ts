@@ -24,7 +24,7 @@ export function useE2EE(userId: string | null) {
         if (typeof window === "undefined" || !("indexedDB" in window)) return
 
         // Try to load existing private key
-        const existingPriv = await loadPrivateKey(userId)
+        const existingPriv = await loadPrivateKey(userId!)
         let kp: E2EEKeyPair
 
         if (existingPriv) {
@@ -36,14 +36,14 @@ export function useE2EE(userId: string | null) {
           } else {
             // No public key on server — generate new pair
             kp = await generateKeyPair()
-            await storePrivateKey(userId, kp.privateKeyJwk)
-            await publishPublicKey(userId, kp.publicKeyB64)
+            await storePrivateKey(userId!, kp.privateKeyJwk)
+            await publishPublicKey(userId!, kp.publicKeyB64)
           }
         } else {
           // No private key — generate new pair
           kp = await generateKeyPair()
-          await storePrivateKey(userId, kp.privateKeyJwk)
-          await publishPublicKey(userId, kp.publicKeyB64)
+          await storePrivateKey(userId!, kp.privateKeyJwk)
+          await publishPublicKey(userId!, kp.publicKeyB64)
         }
 
         if (!cancelled) {
