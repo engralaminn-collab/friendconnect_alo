@@ -1,96 +1,87 @@
-# CI/CD for FriendConnect
-# FriendConnect CI/CD Pipeline
-name: FriendConnect CI/CD
+
+name: FriendConnect CI
 
 on:
   push:
-    branches: [main, master]
+    branches:
+      - main
+      - master
   pull_request:
-    branches: [main, master]
+    branches:
+      - main
+      - master
 
 concurrency:
-  group: cicd-${{ github.ref }}
+  group: friendconnect-ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   quality:
-    runs-on: ubuntu-latest
+    name: Install, Prisma, Lint, Typecheck and Build
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    env:
+      NODE_ENV: production
+      DATABASE_URL: "file:./prisma/ci.db"
+      NEXTAUTH_SECRET: "ci-only-not-a-production-secret"
+      NEXTAUTH_URL: "http://localhost:3000"
+      PORT: "3000"
+      SOCKET_PORT: "3003"
+
     steps:
-      - uses: actions/checkout@v4
-      - uses: oven-sh/setup-bun@v2
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
-          bun-version: latest
-      - name: Install dependencies
-        run: bun install --frozen-lockfile || bun install || npm ci --legacy-peer-deps --ignore-scripts
-      - name: Generate Prisma Client
-        run: bunx prisma generate
-        env:
-          DATABASE_URL: "file:./prisma/dev.db"
+          node-version: "22.23.4"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Verify runtime and lockfile
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --version
+          npm --version
+          test -f package.json
+          test -f package-lock.json
+          test -f prisma/schema.sqlite.prisma
+          test -f next.config.ts
+
+      - name: Install locked dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Generate SQLite Prisma Client
+        run: npx prisma generate --schema prisma/schema.sqlite.prisma
+
       - name: Lint
-        run: bun run lint
-      # Typecheck is blocking: the pre-existing errors it used to tolerate were
-      # caused by mini-services/chat-service importing a client that is not
-      # generated at that point. That path is now excluded from the app's
-      # tsconfig (it is a separate service, not part of the Next.js app).
+        run: npm run lint
+
       - name: Typecheck
-        run: bun run typecheck
-      - name: "Build (non-fatal — missing deps nodemailer/web-push/ioredis)"
-        continue-on-error: true
-        run: bun run build
-        env:
-          NEXTAUTH_SECRET: "ci-build-placeholder"
-          NEXTAUTH_URL: "http://localhost:3000"
-          DATABASE_URL: "file:./prisma/dev.db"
-      - name: Upload build artifact
-        if: always()
+        run: npm run typecheck
+
+      - name: Production build
+        run: npm run build
+
+      - name: Verify standalone build output
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -f .next/standalone/server.js
+          test -d .next/standalone/.next
+          echo "PASS: Next.js standalone server and static output exist."
+
+      - name: Upload production build artifact
+        if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: build
-          path: .next/standalone
-          if-no-files-found: ignore
-
-  deploy:
-    needs: quality
-    runs-on: ubuntu-latest
-    if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master') && vars.AUTO_DEPLOY_MAIN == 'true'
-    steps:
-      - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.ALO_SERVER_HOST }}
-          username: ${{ secrets.ALO_SERVER_USER }}
-          key: ${{ secrets.ALO_SERVER_SSH_KEY }}
-          port: ${{ vars.ALO_SERVER_SSH_PORT }}
-          # Host-key verification stays ON. Set ALO_SERVER_FINGERPRINT to the
-          # server's SHA256 host-key fingerprint. Do not "fix" a mismatch by
-          # setting this to an empty string.
-          fingerprint: ${{ secrets.ALO_SERVER_FINGERPRINT }}
-          envs: FRIENDCONNECT_DIR
-          script: |
-            set -euo pipefail
-            cd "$FRIENDCONNECT_DIR"
-
-            # Refuse to deploy over uncommitted local edits on the server —
-            # someone may have hot-fixed production and not committed it.
-            if [ -n "$(git status --porcelain)" ]; then
-              echo "ABORT: working tree on the server is dirty. Commit or stash first."
-              git status --short
-              exit 1
-            fi
-
-            # Back up before touching the database. deploy.sh runs additive
-            # migrations; this gives us a restore point if anything goes wrong.
-            if [ -x ./scripts/backup.sh ]; then
-              echo "==> backup"
-              ./scripts/backup.sh
-            else
-              echo "WARN: scripts/backup.sh missing or not executable"
-            fi
-
-            git pull --ff-only origin main
-            ./scripts/deploy.sh
-
-            echo "==> post-deploy health"
-            if [ -x ./scripts/healthcheck.sh ]; then ./scripts/healthcheck.sh; fi
-        env:
-          FRIENDCONNECT_DIR: ${{ vars.FRIENDCONNECT_DIR }}
+          name: friendconnect-next-standalone-${{ github.sha }}
+          path: .next/standalone/
+          if-no-files-found: error
+          retention-days: 7
