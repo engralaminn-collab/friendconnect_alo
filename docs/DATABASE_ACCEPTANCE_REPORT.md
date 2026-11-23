@@ -1,115 +1,52 @@
 # Database Acceptance Report
 
-**Date:** 2026-11-23  
-**DB:** `db/custom.db` SQLite (dev) via `better-sqlite3` + `src/lib/db-runtime.js`  
-**Production target:** MySQL 8 via `DATABASE_URL=mysql://...` + `prisma migrate deploy` (same schema)  
-**Branch:** `arena/79557eff-friendconnect-alo` @ `816beaf`
+**Verified:** 2026-11-23 · branch `arena/4f5b1aba-friendconnect-alo`
 
-## 1. Migration Approach
+## Status by engine
 
-Additive-only. All schema changes are `CREATE TABLE IF NOT EXISTS` + `ALTER TABLE ADD COLUMN` with try/catch. No destructive `DROP` or `DELETE` of user data.
+| Engine | Status | What was actually executed |
+|---|---|---|
+| SQLite (`src/lib/db-runtime.js`, better-sqlite3) | **PASS (runtime), PARTIAL (migrations)** | Server started, schema auto-created, 33 tables, CRUD across users/sessions/groups/messages/posts verified over HTTP |
+| MySQL 8 + Prisma Client | **BLOCKED** | `prisma generate` and `prisma validate` both fail: `binaries.prisma.sh` is unreachable from the sandbox. The MySQL path was **never executed**. |
+| Migration history | **FAIL** | See below. |
 
-- `prisma/schema.prisma` and `prisma/schema.sqlite.prisma` contain the canonical models (27 models, incl. 5 Jara).
-- `src/lib/db-runtime.js` `INIT_SQL` reproduces them for SQLite when Prisma engine is unavailable (offline sandbox).
-- `ensureColumns()` and `ensureJaraSeed()` run on every `getSqlite()` call, so existing DBs auto-migrate on next server start.
+> Do not read "database acceptance" as "MySQL accepted". MySQL was not testable here.
 
-## 2. Existing-Data Preservation — Verified
+## Migration history does not reproduce the schema
 
-```bash
-DATABASE_URL="file:./db/custom.db" node -e "
-  const d=require('./src/lib/db-runtime.js').getSqlite();
-  console.log('tables', d.prepare(\"select count(*) c from sqlite_master where type='table'\").get().c);
-  console.log('users', d.prepare('select count(*) c from User').get().c);
-  console.log('messages', d.prepare('select count(*) c from Message').get().c);
-  console.log('groups', d.prepare('select count(*) c from \"Group\"').get().c);
-  console.log('jaraConfigs', d.prepare('select version,isLive,face from JaraConfig order by version').all());
-"
-# Result:
-# tables 28
-# users 18 (includes Jara + test users — all preserved across builds)
-# messages ~15 (includes Jara DMs + group messages)
-# groups 3 (including E2E test group)
-# jaraConfigs 5→13 versions, latest isLive=1 (all prior versions retained, not deleted)
-```
+Measured by comparing `CREATE TABLE` statements in `prisma/migrations/20260807120000_init/migration.sql`
+against the `model` declarations in each schema:
 
-**Verdict:** PASS — No data loss across 10+ builds and governance test cycles. All User/Message/Group records from earlier sessions are still present.
+| Schema | Models declared | Missing from init migration |
+|---|---|---|
+| `prisma/schema.mysql.prisma` | 28 | 5 (`JaraConfig`, `JaraProposal`, `JaraAuditLog`, `JaraMemory`, `JaraGroupConsent`) |
+| `prisma/schema.prisma` | 40 | 17 (`Post`, `Poll`, `Conversation`, `ConversationMember`, `Block`, `Report`, `Attachment`, `FriendRequest`, `VerificationToken`, 5 × `Jara*`) |
 
-## 3. Jara Schema
+`scripts/deploy.sh` runs `prisma migrate deploy`, which only replays existing files — so a **fresh**
+MySQL database will be missing 17 tables that the application queries, and `migrate deploy` will
+report success while doing so. `migration_lock.toml` also declares `provider = "mysql"` while
+`prisma/schema.prisma` (the file `deploy.sh` passes to Prisma for MySQL) declares `provider = "sqlite"`.
 
-| Table | Columns | Indexes | FK | Status |
-|-------|---------|---------|----|--------|
-| JaraConfig | id, version UNIQUE, face, avatar, avatarUrl, background, backgroundUrl, theme, colors, animation, clothing, voiceModel, voiceLanguage, voiceAccent, speakingSpeed, pitch, personality, responseLength, communicationStyle, llmProvider, llmModel, sttModel, ttsModel, memoryEnabled, isLive, createdBy, createdAt, updatedAt | version, isLive | createdBy→User | PASS |
-| JaraProposal | id, version, previousVersion, configJson, configHash, status, createdBy FK, createdAt, expiresAt, approvedBy, approvedAt, appliedAt, changeSummary | status, createdBy | createdBy→User | PASS |
-| JaraAuditLog | id, proposalId FK SET NULL, version, action, actorId, actorRole, detail, ip, userAgent, createdAt | action, createdAt | proposalId→JaraProposal | PASS |
-| JaraMemory | id, userId, key, value, createdAt, updatedAt | UNIQUE(userId,key) | userId→User | PASS |
-| JaraGroupConsent | id, groupId UNIQUE, enabled, listenEnabled, consentedBy, consentedAt, createdAt, updatedAt | groupId | groupId→Group | PASS |
+**Consequence:** deploying to an existing MySQL database whose tables were created some other way
+will appear to work; a greenfield MySQL deploy will not.
 
-Additional ALTERs on existing tables:
+**Fix required before any MySQL deploy:** pick one canonical schema, regenerate the migration
+history from it (`prisma migrate diff --from-empty --to-schema-datamodel … --script`), and add a CI
+check so drift cannot reappear. This is deliberately **not** done blind here, because rewriting
+migration history on a database that already contains production data is destructive if done wrong.
 
-- `User`: bio, status, avatarUrl, lastSeenAt (for Jara profile + presence) — added via `ensureColumns()` — PASS
-- `Message`: metadata, conversationId (proposal tagging) — PASS
+## Schema drift found and fixed (SQLite runtime)
 
-Previously missing tables — **FIXED 2026-11-23 11:02 UTC (commit 816beaf, verified 11:07 UTC on PORT 3005):**
+`src/lib/db-runtime.js` created `Session` **without** `sessionToken`, while `schema.prisma` and
+`src/lib/session.ts` both write it. The insert threw, and an empty `catch` swallowed the error, so
+every UI login silently failed to create a session — which is why realtime auth never worked.
 
-- `Block`, `FriendRequest` — added to `db-runtime.js` INIT_SQL + MODELS + sqlitePrisma delegates. Verified `GET /api/friends` 200, `POST /api/friends` 201, `GET /api/blocks` 200. Status: **PASS**.
-- `Post`, `PostComment`, `PostReaction` — added to `db-runtime.js`. Verified `POST /api/posts` 201, `GET /api/posts` 200, comment/react ok. Status: **PASS**.
+Fixed additively via `ensureColumns()` (`ALTER TABLE "Session" ADD COLUMN sessionToken TEXT`),
+which is nullable and therefore safe for existing rows. `session.create` now writes only the
+canonical `token` column.
 
-All 33 tables now present in `db/custom.db` (WAL mode, FK=1, 21 users, Jara v36).
+## Backup / restore
 
-## 4. Concurrent Writes & Transactions
-
-```bash
-# Direct concurrent insert test (via node:http + direct DB)
-db.prepare('insert into Message ...').run('test-msg-1', alice, admin, ...)
-db.prepare('insert into Message ...').run('test-msg-2', admin, alice, ...)
-select count(*) where id in (?,?) → 2
-# Result: 2 — PASS, writes are isolated and not lost
-```
-
-SQLite WAL mode enabled (`pragma journal_mode=WAL`) for concurrent read/write. Tested 2 simultaneous Message inserts — both committed.
-
-## 5. Restart Persistence
-
-```bash
-# Stop server
-pkill -f "standalone/server"
-# Restart
-DATABASE_URL="file:./db/custom.db" PORT=3005 node .next/standalone/server.js &
-curl /api/jara/config → same version 13 isLive true
-curl /api/health → database ok
-# DB file size 344K, unchanged
-# Result: PASS — data survives restart
-```
-
-## 6. Relationships & Constraints
-
-| Check | Expected | Got | Status |
-|-------|----------|-----|--------|
-| Jara user FK exists | id=jara-ai-system-001, role=jara | exists | PASS |
-| JaraConfig FK createdBy→User | valid | test-admin-mwt4yo32 | PASS |
-| Message senderId→User | valid | Alice→Bob DM persisted | PASS |
-| GroupMember uniqueness | UNIQUE(groupId,userId) | enforced | PASS |
-| JaraGroupConsent FK groupId→Group | valid | cmwt5f7… → Group | PASS |
-| Jara cannot be duplicated | count username=jara =1 | 1 | PASS |
-
-## 7. File Storage & Permissions
-
-- Upload endpoint `POST /api/files/upload` exists (multipart, Sharp thumbnail, S3/local abstraction) — PASS
-- Without auth → 401 (correct) — PASS
-- Quota: User.fileUsedBytes / fileQuotaBytes columns exist — PASS (enforced in upload route)
-- Access permission: files served via `/api/files/[id]` with auth check — PASS (route exists)
-
-## 8. Backup & Recovery
-
-- `scripts/backup.sh` — mysqldump + uploads tar + GPG encrypt — exists, documented
-- `scripts/restore.sh` — verify + --apply with disposable DB guard — exists
-- SQLite dev backup: `cp db/custom.db db/custom.db.bak` — verified, Jara version history intact after restore
-
-## Test Commands
-
-```bash
-DATABASE_URL="file:./db/custom.db" node -e "require('./src/lib/db-runtime.js').getSqlite()"
-ls -lh db/custom.db
-cat prisma/schema.prisma | grep -A5 "model Jara"
-NODE_PATH=... node /tmp/real-api-test2.cjs | grep -i "DB preservation\|Concurrent"
-```
+`scripts/backup.sh` and `scripts/restore.sh` exist; neither was executed (no production host).
+`docs/DEPLOYMENT_AND_RECOVERY.md` requires a backup and an integrity check before any production
+migration — that requirement is unchanged and still unmet for production.
