@@ -36,17 +36,32 @@ export DATABASE_URL
 echo "[1/6] Installing dependencies…"
 npm ci --no-audit --no-fund
 
-echo "[2/6] Generating Prisma Client…"
+echo "[2/6] Selecting Prisma schema…"
+# prisma/schema.prisma is the SQLite variant. For MySQL the tracked source of
+# truth is schema.mysql.prisma, which has to be copied over schema.prisma before
+# generate/migrate — otherwise `prisma migrate deploy` runs the SQLite schema
+# against a MySQL database (and Prisma errors, or worse, applies the wrong DDL).
+# scripts/production-install.sh already does this; deploy.sh did not.
 if [[ "$DATABASE_URL" == mysql://* || "$DATABASE_URL" == mariadb://* ]]; then
-  npx prisma generate --schema prisma/schema.prisma
+  SCHEMA_BACKUP=""
+  if [ -f prisma/schema.prisma ] && ! grep -q 'provider = "mysql"' prisma/schema.prisma; then
+    SCHEMA_BACKUP="prisma/.schema.prisma.predeploy.bak"
+    cp prisma/schema.prisma "$SCHEMA_BACKUP"
+    echo "  Backed up SQLite schema -> $SCHEMA_BACKUP"
+  fi
+  cp prisma/schema.mysql.prisma prisma/schema.prisma
+  echo "  Using prisma/schema.mysql.prisma (MySQL)"
+  PRISMA_SCHEMA="prisma/schema.prisma"
 else
-  npx prisma generate --schema prisma/schema.sqlite.prisma
+  echo "  Using prisma/schema.sqlite.prisma (SQLite)"
+  PRISMA_SCHEMA="prisma/schema.sqlite.prisma"
 fi
+npx prisma generate --schema "$PRISMA_SCHEMA"
 
 echo "[3/6] Database migrations…"
 if [[ "$DATABASE_URL" == mysql://* || "$DATABASE_URL" == mariadb://* ]]; then
   # Non-destructive: only applies new files from prisma/migrations. Never resets data.
-  npx prisma migrate deploy --schema prisma/schema.prisma
+  npx prisma migrate deploy --schema "$PRISMA_SCHEMA"
 else
   echo "  SQLite: tables are created/updated automatically on start."
 fi

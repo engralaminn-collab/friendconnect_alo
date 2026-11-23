@@ -1,8 +1,30 @@
+import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { json } from '@/lib/serialize'
+import { json, errorJson } from '@/lib/serialize'
+import { getSessionUser } from '@/lib/session'
 
-// Prometheus-style metrics endpoint (round 11)
-export async function GET() {
+// Prometheus-style metrics endpoint.
+//
+// Scrapers cannot hold a session cookie, so access is granted one of two ways:
+//   1. `Authorization: Bearer $METRICS_TOKEN` (preferred for Prometheus), or
+//   2. an admin session (for humans poking at it in a browser).
+// If METRICS_TOKEN is unset, only admin sessions are accepted — the endpoint is
+// never anonymously readable.
+export async function GET(req: NextRequest) {
+  const expected = process.env.METRICS_TOKEN
+  const auth = req.headers.get('authorization') || ''
+  let allowed = false
+  if (expected) {
+    // Constant-time-ish comparison; tokens are short so this is sufficient.
+    const provided = auth.startsWith('Bearer ') ? auth.slice(7) : ''
+    allowed = provided.length === expected.length && provided === expected
+  }
+  if (!allowed) {
+    const me = await getSessionUser().catch(() => null)
+    allowed = !!me && (me.role === 'admin' || me.role === 'superadmin')
+  }
+  if (!allowed) return errorJson('Unauthorized', 401)
+
   const [users, messages, groups, calls, stories, sessions, files] = await Promise.all([
     db.user.count(),
     db.message.count(),

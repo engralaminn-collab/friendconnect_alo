@@ -16,8 +16,10 @@ export async function GET(req: Request) {
         {
           OR: [
             { username: { contains: lc } },
+            // Name only. Email was matched here too, which turned this into an
+            // account-enumeration oracle: any logged-in user could probe for
+            // partial email substrings and learn who has an account.
             { name: { contains: lc } },
-            { email: { contains: lc } },
           ],
         },
       ],

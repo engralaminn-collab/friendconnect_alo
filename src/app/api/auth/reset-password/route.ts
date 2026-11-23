@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
     if (user.otpCode !== otp) return errorJson('Invalid OTP', 400)
     await db.user.update({
       where: { id: user.id },
-      data: { passwordHash: hashPassword(password), otpCode: null, otpExpiry: null },
+      data: { passwordHash: await hashPassword(password), otpCode: null, otpExpiry: null },
     })
     return json({ ok: true })
   } catch (e: any) {

@@ -67,10 +67,17 @@ docker compose up --build
 See `.env.example`. Required in production:
 
 - `DATABASE_URL`
-- `APP_DOMAIN` / `APP_ORIGIN`
+- `NEXTAUTH_SECRET` — **the app will not serve auth routes in production without it**
+  (`openssl rand -base64 32`). It signs both session JWTs and WebSocket tokens.
+- `APP_DOMAIN` / `APP_ORIGIN` / `NEXTAUTH_URL`
 - `TURN_SECRET` + `TURN_SERVERS` (calls across NATs)
 - `VAPID_*` (web push)
 - SMTP vars (email verification / password reset)
+- `METRICS_TOKEN` (optional) — bearer token for scraping `/api/metrics`;
+  without it the endpoint requires an admin session.
+
+Deployment to the confirmed target, and the access it requires:
+[docs/DEPLOY_PANEL_ALOLABS.md](docs/DEPLOY_PANEL_ALOLABS.md).
 
 ## Scripts
 

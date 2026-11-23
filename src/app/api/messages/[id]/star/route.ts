@@ -6,21 +6,21 @@ import { db } from "@/lib/db"
 export async function POST(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   const me = await getCurrentUser()
   if (!me) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  const existing = await db.starredMessage.findUnique({
+  const existing = await db.messageStar.findUnique({
     where: { userId_messageId: { userId: me.id, messageId: (await params).id } },
   })
   if (existing) {
-    await db.starredMessage.delete({ where: { id: existing.id } })
+    await db.messageStar.delete({ where: { id: existing.id } })
     return NextResponse.json({ ok: true, action: "removed" })
   }
-  await db.starredMessage.create({ data: { userId: me.id, messageId: (await params).id } })
+  await db.messageStar.create({ data: { userId: me.id, messageId: (await params).id } })
   return NextResponse.json({ ok: true, action: "added" })
 }
 
 export async function GET(_req: Request) {
   const me = await getCurrentUser()
   if (!me) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  const starred = await db.starredMessage.findMany({
+  const starred = await db.messageStar.findMany({
     where: { userId: me.id },
     include: {
       message: {

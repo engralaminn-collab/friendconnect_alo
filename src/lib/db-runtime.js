@@ -101,6 +101,68 @@ const MODELS = {
       receiver: { kind: 'one', model: 'user', from: 'receiverId', to: 'id' },
     },
   },
+  conversation: {
+    table: 'Conversation',
+    dates: ['createdAt', 'updatedAt'],
+    defaults: () => ({ id: cuid(), createdAt: now(), updatedAt: now(), type: 'direct' }),
+    relations: {
+      members: { kind: 'many', model: 'conversationMember', from: 'id', to: 'conversationId' },
+    },
+  },
+  conversationMember: {
+    table: 'ConversationMember',
+    dates: ['joinedAt', 'lastReadAt'],
+    bools: ['muted', 'pinned'],
+    uniques: { conversationId_userId: ['conversationId', 'userId'] },
+    defaults: () => ({ id: cuid(), joinedAt: now(), role: 'member', muted: false, pinned: false }),
+    relations: {
+      conversation: { kind: 'one', model: 'conversation', from: 'conversationId', to: 'id' },
+      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
+    },
+  },
+  poll: {
+    table: 'Poll',
+    dates: ['createdAt', 'expiresAt'],
+    defaults: () => ({ id: cuid(), createdAt: now() }),
+    relations: {
+      votes: { kind: 'many', model: 'pollVote', from: 'id', to: 'pollId' },
+    },
+  },
+  pollVote: {
+    table: 'PollVote',
+    dates: ['createdAt'],
+    uniques: { pollId_userId: ['pollId', 'userId'] },
+    defaults: () => ({ id: cuid(), createdAt: now() }),
+    relations: {
+      poll: { kind: 'one', model: 'poll', from: 'pollId', to: 'id' },
+      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
+    },
+  },
+  report: {
+    table: 'Report',
+    dates: ['createdAt'],
+    defaults: () => ({ id: cuid(), createdAt: now(), status: 'open' }),
+    relations: {
+      from: { kind: 'one', model: 'user', from: 'fromId', to: 'id' },
+      to: { kind: 'one', model: 'user', from: 'toId', to: 'id' },
+    },
+  },
+  starredMessage: {
+    table: 'StarredMessage',
+    dates: ['createdAt'],
+    uniques: { userId_messageId: ['userId', 'messageId'] },
+    defaults: () => ({ id: cuid(), createdAt: now() }),
+    relations: {
+      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
+      message: { kind: 'one', model: 'message', from: 'messageId', to: 'id' },
+    },
+  },
+  verificationToken: {
+    table: 'VerificationToken',
+    dates: ['expires'],
+    defaults: () => ({ id: cuid() }),
+    relations: {},
+  },
   block: {
     table: 'Block',
     dates: ['createdAt'],
@@ -573,6 +635,44 @@ CREATE TABLE IF NOT EXISTS "JaraGroupConsent" (
   id TEXT PRIMARY KEY, groupId TEXT UNIQUE NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, listenEnabled INTEGER NOT NULL DEFAULT 0, consentedBy TEXT, consentedAt TEXT, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
   FOREIGN KEY (groupId) REFERENCES "Group"(id) ON DELETE CASCADE
 );
+CREATE TABLE IF NOT EXISTS "Conversation" (
+  id TEXT PRIMARY KEY, type TEXT NOT NULL DEFAULT 'direct', title TEXT, avatarUrl TEXT,
+  description TEXT, ownerId TEXT, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS "ConversationMember" (
+  id TEXT PRIMARY KEY, conversationId TEXT NOT NULL, userId TEXT NOT NULL,
+  role TEXT NOT NULL DEFAULT 'member', joinedAt TEXT NOT NULL, lastReadAt TEXT,
+  muted INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0,
+  UNIQUE (conversationId, userId),
+  FOREIGN KEY (conversationId) REFERENCES "Conversation"(id) ON DELETE CASCADE,
+  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS "Poll" (
+  id TEXT PRIMARY KEY, messageId TEXT NOT NULL, question TEXT NOT NULL,
+  options TEXT NOT NULL, expiresAt TEXT, createdAt TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS "PollVote" (
+  id TEXT PRIMARY KEY, pollId TEXT NOT NULL, userId TEXT NOT NULL,
+  optionIdx INTEGER NOT NULL, createdAt TEXT NOT NULL,
+  UNIQUE (pollId, userId),
+  FOREIGN KEY (pollId) REFERENCES "Poll"(id) ON DELETE CASCADE,
+  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS "Report" (
+  id TEXT PRIMARY KEY, fromId TEXT NOT NULL, toId TEXT NOT NULL, reason TEXT NOT NULL,
+  detail TEXT, status TEXT NOT NULL DEFAULT 'open', createdAt TEXT NOT NULL,
+  FOREIGN KEY (fromId) REFERENCES "User"(id) ON DELETE CASCADE,
+  FOREIGN KEY (toId) REFERENCES "User"(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS "StarredMessage" (
+  id TEXT PRIMARY KEY, userId TEXT NOT NULL, messageId TEXT NOT NULL, createdAt TEXT NOT NULL,
+  UNIQUE (userId, messageId),
+  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE,
+  FOREIGN KEY (messageId) REFERENCES "Message"(id) ON DELETE CASCADE
+);
+CREATE TABLE IF NOT EXISTS "VerificationToken" (
+  id TEXT PRIMARY KEY, identifier TEXT NOT NULL, token TEXT NOT NULL UNIQUE, expires TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS "Block" (
   id TEXT PRIMARY KEY, fromId TEXT NOT NULL, toId TEXT NOT NULL, createdAt TEXT NOT NULL,
   UNIQUE (fromId, toId),
@@ -709,6 +809,9 @@ function addCol(db, table, def) {
 
 function ensureColumns(db) {
   addCol(db, 'User', 'phone TEXT')
+  // The Session table was created without `sessionToken`, but both the schema
+  // and session.ts write it. Additive and nullable, so existing rows survive.
+  addCol(db, 'Session', 'sessionToken TEXT')
   addCol(db, 'Call', 'answeredAt TEXT')
   addCol(db, 'Call', 'failureReason TEXT')
   addCol(db, 'Call', 'connectionType TEXT')
@@ -1083,6 +1186,13 @@ const sqlitePrisma = {
   session: delegate('session'),
   friendship: delegate('friendship'),
   block: delegate('block'),
+  conversation: delegate('conversation'),
+  conversationMember: delegate('conversationMember'),
+  poll: delegate('poll'),
+  pollVote: delegate('pollVote'),
+  report: delegate('report'),
+  starredMessage: delegate('starredMessage'),
+  verificationToken: delegate('verificationToken'),
   friendRequest: delegate('friendRequest'),
   post: delegate('post'),
   postComment: delegate('postComment'),
