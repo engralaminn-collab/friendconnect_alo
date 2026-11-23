@@ -35,6 +35,28 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     const { id } = await params
     const url = new URL(req.url)
     const targetId = url.searchParams.get('userId') || me.id
+
+    // Caller must be a member of the group.
+    const myMembership = await db.groupMember.findUnique({
+      where: { groupId_userId: { groupId: id, userId: me.id } },
+    })
+    if (!myMembership) return errorJson('Not a member', 403)
+
+    // Leaving voluntarily is always allowed; removing someone else needs OWNER/ADMIN.
+    const removingOther = targetId !== me.id
+    if (removingOther && myMembership.role !== 'OWNER' && myMembership.role !== 'ADMIN') {
+      return errorJson('Only owner/admin can remove other members', 403)
+    }
+
+    // The group owner can never be removed by another member.
+    const target = await db.groupMember.findUnique({
+      where: { groupId_userId: { groupId: id, userId: targetId } },
+    })
+    if (!target) return errorJson('Member not found', 404)
+    if (target.role === 'OWNER' && removingOther) {
+      return errorJson('The group owner cannot be removed', 403)
+    }
+
     await db.groupMember.deleteMany({ where: { groupId: id, userId: targetId } })
     return json({ ok: true })
   } catch (e: any) {

@@ -25,7 +25,8 @@ export async function POST(req: NextRequest) {
       where: { OR: [{ username: userInput }, { email: userInput }] },
     })
 
-    if (!user || !user.passwordHash || !verifyPassword(password, user.passwordHash)) {
+    const passwordOk = user?.passwordHash ? await verifyPassword(password, user.passwordHash) : false
+    if (!user || !user.passwordHash || !passwordOk) {
       await audit({ action: 'login_failed', ip, meta: { identifier: userInput } })
       return errorJson('Invalid username/email or password', 401)
     }
@@ -42,8 +43,8 @@ export async function POST(req: NextRequest) {
 
     if (needsRehash(user.passwordHash)) {
       const pwErr = validatePassword(password)
-      if (!pwErr) {
-        await db.user.update({ where: { id: user.id }, data: { passwordHash: hashPassword(password) } })
+      if (pwErr.valid) {
+        await db.user.update({ where: { id: user.id }, data: { passwordHash: await hashPassword(password) } })
       }
     }
 

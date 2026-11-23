@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
     if (!verifyTotp(code, user.twoFactorSecret)) return errorJson('Invalid code', 400)
     // generate backup codes (hashed for storage)
     const codes = generateBackupCodes()
-    const hashed = codes.map((c) => hashPassword(c + user.id)).join(',')
+    const hashed = (await Promise.all(codes.map((c) => hashPassword(c + user.id)))).join(',')
     await db.user.update({ where: { id: me.id }, data: { twoFactorEnabled: true, twoFactorBackup: hashed } })
     await audit({ userId: me.id, action: '2fa_enable' })
     return json({ ok: true, backupCodes: codes })

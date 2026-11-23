@@ -13,7 +13,12 @@ const ProfileSchema = z.object({
 export async function GET() {
   const u = await getCurrentUser()
   if (!u) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  return NextResponse.json({ user: u })
+  // Never return server-side auth secrets to the client. The TOTP seed in
+  // particular would let anyone who reads this response clone the authenticator.
+  const { twoFactorSecret: _secret, ...safe } = u
+  return NextResponse.json({
+    user: { ...safe, hasTwoFactorSecret: !!_secret },
+  })
 }
 
 export async function PATCH(req: Request) {

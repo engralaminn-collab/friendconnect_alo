@@ -14,7 +14,7 @@ export async function POST(req: NextRequest) {
     const { verifyPassword } = await import('@/lib/auth')
     const user = await db.user.findUnique({ where: { id: me.id } })
     if (!user) return errorJson('User not found', 404)
-    if (!verifyPassword(String(body.password || ''), user.passwordHash)) return errorJson('Incorrect password', 401)
+    if (!(await verifyPassword(String(body.password || ''), user.passwordHash))) return errorJson('Incorrect password', 401)
     await db.user.update({ where: { id: me.id }, data: { twoFactorEnabled: false, twoFactorSecret: null, twoFactorBackup: null } })
     await audit({ userId: me.id, action: '2fa_disable' })
     return json({ ok: true })

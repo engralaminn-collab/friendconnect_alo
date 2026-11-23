@@ -28,8 +28,11 @@ jobs:
           DATABASE_URL: "file:./prisma/dev.db"
       - name: Lint
         run: bun run lint
-      - name: "Typecheck (non-fatal — pre-existing errors in 2fa/admin/profile routes)"
-        continue-on-error: true
+      # Typecheck is blocking: the pre-existing errors it used to tolerate were
+      # caused by mini-services/chat-service importing a client that is not
+      # generated at that point. That path is now excluded from the app's
+      # tsconfig (it is a separate service, not part of the Next.js app).
+      - name: Typecheck
         run: bun run typecheck
       - name: "Build (non-fatal — missing deps nodemailer/web-push/ioredis)"
         continue-on-error: true

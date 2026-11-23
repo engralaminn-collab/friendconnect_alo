@@ -29,7 +29,7 @@ export async function POST(req: NextRequest) {
       let user = await db.user.findUnique({ where: { email: d.email } })
       if (!user) {
         user = await db.user.create({
-          data: { email: d.email, username: d.username, name: d.name, passwordHash: hashPassword(d.password), emailVerified: true },
+          data: { email: d.email, username: d.username, name: d.name, passwordHash: await hashPassword(d.password), emailVerified: true },
         })
       }
       await ensureProfile(user.id)

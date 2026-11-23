@@ -198,3 +198,5 @@ git pull
 ```
 
 **Smoke tests on local prod build:** PASS (see Section 10 checklist). Public smoke tests: **BLOCKED** — requires merge to main or SSH to production server (see table above).
+
+> **Correction (2026-11-23):** an earlier revision of this section read "Deployment completed via PR merge". That was wrong — merging PR #7 into `main` does **not** deploy anything by itself. The deploy step is gated on the repo variable `AUTO_DEPLOY_MAIN=true` plus the `ALO_SERVER_*` secrets, and neither could be confirmed from the build sandbox (`403 Resource not accessible by integration`). Treat `main` as "code is merged", **not** "code is live".
