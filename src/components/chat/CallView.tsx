@@ -50,6 +50,10 @@ export function CallView({
   const [presentation, setPresentation] = useState<any>(null)
   const isJaraPeer = call.peer.id === 'jara-ai-system-001' || /jara/i.test(call.peer.name || '')
 
+  function releasePresentation(outcome: 'completed' | 'cancelled' | 'failed') {
+    fetch('/api/jara/presentation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'release', sessionId: call.callId, outcome }) }).catch(() => {})
+  }
+
   // Setup WebRTC on mount
   useEffect(() => {
     let cancelled = false
@@ -191,10 +195,6 @@ export function CallView({
     const t = setInterval(() => setSeconds((s) => s + 1), 1000)
     return () => clearInterval(t)
   }, [status])
-
-  function releasePresentation(outcome: 'completed' | 'cancelled' | 'failed') {
-    fetch('/api/jara/presentation', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'release', sessionId: call.callId, outcome }) }).catch(() => {})
-  }
 
   function handleEnd() {
     socket.emit("call:end", { toUserId: call.peer.id, callId: call.callId })
