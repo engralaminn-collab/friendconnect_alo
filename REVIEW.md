@@ -366,3 +366,46 @@ remove it or make it a real `/api` index.
 5. Item **11** — one schema, real migrations, no silent fallback. This unblocks safe deploys.
 6. Item **12** — make CI actually block. Without this, everything above regresses.
 7. Items 13–15, then 16–21.
+
+---
+
+# Execution pass — 2026-11-23 (what was actually done and proven)
+
+Commit `20512b3` on `arena/4f5b1aba-friendconnect-alo` (pushed, tree clean).
+
+## Fixed and verified against a running production build
+
+| # | Issue | Before (measured) | After (measured) |
+|---|---|---|---|
+| 1 | Auth bypass: un-awaited `verifyPassword` | wrong password → `200 {"success":true}` | wrong password → `401` |
+| 2 | `hashPassword` un-awaited (login/reset/2fa/setup) | `[object Promise]` stored; setup → `500 SQLite3 can only bind…` | setup → `200`, logins work |
+| 3 | 2FA disable: un-awaited `verifyPassword` | any password disabled 2FA | requires correct password |
+| 4 | Group members `DELETE` IDOR | plain member removed group OWNER (2→1 members) | `403 Only owner/admin…`; self-leave still `200` |
+| 5 | `/api/me` leaked `twoFactorSecret` | TOTP seed in response | stripped; `hasTwoFactorSecret` only |
+| 6 | Orphaned `mini-services` broke build | `tsc` 1 error, `next build` fail | `tsc` 0 errors, build exit 0 |
+| 7 | CI typecheck non-blocking | `continue-on-error: true` | blocking |
+
+Gates: `tsc --noEmit` **0 errors**, `eslint .` **0 problems**, `next build` **exit 0**
+(only warning is the expected "Prisma Client is not generated" in this sandbox), API suite **19/19 pass, 0 fail**.
+
+## What is BLOCKED, and why (each independently verified)
+
+| Blocker | Evidence |
+|---|---|
+| **No SSH credentials to production** | `ssh aloedu@103.231.239.79` → `Connection reset by peer`; no `~/.ssh`; `gh api .../actions/secrets` → `403 Resource not accessible by integration` |
+| **`AUTO_DEPLOY_MAIN` not verifiable** | `gh api .../actions/variables` → `403` |
+| **`panel.alolabs.net` unreachable from sandbox** | TLS `SSL_ERROR_SYSCALL` on 443, empty reply on 80 (egress allowlist). Cannot confirm it hosts FriendConnect at all — docs say it is a *hosting control panel* and the app is on `learn.aloeducation.com` |
+| **Prisma engine download blocked** | `binaries.prisma.sh` unreachable → `prisma generate/validate` cannot run; app falls back to `db-runtime.js` (SQLite). MySQL path therefore **never executed** |
+| **Playwright browsers cannot be downloaded** | `playwright.azureedge.net` / `cdn.playwright.dev` → `000`; none pre-installed. Browser E2E not runnable here |
+| **No AI provider configured** | `/api/ai/status` → `configured:false, provider:none`; `/api/jara/chat` returned the **canned `fallbackReply`**, not inference. Real Jara inference unverified |
+| **Voice / calling unverified** | No browser, no camera/mic, no STUN/TURN reachability, no Ollama/STT endpoints in sandbox |
+
+## Still open (not attempted, needs scoping)
+
+- 2FA is **still not enforced on the NextAuth path** (`src/lib/auth.ts authorize()`) — the UI's login route. Fixing this changes login UX for 2FA users, so it should be a deliberate change.
+- `/api/metrics` still unauthenticated (verified returns data with no session).
+- `users/search` still matches on email.
+- Session cookie stubs (`setSessionCookie`/`clearSessionCookie`) and the `token` vs `sessionToken` mismatch are unchanged.
+- Missing deps `node-turn` / `@socket.io/redis-adapter`.
+- Migration history still does not reproduce the schema.
+- Duplicate Socket.IO implementations (`socket-server.js` vs `mini-services/chat-service`) — only the build breakage was addressed, not the duplication.
