@@ -4,11 +4,10 @@ const nextConfig: NextConfig = {
   output: "standalone",
   /* config options here */
   typescript: {
-    ignoreBuildErrors: true,
+    ignoreBuildErrors: false,
   },
   reactStrictMode: false,
 };
 
 export default nextConfig;
-// NOTE: typescript.ignoreBuildErrors above is temporarily true while pre-existing
-// fc/* upload-shape + useE2EE null-guard debt is cleared; see docs/IMPLEMENTATION_AUDIT.md
+// Verified 2026-11-23: tsc 0 errors — ignoreBuildErrors disabled
