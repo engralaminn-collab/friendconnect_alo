@@ -709,6 +709,9 @@ function addCol(db, table, def) {
 
 function ensureColumns(db) {
   addCol(db, 'User', 'phone TEXT')
+  // The Session table was created without `sessionToken`, but both the schema
+  // and session.ts write it. Additive and nullable, so existing rows survive.
+  addCol(db, 'Session', 'sessionToken TEXT')
   addCol(db, 'Call', 'answeredAt TEXT')
   addCol(db, 'Call', 'failureReason TEXT')
   addCol(db, 'Call', 'connectionType TEXT')
