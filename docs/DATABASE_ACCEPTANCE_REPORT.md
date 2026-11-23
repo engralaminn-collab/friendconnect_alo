@@ -1,52 +1,86 @@
 # Database Acceptance Report
 
-**Verified:** 2026-11-23 · branch `arena/4f5b1aba-friendconnect-alo`
+**Verified:** 2026-11-23 · branch `arena/4f5b1aba-friendconnect-alo` · commit `47ebb45`
 
 ## Status by engine
 
 | Engine | Status | What was actually executed |
 |---|---|---|
-| SQLite (`src/lib/db-runtime.js`, better-sqlite3) | **PASS (runtime), PARTIAL (migrations)** | Server started, schema auto-created, 33 tables, CRUD across users/sessions/groups/messages/posts verified over HTTP |
-| MySQL 8 + Prisma Client | **BLOCKED** | `prisma generate` and `prisma validate` both fail: `binaries.prisma.sh` is unreachable from the sandbox. The MySQL path was **never executed**. |
-| Migration history | **FAIL** | See below. |
+| SQLite (`src/lib/db-runtime.js`) | **PASS** | 40 tables created; CRUD verified over HTTP for users, sessions, conversations, conversation members, messages, stars, polls, votes, reports, posts, blocks |
+| Migration SQL (new files) | **PASS (parse/execute)** | All three new migrations executed against a SQLite engine after mechanical MySQL→SQLite translation; produced all expected tables. **Not** a MySQL execution. |
+| MySQL 8 + Prisma Client | **BLOCKED** | No `mysql`/`mysqld` binary, no Docker, and `prisma generate` cannot reach `binaries.prisma.sh`. Never executed. |
+| Prisma `migrate deploy` end-to-end | **BLOCKED** | Requires the Prisma engine binary (same blocker) |
 
-> Do not read "database acceptance" as "MySQL accepted". MySQL was not testable here.
+> MySQL acceptance is **BLOCKED**, not PASS. Nothing here was run against a real
+> MySQL server.
 
-## Migration history does not reproduce the schema
+## Reconciliation result (before → after)
 
-Measured by comparing `CREATE TABLE` statements in `prisma/migrations/20260807120000_init/migration.sql`
-against the `model` declarations in each schema:
+The original report said "17 tables missing". The real state was worse: **four** sources
+of truth disagreed.
 
-| Schema | Models declared | Missing from init migration |
+| Source | Models/tables before | After |
 |---|---|---|
-| `prisma/schema.mysql.prisma` | 28 | 5 (`JaraConfig`, `JaraProposal`, `JaraAuditLog`, `JaraMemory`, `JaraGroupConsent`) |
-| `prisma/schema.prisma` | 40 | 17 (`Post`, `Poll`, `Conversation`, `ConversationMember`, `Block`, `Report`, `Attachment`, `FriendRequest`, `VerificationToken`, 5 × `Jara*`) |
+| `prisma/schema.prisma` | 40 | 40 |
+| `prisma/schema.mysql.prisma` | 28 | **40** |
+| `src/lib/db-runtime.js` (SQLite runtime) | 33 | **40** |
+| Tables created by migrations | 23 | **40** |
 
-`scripts/deploy.sh` runs `prisma migrate deploy`, which only replays existing files — so a **fresh**
-MySQL database will be missing 17 tables that the application queries, and `migrate deploy` will
-report success while doing so. `migration_lock.toml` also declares `provider = "mysql"` while
-`prisma/schema.prisma` (the file `deploy.sh` passes to Prisma for MySQL) declares `provider = "sqlite"`.
+**Final:** 40 models → 40 tables, zero missing, verified by script.
 
-**Consequence:** deploying to an existing MySQL database whose tables were created some other way
-will appear to work; a greenfield MySQL deploy will not.
+### Runtime breakage this caused (reproduced)
 
-**Fix required before any MySQL deploy:** pick one canonical schema, regenerate the migration
-history from it (`prisma migrate diff --from-empty --to-schema-datamodel … --script`), and add a CI
-check so drift cannot reappear. This is deliberately **not** done blind here, because rewriting
-migration history on a database that already contains production data is destructive if done wrong.
+Seven models the API calls were absent from the SQLite runtime entirely, so every
+route touching them threw `TypeError: Cannot read properties of undefined (reading 'findMany')`:
 
-## Schema drift found and fixed (SQLite runtime)
+| Route | Before | After |
+|---|---|---|
+| `GET /api/conversations` | 500 | 200 |
+| `GET /api/reports` | 500 | 200 |
+| `POST /api/messages/[id]/star` | 500 | 200 |
+| `GET /api/messages/starred` | 500 | 200 |
 
-`src/lib/db-runtime.js` created `Session` **without** `sessionToken`, while `schema.prisma` and
-`src/lib/session.ts` both write it. The insert threw, and an empty `catch` swallowed the error, so
-every UI login silently failed to create a session — which is why realtime auth never worked.
+`conversationMember` alone appears at 11 call sites — it is the membership check that
+guards direct-message access in `/api/conversations/[id]/messages`. Ten further models
+(`Block`, `FriendRequest`, `Post`, `PostComment`, `PostReaction`, `Poll`, `PollVote`,
+`Report`, `Conversation`, `ConversationMember`) were missing from `schema.mysql.prisma`
+altogether, so a MySQL deployment would have failed at **runtime**, not at migrate time —
+`prisma migrate deploy` would have reported success.
 
-Fixed additively via `ensureColumns()` (`ALTER TABLE "Session" ADD COLUMN sessionToken TEXT`),
-which is nullable and therefore safe for existing rows. `session.create` now writes only the
-canonical `token` column.
+### Duplicate table fixed
 
-## Backup / restore
+`messages/[id]/star` wrote to `db.starredMessage` while `messages/starred` read
+`db.messageStar`, so a starred message was permanently invisible. Canonicalised on
+`MessageStar` (the table the init migration already creates) and fixed the writer.
+Verified: add → visible → remove → gone.
 
-`scripts/backup.sh` and `scripts/restore.sh` exist; neither was executed (no production host).
-`docs/DEPLOYMENT_AND_RECOVERY.md` requires a backup and an integrity check before any production
-migration — that requirement is unchanged and still unmet for production.
+## New migrations
+
+Forward-only and additive (`CREATE TABLE IF NOT EXISTS` only; no `ALTER`, `DROP`,
+`RENAME`, or `DELETE`; no backfill; all FK targets pre-exist):
+
+| Migration | Adds |
+|---|---|
+| `20261123000000_add_jara_governance_tables` | `JaraConfig`, `JaraProposal`, `JaraAuditLog`, `JaraMemory`, `JaraGroupConsent` |
+| `20261123000100_add_social_conversation_tables` | `Block`, `FriendRequest`, `Post`, `PostComment`, `PostReaction`, `Report`, `Conversation`, `ConversationMember`, `Poll`, `PollVote` |
+| `20261123000200_add_attachment_verificationtoken` | `Attachment`, `VerificationToken` |
+
+Each file documents its own rollback (`DROP TABLE`) inline, commented out.
+
+## Also fixed: deploy.sh used the wrong schema
+
+`scripts/deploy.sh` ran `prisma generate` / `prisma migrate deploy` against
+`prisma/schema.prisma`, which declares `provider = "sqlite"`. `production-install.sh`
+copies `schema.mysql.prisma` over it first; `deploy.sh` did not. Fixed — it now performs
+the same swap (backing up the previous file) so MySQL deploys migrate from the MySQL schema.
+
+## Still required before MySQL can be called accepted
+
+1. A real MySQL 8 instance (see `docs/DEPLOY_PANEL_ALOLABS.md`).
+2. `npx prisma generate` with network access to `binaries.prisma.sh`.
+3. `npx prisma migrate deploy` against a **disposable** database first.
+4. `npx prisma migrate diff --from-migrations --to-schema-datamodel` → expect no drift.
+5. Run `scripts/security-regression.cjs` against the MySQL-backed instance.
+6. Only then run it against production, after `scripts/backup.sh` and a verified restore.
+
+Do **not** use `prisma db push` for this; it bypasses migration history.

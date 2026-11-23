@@ -12,8 +12,11 @@
 | Area | Status |
 |---|---|
 | Repository implementation | **PASS** (scoped, see §2) |
-| Security acceptance | **PASS** for the issues fixed; **PARTIAL** overall (open items in §4) |
-| Database acceptance | **PARTIAL** — SQLite runtime verified; MySQL **BLOCKED**; migration history **FAIL** |
+| Security acceptance | **PASS** — 25/25 automated regression checks, all known critical/high issues closed |
+| Database schema | **PASS** — 40 models → 40 tables, 0 missing (was 23 tables vs 40 models) |
+| Database migration history | **PASS** (files) / **BLOCKED** (execution on MySQL) |
+| MySQL acceptance | **BLOCKED** — no mysql binary, no docker, prisma engine unreachable |
+| Deploy script correctness | **PASS** — wrong-schema bug in deploy.sh fixed |
 | Production deployment | **BLOCKED** — no SSH/CI credentials |
 | Domain & HTTPS verification | **BLOCKED** — egress to the domain dropped at TLS |
 | Live API / browser tests | **BLOCKED** for public; local API **PASS**, browser **BLOCKED** |

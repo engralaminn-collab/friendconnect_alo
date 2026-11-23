@@ -11,6 +11,24 @@ Categories are kept separate; one is not claimed as another.
 | ESLint | `npx eslint .` | **PASS** — 0 problems |
 | Build | `npx next build` | **PASS** — exit 0 (one expected warning: `@prisma/client` not generated) |
 | Prisma validate | `npx prisma validate` | **BLOCKED** — engine download blocked |
+| Migration files | executed after MySQL→SQLite translation | **PASS** — all 3 parse and create every table |
+| Schema reconciliation | model-vs-migration script | **PASS** — 40 models → 40 tables, 0 missing |
+
+## 2a. Security regression suite (new, automated)
+
+`scripts/security-regression.cjs` — covers every vulnerability found, so none can
+silently regress. Run with `BASE=http://127.0.0.1:3103 node scripts/security-regression.cjs`.
+
+**Result: 25/25 pass, 0 fail.**
+
+| Group | Checks |
+|---|---|
+| Authentication | wrong password rejected; correct password accepted; custom login verifies password |
+| Authorization | 6 protected routes 401 unauthenticated; member cannot remove group owner (403); member can leave (200) |
+| Privacy | `/api/me` omits `twoFactorSecret`; metrics 401 without/with-bad token, 200 with valid; user search does not match email |
+| Session/realtime | authenticated session yields token (200); unauthenticated rejected (401) |
+| Repaired routes | `/api/conversations`, `/api/reports`, `/api/posts`, `/api/blocks`, `/api/messages/starred` all 200 (were 500) |
+| Star round-trip | add → readable back → unstar → gone |
 
 ## 2. API integration tests (real HTTP, production build, SQLite)
 

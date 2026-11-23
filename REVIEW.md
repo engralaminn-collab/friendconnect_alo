@@ -409,3 +409,49 @@ Gates: `tsc --noEmit` **0 errors**, `eslint .` **0 problems**, `next build` **ex
 - Missing deps `node-turn` / `@socket.io/redis-adapter`.
 - Migration history still does not reproduce the schema.
 - Duplicate Socket.IO implementations (`socket-server.js` vs `mini-services/chat-service`) — only the build breakage was addressed, not the duplication.
+
+---
+
+# Execution pass 2 — 2026-11-23 (schema reconciliation)
+
+## The "17 missing tables" figure understated it
+
+Four sources of truth disagreed. Before → after (`47ebb45`):
+
+| Source | Before | After |
+|---|---|---|
+| `prisma/schema.prisma` | 40 | 40 |
+| `prisma/schema.mysql.prisma` | 28 | **40** |
+| `src/lib/db-runtime.js` | 33 | **40** |
+| tables created by migrations | 23 | **40** |
+
+## Newly found, now fixed
+
+1. **Seven models the API calls did not exist in the runtime at all** —
+   `conversation`, `conversationMember`, `poll`, `pollVote`, `report`,
+   `starredMessage`, `verificationToken`. Every route touching them threw
+   `Cannot read properties of undefined`. Reproduced 500s on `/api/conversations`,
+   `/api/reports`, `/api/messages/[id]/star`; now 200.
+   `conversationMember` guards 11 call sites — including the DM membership check.
+2. **Ten models were missing from `schema.mysql.prisma`** (`Block`, `FriendRequest`,
+   `Post`, `PostComment`, `PostReaction`, `Poll`, `PollVote`, `Report`, `Conversation`,
+   `ConversationMember`). A MySQL deploy would have failed at runtime, not at migrate
+   time — `prisma migrate deploy` reports success regardless.
+3. **Star was write-only.** `messages/[id]/star` wrote `db.starredMessage`;
+   `messages/starred` read `db.messageStar`. Canonicalised on `MessageStar`.
+4. **`deploy.sh` migrated from the wrong schema.** It passed
+   `prisma/schema.prisma` (SQLite) to `prisma generate`/`migrate deploy` for MySQL;
+   only `production-install.sh` performed the `schema.mysql.prisma` swap. Fixed.
+5. **CI did not verify the SSH host key** and had no backup or dirty-tree guard.
+   All three added.
+
+## Still open
+
+- MySQL acceptance: **BLOCKED** (no mysql, no docker, prisma engines unreachable).
+  The migrations parse and execute against SQLite after translation, but have never
+  touched MySQL. See `docs/DATABASE_ACCEPTANCE_REPORT.md`.
+- Jara real inference: **BLOCKED** — `/api/ai/status` → `configured:false`;
+  `/api/jara/chat` returns the canned `fallbackReply`. Confirmed again this pass:
+  a request for `17*23` returned the fallback string, not a number.
+- Production deploy, public verification, browser E2E: **BLOCKED** (no SSH/CI
+  credentials, no browser downloads, no egress to the domain).
