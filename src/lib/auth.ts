@@ -3,6 +3,7 @@ import CredentialsProvider from "next-auth/providers/credentials"
 import bcrypt from "bcryptjs"
 import { randomBytes } from "crypto"
 import { db } from "@/lib/db"
+import { MAX_TOTP_ATTEMPTS, verifySecondFactor } from "@/lib/two-factor"
 
 const DEV_SECRET = "friendconnect-dev-secret-change-in-production"
 
@@ -79,11 +80,28 @@ export const authOptions: NextAuthOptions = {
         // through, so checking it only in /api/auth/login would leave 2FA
         // users able to sign in with a password alone.
         if (user.twoFactorEnabled) {
-          const code = String((credentials as Record<string, unknown>).totp ?? "")
-          const { verifyTotp } = await import("@/lib/totp")
-          if (!code || !user.twoFactorSecret || !verifyTotp(code, user.twoFactorSecret)) {
+          // Finding #6: the challenge accepts a current TOTP code *or* an unused
+          // backup code. Backup codes were previously generated at enrolment and
+          // then never checked anywhere, so recovering a lost device was
+          // impossible. verifySecondFactor also consumes a backup code on use.
+          const code = String(
+            (credentials as Record<string, unknown>).totp ??
+              (credentials as Record<string, unknown>).backupCode ??
+              ""
+          ).trim()
+          if (!code) return null
+
+          if (Number(user.twoFactorAttempts ?? 0) >= MAX_TOTP_ATTEMPTS) return null
+
+          const second = await verifySecondFactor(user, code)
+          if (!second.ok) {
+            await db.user.update({
+              where: { id: user.id },
+              data: { twoFactorAttempts: Number(user.twoFactorAttempts ?? 0) + 1 },
+            })
             return null
           }
+          await db.user.update({ where: { id: user.id }, data: { twoFactorAttempts: 0 } })
         }
 
         await db.user.update({
@@ -174,10 +192,12 @@ export function validatePassword(password: string): { valid: boolean; reason?: s
   return { valid: true }
 }
 
-// Generate a 6-digit OTP code
-export function generateOtp(): string {
-  return Math.floor(100000 + Math.random() * 900000).toString()
-}
+// Generate a 6-digit OTP code.
+//
+// Kept as a re-export so existing imports keep working, but the implementation
+// lives in one-time-code.ts and uses crypto.randomInt. The previous
+// Math.random() version (finding #5) is not predictable-safe.
+export { generateOtp } from "./one-time-code"
 
 // Extract client IP from request headers (for rate limiting / audit)
 export function clientIp(req: Request): string {

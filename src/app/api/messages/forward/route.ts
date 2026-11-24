@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // POST /api/messages/forward  { messageId, targets: [{ receiverId? | groupId? }] }
 export async function POST(req: NextRequest) {
@@ -63,7 +64,7 @@ export async function POST(req: NextRequest) {
       }
     }
     return json({ ok: true, forwarded: created.length, ids: created })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/forward')
   }
 }

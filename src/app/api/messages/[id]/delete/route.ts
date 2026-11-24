@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // POST /api/messages/[id]/delete  { scope: 'me' | 'everyone' }
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -46,7 +47,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }
     }
     return json({ ok: true, scope })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/[id]/delete')
   }
 }

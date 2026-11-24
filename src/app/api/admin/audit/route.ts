@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // GET audit log entries (admin only)
 export async function GET(req: NextRequest) {
@@ -29,7 +30,7 @@ export async function GET(req: NextRequest) {
         user: l.user ? { id: l.user.id, name: l.user.name, username: l.user.username } : null,
       })),
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/admin/audit')
   }
 }

@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // GET /api/jara/config — current live configuration (public for preview, but sensitive fields filtered for non-admin)
 export async function GET(req: NextRequest) {
@@ -49,8 +50,8 @@ export async function GET(req: NextRequest) {
     }
     // For non-admin, filter sensitive AI credentials (none in this model, but keep pattern)
     return json({ config: live })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/jara/config')
   }
 }
 
@@ -90,7 +91,7 @@ export async function PUT(req: NextRequest) {
     })
 
     return json({ ok: true, config: { ...target, isLive: true } })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/jara/config')
   }
 }

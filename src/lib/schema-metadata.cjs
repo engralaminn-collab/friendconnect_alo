@@ -17,7 +17,7 @@ const MODELS = {
   "user": {
     model: "User",
     table: "User",
-    dates: ["lastSeenAt","createdAt","updatedAt","otpExpiry"],
+    dates: ["lastSeenAt","createdAt","updatedAt","otpExpiry","otpSentAt","resetTokenExpiry"],
     bools: ["emailVerified","twoFactorEnabled"],
     uniques: {},
     defaults: () => ({
@@ -29,6 +29,9 @@ const MODELS = {
       createdAt: new Date(),
       updatedAt: new Date(),
       twoFactorEnabled: false,
+      twoFactorBackupUsed: 0,
+      twoFactorAttempts: 0,
+      otpAttempts: 0,
       fileUsedBytes: 0,
       fileQuotaBytes: 104857600,
     }),
@@ -724,7 +727,7 @@ const MODELS = {
 
 /** Flat `{ table, columns[] }` view used to verify a live SQLite schema. */
 const EXPECTED_COLUMNS = {}
-EXPECTED_COLUMNS["User"] = { table: "User", columns: ["id","email","username","name","passwordHash","avatarUrl","bio","status","role","emailVerified","lastSeenAt","createdAt","updatedAt","twoFactorEnabled","twoFactorSecret","twoFactorBackup","otpCode","otpExpiry","fileUsedBytes","fileQuotaBytes","publicKey"] }
+EXPECTED_COLUMNS["User"] = { table: "User", columns: ["id","email","username","name","passwordHash","avatarUrl","bio","status","role","emailVerified","lastSeenAt","createdAt","updatedAt","twoFactorEnabled","twoFactorSecret","twoFactorConfirmedSecret","twoFactorBackup","twoFactorBackupUsed","twoFactorAttempts","otpCode","otpExpiry","otpAttempts","otpSentAt","resetTokenHash","resetTokenExpiry","fileUsedBytes","fileQuotaBytes","publicKey"] }
 EXPECTED_COLUMNS["VerificationToken"] = { table: "VerificationToken", columns: ["id","identifier","token","expires"] }
 EXPECTED_COLUMNS["Session"] = { table: "Session", columns: ["id","userId","sessionToken","token","expiresAt","userAgent","ipAddress","deviceName","createdAt","lastActiveAt"] }
 EXPECTED_COLUMNS["Profile"] = { table: "Profile", columns: ["id","userId","photoUrl","bio","phone","location","birthday","education","work","lastSeen","profileVisibility","messagePermission","callPermission","readReceipts","photoFilter","verified"] }

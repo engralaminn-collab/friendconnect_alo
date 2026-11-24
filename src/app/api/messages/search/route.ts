@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
 import { isMessageDeletedForUser } from '@/lib/ai-input'
+import { handleRouteError } from '@/lib/api-errors'
 
 // GET /api/messages/search?q=QUERY — global search across all my 1:1 + group conversations
 export async function GET(req: NextRequest) {
@@ -85,7 +86,7 @@ export async function GET(req: NextRequest) {
     // sort by recency + limit
     results.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
     return json({ results: results.slice(0, 50) })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/search')
   }
 }

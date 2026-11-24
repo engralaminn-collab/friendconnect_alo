@@ -1,6 +1,7 @@
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // GET admin analytics (admin role only)
 export async function GET() {
@@ -31,7 +32,7 @@ export async function GET() {
       activity: { newUsers7d: newUsers, messages24h },
       security: { verifiedRate: users > 0 ? Math.round((verifiedUsers / users) * 100) : 0, twoFactorRate: users > 0 ? Math.round((twoFactorUsers / users) * 100) : 0 },
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/admin/analytics')
   }
 }

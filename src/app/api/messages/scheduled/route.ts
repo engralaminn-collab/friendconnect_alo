@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // GET my scheduled messages
 export async function GET() {
@@ -28,8 +29,8 @@ export async function GET() {
         groupName: m.group?.name ?? null,
       })),
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/scheduled')
   }
 }
 
@@ -59,8 +60,8 @@ export async function POST(req: NextRequest) {
       },
     })
     return json({ message: { id: msg.id, scheduledFor: msg.scheduledFor!.toISOString() } })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/scheduled')
   }
 }
 
@@ -76,7 +77,7 @@ export async function DELETE(req: NextRequest) {
     if (!msg.scheduledFor) return errorJson('Not a scheduled message', 400)
     await db.message.delete({ where: { id } })
     return json({ ok: true })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/scheduled')
   }
 }

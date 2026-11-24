@@ -2,6 +2,7 @@ import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
 import { filterMessagesVisibleToUser } from '@/lib/ai-input'
+import { handleRouteError } from '@/lib/api-errors'
 
 export async function GET() {
   try {
@@ -87,7 +88,7 @@ export async function GET() {
     const archived = conversations.filter((c) => c.archived)
 
     return json({ conversations: active, archived })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/conversations')
   }
 }

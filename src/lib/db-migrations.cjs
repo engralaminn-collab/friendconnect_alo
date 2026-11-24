@@ -19,7 +19,7 @@
 'use strict'
 
 /** Bump when adding entries. Recorded in `PRAGMA user_version`. */
-const SCHEMA_VERSION = 3
+const SCHEMA_VERSION = 5
 
 /**
  * Each migration: { version, description, statements: [string] }.
@@ -116,6 +116,41 @@ const MIGRATIONS = [
       'ALTER TABLE "File" ADD COLUMN thumbUrl TEXT',
       'CREATE UNIQUE INDEX IF NOT EXISTS "File_url_key" ON "File"(url)',
       'UPDATE "File" SET filename = name WHERE filename IS NULL',
+    ],
+  },
+  {
+    version: 4,
+    description:
+      'One-time codes are stored hashed with an attempt counter and a resend ' +
+      'throttle, and the reset credential is an opaque digest (finding #5).',
+    statements: [
+      'ALTER TABLE "User" ADD COLUMN otpAttempts INTEGER NOT NULL DEFAULT 0',
+      'ALTER TABLE "User" ADD COLUMN otpSentAt TEXT',
+      'ALTER TABLE "User" ADD COLUMN resetTokenHash TEXT',
+      'ALTER TABLE "User" ADD COLUMN resetTokenExpiry TEXT',
+      // Any plaintext code left by an older release must not survive: it can no
+      // longer be verified against the new hashed comparison anyway.
+      'UPDATE "User" SET otpCode = NULL, otpExpiry = NULL WHERE otpCode IS NOT NULL AND otpCode NOT LIKE \'scrypt$%\'',
+    ],
+  },
+  {
+    version: 5,
+    description:
+      '2FA secrets are only trusted once confirmed, and backup codes become ' +
+      'single-use digests instead of unusable comma-joined password hashes ' +
+      '(finding #6).',
+    statements: [
+      'ALTER TABLE "User" ADD COLUMN twoFactorConfirmedSecret TEXT',
+      'ALTER TABLE "User" ADD COLUMN twoFactorBackupUsed INTEGER NOT NULL DEFAULT 0',
+      'ALTER TABLE "User" ADD COLUMN twoFactorAttempts INTEGER NOT NULL DEFAULT 0',
+      // Accounts already enabled keep working: their secret was verified when
+      // the feature was turned on, and is copied into the confirmed column.
+      'UPDATE "User" SET twoFactorConfirmedSecret = twoFactorSecret WHERE twoFactorEnabled = 1 AND twoFactorConfirmedSecret IS NULL',
+      // Backup codes written by the old flow were `hashPassword(code + userId)`
+      // joined by commas: never checked at login, and impossible to verify
+      // cheaply. Clearing them forces a re-generation rather than leaving a
+      // value that looks usable and is not.
+      'UPDATE "User" SET twoFactorBackup = NULL WHERE twoFactorBackup IS NOT NULL AND twoFactorBackup LIKE \'%$%\'',
     ],
   },
 ]

@@ -48,15 +48,50 @@ async function isMessageParticipant(prisma, userId, message) {
   return message.senderId === userId || message.receiverId === userId
 }
 
+/**
+ * Permission values accepted by `Profile.messagePermission` /
+ * `Profile.callPermission`. `PUBLIC` is the legacy spelling of `EVERYONE` and is
+ * still honoured so existing rows keep working.
+ */
+const OPEN_PERMISSIONS = new Set(['PUBLIC', 'EVERYONE'])
+
+/**
+ * May `fromId` interact with `toId`?
+ *
+ * This is the single authorization primitive for both REST and the socket
+ * server — importing one implementation is what stops the two from drifting
+ * (finding #3 asked for REST to enforce what the socket already enforced).
+ *
+ * Order matters: a block always wins, even over an existing friendship.
+ *
+ * @param {object} prisma
+ * @param {string} fromId
+ * @param {string} toId
+ * @param {'messagePermission'|'callPermission'} permission
+ * @returns {Promise<boolean>}
+ */
 async function canInteract(prisma, fromId, toId, permission) {
   if (!fromId || !toId || fromId === toId) return false
   // Preserve the built-in assistant flow; it has no ordinary friendship row.
-  if (toId === 'jara-ai-system-001' || toId === 'jara') return true
+  if (toId === JARA_IDS.JARA_AI || toId === JARA_IDS.JARA_ALIAS) return true
+
   const blocked = await prisma.block.findFirst({
     where: { OR: [{ fromId, toId }, { fromId: toId, toId: fromId }] },
     select: { id: true },
   })
   if (blocked) return false
+
+  // A BLOCKED friendship row can outlive the Block row if data was written by an
+  // older release; treat it as a block too.
+  const blockedFriendship = await prisma.friendship.findFirst({
+    where: {
+      status: 'BLOCKED',
+      OR: [{ requesterId: fromId, receiverId: toId }, { requesterId: toId, receiverId: fromId }],
+    },
+    select: { id: true },
+  })
+  if (blockedFriendship) return false
+
   const friendship = await prisma.friendship.findFirst({
     where: {
       status: 'ACCEPTED',
@@ -65,11 +100,29 @@ async function canInteract(prisma, fromId, toId, permission) {
     select: { id: true },
   })
   if (friendship) return true
-  const user = await prisma.user.findUnique({
-    where: { id: toId },
-    include: { profile: true },
-  })
-  return !!user && user.profile?.[permission] === 'PUBLIC'
+
+  // Not friends: the recipient's profile decides. Defaults are FRIENDS, so a
+  // missing profile is a refusal, not an allow.
+  const user = await prisma.user.findUnique({ where: { id: toId }, include: { profile: true } })
+  if (!user) return false
+  return OPEN_PERMISSIONS.has(String(user.profile?.[permission] || 'FRIENDS'))
+}
+
+/** May `userId` send a direct message to `toId`? */
+function canMessage(prisma, fromId, toId) {
+  return canInteract(prisma, fromId, toId, 'messagePermission')
+}
+
+/** May `userId` call `toId`? */
+function canCall(prisma, fromId, toId) {
+  return canInteract(prisma, fromId, toId, 'callPermission')
+}
+
+/** Where else the assistant id is spelled; keep them in one place. */
+const JARA_IDS = { JARA_AI: 'jara-ai-system-001', JARA_ALIAS: 'jara' }
+
+function isJaraId(id) {
+  return id === JARA_IDS.JARA_AI || id === JARA_IDS.JARA_ALIAS
 }
 
 function eventRateLimit(event) {
@@ -87,5 +140,9 @@ module.exports = {
   isSessionActive,
   isMessageParticipant,
   canInteract,
+  canMessage,
+  canCall,
+  isJaraId,
+  JARA_IDS,
   eventRateLimit,
 }

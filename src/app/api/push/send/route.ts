@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { sendPushNotification } from '@/lib/push'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // POST /api/push/send — send a test push notification to the current user's devices
 export async function POST(req: NextRequest) {
@@ -31,7 +32,7 @@ export async function POST(req: NextRequest) {
       }
     }
     return json({ sent: results.filter(r => r.ok).length, total: subs.length, results })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/push/send')
   }
 }

@@ -1,23 +1,54 @@
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { generateTwoFactorSecret, buildOtpauthUri } from '@/lib/totp'
-import { errorJson, json } from '@/lib/serialize'
+import { json } from '@/lib/serialize'
+import { handleRouteError, RouteError, conflict } from '@/lib/api-errors'
 
-// POST setup 2FA — generates a secret + returns otpauth URI + QR data URL
+/**
+ * POST /api/2fa/setup
+ *
+ * Begin enrolment: generate a secret, store it as *unconfirmed*, and return the
+ * `otpauth://` URI.
+ *
+ * Finding #6: the previous version also returned a `qrDataUrl` pointing at
+ * `api.qrserver.com?...data=<otpauth uri>`, which transmitted the TOTP secret to
+ * a third-party service. That URL is gone; the client renders the QR itself from
+ * `uri` (any local QR library), so the secret never leaves this server.
+ *
+ * Calling setup again before confirming replaces the pending secret, so a lost
+ * QR code can be re-issued without leaving stale material behind.
+ */
 export async function POST() {
   try {
     const me = await getSessionUser()
-    if (!me) return errorJson('Unauthorized', 401)
-    if (me.twoFactorEnabled) return errorJson('2FA already enabled', 400)
+    if (!me) throw new RouteError('UNAUTHORIZED')
+
+    const user = await db.user.findUnique({ where: { id: me.id } })
+    if (!user) throw new RouteError('NOT_FOUND', 'User not found.')
+    if (user.twoFactorEnabled) throw conflict('Two-factor authentication is already enabled.')
+
     const secret = generateTwoFactorSecret()
-    // store secret but don't enable yet (verify step enables)
-    await db.user.update({ where: { id: me.id }, data: { twoFactorSecret: secret } })
-    const uri = buildOtpauthUri(me.email, secret)
-    // generate a simple QR code as a data URL using a public QR API fallback
-    // (the frontend can also render the QR from the URI via a lib, but a data URL is simpler)
-    const qrDataUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(uri)}`
-    return json({ secret, uri, qrDataUrl })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+    await db.user.update({
+      where: { id: me.id },
+      data: {
+        // Unconfirmed until /api/2fa/verify checks a code against it.
+        twoFactorSecret: secret,
+        twoFactorConfirmedSecret: null,
+        twoFactorAttempts: 0,
+      },
+    })
+
+    return json({
+      uri: buildOtpauthUri(user.email, secret),
+      // The secret is returned here *because this is enrolment* and the client
+      // must display it for manual entry. It is not returned by any other route.
+      secret,
+      // No remote QR service: render `uri` locally.
+      qr: { type: 'otpauth-uri', value: buildOtpauthUri(user.email, secret) },
+      digits: 6,
+      period: 30,
+    })
+  } catch (error) {
+    return handleRouteError(error, 'POST /api/2fa/setup')
   }
 }

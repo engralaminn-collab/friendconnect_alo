@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // POST mark a story as viewed
 export async function POST(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -15,7 +16,7 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
       create: { storyId: id, userId: me.id },
     })
     return json({ ok: true })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/stories/[id]/view')
   }
 }

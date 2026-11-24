@@ -34,12 +34,29 @@ model User {
 
   // 2FA
   twoFactorEnabled   Boolean  @default(false)
+  // Unconfirmed secret from /api/2fa/setup. Only /api/2fa/verify reads it, and
+  // only until the first valid code confirms it (finding #6).
   twoFactorSecret    String?
+  // Confirmed TOTP secret. Set at the same moment 2FA becomes enabled.
+  twoFactorConfirmedSecret String?
+  // Newline-separated SHA-256 digests of the backup codes; each is removed on
+  // use so it can never be redeemed twice.
   twoFactorBackup    String?
+  twoFactorBackupUsed Int     @default(0)
+  // Failed-code counter for the login challenge, cleared on success.
+  twoFactorAttempts  Int      @default(0)
 
-  // OTP
+  // One-time codes (password reset / e-mail verification).
+  // `otpCode` holds a scrypt hash, never the code itself (finding #5).
   otpCode            String?
   otpExpiry          DateTime?
+  // Brute-force counter; the code is destroyed once MAX_ATTEMPTS is reached.
+  otpAttempts        Int       @default(0)
+  // Earliest time a new code may be issued, to throttle re-sends.
+  otpSentAt          DateTime?
+  // SHA-256 digest of the opaque, single-use credential issued by verify-otp.
+  resetTokenHash     String?
+  resetTokenExpiry   DateTime?
 
   // File quota
   fileUsedBytes      Int      @default(0)

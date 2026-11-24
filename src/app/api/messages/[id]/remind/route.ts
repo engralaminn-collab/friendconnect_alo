@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // POST /api/messages/[id]/remind { remindAt } — set a reminder for a message
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -23,8 +24,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       data: { userId: me.id, messageId: id, remindAt },
     })
     return json({ reminder: { id: reminder.id, remindAt: reminder.remindAt.toISOString() } })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/[id]/remind')
   }
 }
 
@@ -36,7 +37,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
     const { id } = await params
     await db.messageReminder.deleteMany({ where: { userId: me.id, messageId: id } })
     return json({ ok: true })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/[id]/remind')
   }
 }

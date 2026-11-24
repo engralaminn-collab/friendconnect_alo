@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // GET my drafts (all, or filtered by ?peerId=&isGroup=)
 export async function GET(req: NextRequest) {
@@ -20,8 +21,8 @@ export async function GET(req: NextRequest) {
     return json({
       drafts: drafts.map((d) => ({ peerId: d.peerId, isGroup: d.isGroup, content: d.content, updatedAt: d.updatedAt.toISOString() })),
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/drafts')
   }
 }
 
@@ -46,8 +47,8 @@ export async function POST(req: NextRequest) {
       create: { userId: me.id, peerId, isGroup, content },
     })
     return json({ ok: true })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/drafts')
   }
 }
 
@@ -61,7 +62,7 @@ export async function DELETE(req: NextRequest) {
     if (!peerId) return errorJson('peerId required', 400)
     await db.messageDraft.deleteMany({ where: { userId: me.id, peerId, isGroup } })
     return json({ ok: true })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/drafts')
   }
 }

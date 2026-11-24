@@ -1,46 +1,99 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
-import { generateOtp, clientIp } from '@/lib/auth'
-import { errorJson, json } from '@/lib/serialize'
+import { clientIp } from '@/lib/auth'
+import { json } from '@/lib/serialize'
 import { rateLimit } from '@/lib/cache'
 import { sendEmail, isEmailConfigured } from '@/lib/email'
 import { audit } from '@/lib/audit'
+import { handleRouteError, invalid, RouteError } from '@/lib/api-errors'
+import {
+  generateOtp,
+  hashCode,
+  OTP_TTL_MS,
+  RESEND_COOLDOWN_SECONDS,
+} from '@/lib/one-time-code'
+
+/**
+ * POST /api/auth/forgot
+ *
+ * Start a password reset. Finding #5:
+ *  - the code is generated with a CSPRNG and stored as a scrypt hash,
+ *  - re-sends are throttled per account as well as per IP,
+ *  - the response is byte-identical whether or not the account exists, so it
+ *    cannot be used to enumerate users,
+ *  - the code is never included in the response (the old development-only
+ *    `payload.otp` shortcut is gone; use the server log or the console mailer).
+ */
+
+const GENERIC = 'If an account exists for that address, a reset code has been sent.'
 
 export async function POST(req: NextRequest) {
   try {
     const ip = clientIp(req) || 'unknown'
-    const rl = await rateLimit(`forgot:${ip}`, 5, 300)
-    if (!rl.allowed) return errorJson('Too many reset requests', 429)
+    const perIp = await rateLimit(`forgot:ip:${ip}`, 5, 300)
+    if (!perIp.allowed) {
+      throw new RouteError('RATE_LIMITED', 'Too many reset requests. Try again later.')
+    }
 
-    const body = await req.json()
-    const identifier = String(body.email || body.username || '').trim().toLowerCase()
-    if (!identifier) return errorJson('Email or username required', 400)
+    const body = await req.json().catch(() => null)
+    if (!body || typeof body !== 'object') throw invalid('Invalid request body')
+
+    const identifier = String(
+      (body as Record<string, unknown>).email ?? (body as Record<string, unknown>).username ?? '',
+    )
+      .trim()
+      .toLowerCase()
+    if (!identifier) throw invalid('Email or username required')
+
     const user = await db.user.findFirst({
       where: { OR: [{ email: identifier }, { username: identifier }] },
     })
-    // Do not leak account existence
+
+    // Always answer the same way and take a similar amount of time.
     if (!user) {
-      return json({ ok: true, message: 'If an account exists, a reset code was sent.' })
+      await new Promise((resolve) => setTimeout(resolve, 120))
+      return json({ ok: true, message: GENERIC })
     }
-    const otp = generateOtp()
-    const expiry = new Date(Date.now() + 1000 * 60 * 10)
+
+    // Per-account throttle: an attacker who knows the address cannot keep the
+    // code window alive or flood the inbox.
+    const sentAt = user.otpSentAt instanceof Date ? user.otpSentAt.getTime() : 0
+    if (sentAt && Date.now() - sentAt < RESEND_COOLDOWN_SECONDS * 1000) {
+      return json({ ok: true, message: GENERIC, retryAfter: RESEND_COOLDOWN_SECONDS })
+    }
+
+    const code = generateOtp()
+    const now = new Date()
     await db.user.update({
       where: { id: user.id },
-      data: { otpCode: otp, otpExpiry: expiry },
+      data: {
+        otpCode: await hashCode(code),
+        otpExpiry: new Date(now.getTime() + OTP_TTL_MS),
+        otpAttempts: 0,
+        otpSentAt: now,
+        // Issuing a new code invalidates any credential from a previous round.
+        resetTokenHash: null,
+        resetTokenExpiry: null,
+      },
     })
-    await sendEmail(user.email, 'FriendConnect password reset', `Your reset code is ${otp}. It expires in 10 minutes.`)
+
+    await sendEmail(
+      user.email,
+      'FriendConnect password reset',
+      `Your password reset code is ${code}. It expires in 10 minutes and can be used once. ` +
+        `If you did not request this, you can ignore this email.`,
+    )
     await audit({ userId: user.id, action: 'password_reset_requested', ip })
 
-    const payload: { ok: boolean; message: string; otp?: string } = {
-      ok: true,
-      message: 'If an account exists, a reset code was sent.',
+    // Deliberately no `otp` field. When mail is not configured the code is
+    // printed to the server log only, so a developer can continue without it
+    // ever becoming an API response.
+    if (!isEmailConfigured()) {
+      console.log(`[auth] e-mail is not configured; reset code for ${user.id}: ${code}`)
     }
-    if (process.env.NODE_ENV !== 'production' && !isEmailConfigured()) {
-      payload.otp = otp
-    }
-    return json(payload)
-  } catch (e: unknown) {
-    const err = e as Error
-    return errorJson(err?.message || 'Server error', 500)
+
+    return json({ ok: true, message: GENERIC })
+  } catch (error) {
+    return handleRouteError(error, 'POST /api/auth/forgot')
   }
 }

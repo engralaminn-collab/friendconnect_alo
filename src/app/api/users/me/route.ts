@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { ensureProfile, errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 export async function PUT(req: NextRequest) {
   try {
@@ -63,7 +64,7 @@ export async function PUT(req: NextRequest) {
           : null,
       },
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/users/me')
   }
 }

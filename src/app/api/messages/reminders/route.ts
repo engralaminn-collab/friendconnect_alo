@@ -1,6 +1,7 @@
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // GET my active reminders
 export async function GET() {
@@ -34,7 +35,7 @@ export async function GET() {
         }
       }),
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/reminders')
   }
 }

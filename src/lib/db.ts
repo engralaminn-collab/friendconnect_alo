@@ -12,6 +12,5 @@
  */
 import { createLazyClient, getBackendInfo } from './db-backend'
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 export const db = createLazyClient() as any
 export { getBackendInfo }

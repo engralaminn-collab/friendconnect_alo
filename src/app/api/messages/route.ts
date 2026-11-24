@@ -3,6 +3,18 @@ import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
 import { filterMessagesVisibleToUser } from '@/lib/ai-input'
+import { canInteract, isJaraId } from '@/lib/socket-security.cjs'
+import { grantMessageFileAccess } from '@/lib/file-access'
+import { handleRouteError } from '@/lib/api-errors'
+
+/** Reject an attachment URL the caller does not own (finding #3). */
+async function assertOwnsAttachment(userId: string, fileUrl: unknown) {
+  if (!fileUrl) return null
+  const url = String(fileUrl)
+  const owned = await db.file.findFirst({ where: { url, ownerId: userId }, select: { id: true } })
+  if (!owned) return 'Attachment is not owned by the sender'
+  return null
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -62,18 +74,26 @@ export async function GET(req: NextRequest) {
     }
 
     if (!userId) return errorJson('userId or groupId required', 400)
-    // ensure not blocked (skip for Jara — Jara is always accessible)
-    const isJara = userId === 'jara-ai-system-001' || userId === 'jara'
-    const blocked = !isJara ? await db.friendship.findFirst({
-      where: {
-        status: 'BLOCKED',
-        OR: [
-          { requesterId: me.id, receiverId: userId },
-          { requesterId: userId, receiverId: me.id },
-        ],
-      },
-    }) : null
-    if (blocked) return errorJson('Cannot view messages', 403)
+    // Finding #3: this used to look for Friendship.status === 'BLOCKED', which
+    // the old request-only flow never wrote, so a block did not stop anyone from
+    // reading the thread. `canInteract` reads the Block table and also refuses a
+    // stale BLOCKED friendship row.
+    const isJara = isJaraId(userId)
+    if (!isJara && !(await canInteract(db, me.id, userId, 'messagePermission'))) {
+      // Reading an existing thread is allowed for friends even when the
+      // recipient has since tightened their message permission: only *new*
+      // messages are gated by that. A block, however, hides the thread.
+      const blocked = await db.block.findFirst({
+        where: {
+          OR: [
+            { fromId: me.id, toId: userId },
+            { fromId: userId, toId: me.id },
+          ],
+        },
+        select: { id: true },
+      })
+      if (blocked) return errorJson('Cannot view messages', 403)
+    }
 
     const q = req.nextUrl.searchParams.get('q')
     const now = new Date()
@@ -128,8 +148,8 @@ export async function GET(req: NextRequest) {
         reactions: m.reactions.map((r) => ({ emoji: r.emoji, userId: r.user.id, userName: r.user.name })),
       })),
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, 'GET /api/messages')
   }
 }
 
@@ -150,18 +170,18 @@ export async function POST(req: NextRequest) {
       if (!membership) return errorJson('Not a member', 403)
     }
     if (receiverId) {
-      const isJara = receiverId === 'jara-ai-system-001' || receiverId === 'jara'
-      const blocked = !isJara ? await db.friendship.findFirst({
-        where: {
-          status: 'BLOCKED',
-          OR: [
-            { requesterId: me.id, receiverId },
-            { requesterId: receiverId, receiverId: me.id },
-          ],
-        },
-      }) : null
-      if (blocked) return errorJson('Blocked', 403)
+      // Block + messagePermission, identical to the socket path (finding #3).
+      const isJara = isJaraId(receiverId)
+      if (!isJara && !(await canInteract(db, me.id, receiverId, 'messagePermission'))) {
+        return errorJson('Not permitted to message this user', 403)
+      }
     }
+
+    // Attachments must belong to the sender, or a caller could attach any
+    // private file URL it guesses/knows to a message it sends.
+    const attachmentError = await assertOwnsAttachment(me.id, body.fileUrl)
+    if (attachmentError) return errorJson(attachmentError, 403)
+
     const msg = await db.message.create({
       data: {
         senderId: me.id,
@@ -177,6 +197,10 @@ export async function POST(req: NextRequest) {
         status: 'SENT',
       },
     })
+    // Finding #10: participants get an indexed download grant instead of the
+    // download endpoint scanning Message for a matching fileUrl.
+    await grantMessageFileAccess(msg)
+
     return json({
       message: {
         id: msg.id,
@@ -194,8 +218,7 @@ export async function POST(req: NextRequest) {
         createdAt: msg.createdAt.toISOString(),
       },
     })
-  } catch (e: unknown) {
-    const err = e as Error
-    return errorJson(err?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, 'POST /api/messages')
   }
 }

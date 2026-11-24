@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
 import { canInteract } from '@/lib/socket-security.cjs'
+import { handleRouteError } from '@/lib/api-errors'
 
 export async function GET() {
   try {
@@ -28,8 +29,8 @@ export async function GET() {
         duration: c.duration ?? null,
       })),
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/calls')
   }
 }
 
@@ -82,7 +83,7 @@ export async function POST(req: NextRequest) {
       return json({ ok: true })
     }
     return errorJson('Unknown action', 400)
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/calls')
   }
 }

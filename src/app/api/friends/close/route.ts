@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // GET my close friends
 export async function GET() {
@@ -25,8 +26,8 @@ export async function GET() {
       }
     })
     return json({ closeFriends })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/friends/close')
   }
 }
 
@@ -53,7 +54,7 @@ export async function POST(req: NextRequest) {
 
     await db.friendship.update({ where: { id: friendship.id }, data: updateData })
     return json({ ok: true })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/friends/close')
   }
 }

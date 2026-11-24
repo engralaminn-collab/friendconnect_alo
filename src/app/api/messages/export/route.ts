@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
 import { filterMessagesVisibleToUser } from '@/lib/ai-input'
+import { handleRouteError } from '@/lib/api-errors'
 
 // GET /api/messages/export?userId=ID — export a 1:1 conversation as JSON (downloadable)
 export async function GET(req: NextRequest) {
@@ -80,7 +81,7 @@ export async function GET(req: NextRequest) {
         replyToId: m.replyToId,
       })),
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/export')
   }
 }

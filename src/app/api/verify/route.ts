@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // POST /api/verify — request verification (sets status to pending)
 export async function POST(req: NextRequest) {
@@ -26,8 +27,8 @@ export async function POST(req: NextRequest) {
       },
     })
     return json({ ok: true, verified: 'pending' })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/verify')
   }
 }
 
@@ -38,7 +39,7 @@ export async function GET() {
     if (!me) return errorJson('Unauthorized', 401)
     const profile = await db.profile.findUnique({ where: { userId: me.id }, select: { verified: true } })
     return json({ verified: profile?.verified ?? 'unverified' })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/verify')
   }
 }
