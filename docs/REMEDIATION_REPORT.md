@@ -300,6 +300,47 @@ covered by a test:
 | Poll message used `messageType` | poll creation always 500ed | uses `type` |
 | Generated MySQL schema widened indexed columns to `TEXT` | `prisma validate` rejected the variant in CI ("Native type `Text` cannot be unique in MySQL"), and the MySQL migration could not be applied | indexed columns kept at `VARCHAR(191)`; the generator now fails if a `WIDE_TEXT` column is indexed, and `tests/security/schema-variants.test.cjs` enforces it locally |
 
+## Defects found while writing the tests (not in the original 17)
+
+Neither of these was visible from reading the code, and both were found because the
+end-to-end suite finally exercises the client and the server together.
+
+### Messages sent from the UI were silently dropped
+
+`ChatView` emits `message:send` with `{ conversationId, content }`; `socket-server.js`
+only implemented the older `{ receiverId }` / `{ groupId }` handlers. The emit fell
+through the `!data.receiverId` guard, was answered `{ ok: false, error: 'Unauthorized' }`,
+and the client only surfaced `res.error` — which that path does not set, so nothing
+was shown. The REST POST that *would* have stored the message was only a fallback
+for when the socket was disconnected, i.e. exactly when it was not needed. The two
+paths also disagreed on what a message is: the socket stored `receiverId` without
+`conversationId`, and the thread renders from `conversationId`, so even a stored
+message would never have appeared. Fixed server-side (`conversation:join`,
+conversation-aware `message:send`, `typing:start`/`typing:stop`, `message:read`,
+`message:react`, and member-wide `message:delete`), and the client now persists
+through REST first, so a dropped broadcast costs the live update rather than the
+message. Regression: `tests/integration/socket-conversation.test.cjs`.
+
+### The built-in SQLite runtime ignored relation filters
+
+The most serious finding in this pass. `db-runtime.js`'s `cond()` had no relation
+support: a filter like `members: { some: { userId } }` reached `pushFilter()`, which
+recognised no operator in the value and emitted nothing, so the condition silently
+left the `WHERE` clause and the query matched **every row**. Every authorization
+check expressed as a relation filter was a no-op. Concretely,
+`GET /api/messages?userId=<peer>` — which needs the two users' shared direct
+conversation to see conversation-shaped messages — returned other people's threads
+to anyone. The runtime now implements `some`/`every`/`none` and nested to-one
+filters as `EXISTS`/`NOT EXISTS` subqueries, and rejects any field it does not
+recognise instead of ignoring it, so a filter can never quietly disappear again.
+Regression: the relation-filter test in `tests/integration/db-runtime.test.cjs`
+(fails against the previous runtime) and the third-party read assertion in
+`tests/integration/security.test.cjs`.
+
+This is a warning about the built-in backend generally: it is a hand-written
+Prisma subset, and a *missing* feature there fails open rather than loud. The
+unknown-field rejection added here is the general defence.
+
 ## Residual risks and open items
 
 Stated plainly rather than buried:

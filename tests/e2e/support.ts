@@ -168,24 +168,23 @@ export async function befriend(
  * same thread; both users therefore open the same conversation.
  */
 export async function openChatWith(page: Page, peer: Account) {
-  const existing = page.getByTestId('sidebar-conversation').filter({ hasText: peer.name })
-  const newChat = page.getByTestId('new-chat')
-
-  // Wait for the authenticated shell before inspecting the sidebar. The New
-  // chat button is rendered in every sidebar state, so it is a reliable "shell
-  // is up" signal.
+  // Wait for the authenticated shell before inspecting the sidebar. The New chat
+  // button is rendered in every sidebar state, so it is a reliable "shell is up"
+  // signal.
   //
-  // Do NOT assert `existing.or(newChat)` here. Playwright's strict mode rejects
-  // a locator that resolves to more than one element, and both are visible at
-  // the same time whenever the conversation already exists — so the assertion
-  // passed only until the second call, then failed with a strict mode
-  // violation instead of opening the thread.
+  // Do NOT assert `existing.or(newChat)` here. Playwright's strict mode rejects a
+  // locator that resolves to more than one element, and both are visible at the
+  // same time whenever the conversation already exists — so the assertion passed
+  // only until the second call, then failed with a strict-mode violation instead
+  // of opening the thread.
+  const newChat = page.getByTestId('new-chat')
   await expect(newChat).toBeVisible({ timeout: 30_000 })
 
+  const existing = page.getByTestId('sidebar-conversation').filter({ hasText: peer.name })
   // `existing` is a filter over the rendered list, so a positive count is a
-  // settled answer. A zero count is not (the conversations request may still be
-  // in flight), but falling through to the New chat dialog is safe: creating a
-  // direct conversation is idempotent because it has exactly two members.
+  // settled answer. A zero count is not (the conversations request may still be in
+  // flight), but falling through to the New chat dialog is safe: creating a direct
+  // conversation is idempotent because it has exactly two members.
   if ((await existing.count()) === 0) {
     await newChat.click()
     const friend = page.getByTestId('new-chat-friend').filter({ hasText: peer.name })

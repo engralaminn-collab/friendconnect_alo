@@ -97,12 +97,36 @@ export async function GET(req: NextRequest) {
 
     const q = req.nextUrl.searchParams.get('q')
     const now = new Date()
+    // A direct conversation stores its messages with `conversationId` (the field
+    // the chat view renders from), so filtering on sender/receiver alone hides them
+    // from this endpoint. The thread is the direct conversation shared by the two
+    // users — it must contain *both* as members. `members: { some: ... }` twice
+    // reads as two separate membership rows, which is correct, but it also matches
+    // a group-style conversation that happens to contain both; requiring
+    // `type: 'direct'` and an exactly-two-member set keeps a third party's thread
+    // from leaking in (an earlier version of this fix omitted the `me.id` check and
+    // let an unrelated user read the thread).
+    const sharedDirectConversations = await db.conversation.findMany({
+      where: {
+        type: 'direct',
+        AND: [
+          { members: { some: { userId: me.id } } },
+          { members: { some: { userId } } },
+        ],
+      },
+      select: { id: true, members: { select: { userId: true } } },
+    })
+    const directConversationIds = sharedDirectConversations
+      .filter((conversation: { members: Array<{ userId: string }> }) => conversation.members.length === 2)
+      .map((conversation: { id: string }) => conversation.id)
     const messages = await db.message.findMany({
       where: {
         groupId: null,
+        // A blocked pair is refused above, so both shapes are safe to include.
         OR: [
           { senderId: me.id, receiverId: userId },
           { senderId: userId, receiverId: me.id },
+          ...(directConversationIds.length ? [{ conversationId: { in: directConversationIds } }] : []),
         ],
         ...(before ? { createdAt: { lt: new Date(before) } } : {}),
         ...(q ? { content: { contains: q } } : {}),
