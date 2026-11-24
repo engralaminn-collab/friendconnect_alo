@@ -43,6 +43,22 @@ export async function trackedPage(browser: Browser, label: string): Promise<Page
   page.on('requestfailed', (request) =>
     logs.push(`[requestfailed] ${request.method()} ${request.url()} ${request.failure()?.errorText ?? ''}`),
   )
+  // Record API traffic: knowing which calls the app made and what they returned is
+  // what distinguishes "the server has no data" from "the client dropped it".
+  page.on('response', async (response) => {
+    const url = response.url()
+    if (!url.includes('/api/')) return
+    let detail = ''
+    if (/\/api\/(conversations|me|friends)(\?|$)/.test(url)) {
+      try {
+        const text = await response.text()
+        detail = ` ${text.slice(0, 300)}`
+      } catch {
+        detail = ' (body unavailable)'
+      }
+    }
+    logs.push(`[api] ${response.status()} ${response.request().method()} ${new URL(url).pathname}${detail}`)
+  })
   tracked.push({ label, page, logs })
   return page
 }
@@ -63,6 +79,22 @@ export async function dumpDiagnostics(testInfo: TestInfo) {
       lines.push('--- rendered text ---', body || '(empty body)')
     } catch (error) {
       lines.push(`--- rendered text unavailable: ${(error as Error).message.slice(0, 200)}`)
+    }
+    try {
+      const rows = await page.getByTestId('sidebar-conversation').count()
+      lines.push(`--- sidebar conversation rows: ${rows}`)
+    } catch {
+      // ignore
+    }
+    // The same session's view of the data at failure time.
+    for (const path of ['/api/me', '/api/conversations']) {
+      try {
+        const response = await page.request.get(path)
+        const text = await response.text()
+        lines.push(`--- GET ${path} -> ${response.status()} ${text.replace(/\s+/g, ' ').slice(0, 500)}`)
+      } catch (error) {
+        lines.push(`--- GET ${path} failed: ${(error as Error).message.slice(0, 200)}`)
+      }
     }
   }
   try {
