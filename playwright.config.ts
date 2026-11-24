@@ -30,7 +30,13 @@ export default defineConfig({
   workers: 1,
   fullyParallel: false,
   retries: process.env.CI ? 1 : 0,
-  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : [['list']],
+  // `json` feeds scripts/report-e2e-failures.mjs, which turns a failure into a
+  // check-run annotation: the HTML report and traces are artifacts on blob
+  // storage, which a reviewer may not be able to download, while annotations are
+  // returned by the checks API.
+  reporter: process.env.CI
+    ? [['list'], ['html', { open: 'never' }], ['json', { outputFile: 'test-results/report.json' }]]
+    : [['list']],
   use: {
     baseURL: BASE_URL,
     trace: 'retain-on-failure',

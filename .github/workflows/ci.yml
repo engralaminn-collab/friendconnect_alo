@@ -173,6 +173,10 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Playwright end-to-end tests
+        id: e2e
+        # `continue-on-error` keeps the failure reportable: the next step turns it
+        # into annotations, and the job still fails because of the check below.
+        continue-on-error: true
         shell: bash
         # Runs against the production build produced above, on a throwaway
         # database created by playwright.config.ts. Previously the specs existed
@@ -182,6 +186,20 @@ jobs:
         # failure here is usually a UI contract change rather than a flake: read
         # the trace before retrying.
         run: npm run test:e2e
+
+      - name: Report end-to-end failures as annotations
+        # Annotations are readable through the checks API even when the HTML
+        # report and raw logs are not downloadable.
+        if: steps.e2e.outcome == 'failure'
+        shell: bash
+        run: node scripts/report-e2e-failures.mjs test-results/report.json
+
+      - name: Fail the job if end-to-end tests failed
+        if: steps.e2e.outcome == 'failure'
+        shell: bash
+        run: |
+          echo "Playwright end-to-end tests failed; see the annotations above and the uploaded report."
+          exit 1
 
       - name: Upload Playwright report
         if: failure()
