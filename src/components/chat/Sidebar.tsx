@@ -105,7 +105,7 @@ export function Sidebar({
       const r = await fetch("/api/friends", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ toId }),
+        body: JSON.stringify({ action: "request", targetId: toId }),
       })
       const body = await r.json()
       if (!r.ok) throw new Error(body?.error)
@@ -116,33 +116,38 @@ export function Sidebar({
     }
   }
 
-  async function handleAccept(id: string) {
+  // fetch() resolves for 4xx/5xx too, so every handler below checks r.ok before
+  // reporting success. Previously a 404 (the endpoint did not exist) still showed
+  // "Friend request accepted".
+  async function postAction(url: string, body: Record<string, unknown> | undefined, success: string, opts?: { onDone?: () => void }) {
     try {
-      await fetch(`/api/friends/request/${id}/accept`, { method: "POST" })
-      toast.success("Friend request accepted")
-      loadFriends()
-      onConversationChanged()
-    } catch {
-      toast.error("Failed")
+      const r = await fetch(url, {
+        method: "POST",
+        headers: body ? { "Content-Type": "application/json" } : undefined,
+        body: body ? JSON.stringify(body) : undefined,
+      })
+      if (!r.ok) {
+        const payload = await r.json().catch(() => null)
+        throw new Error(payload?.error || `Request failed (${r.status})`)
+      }
+      toast.success(success)
+      await loadFriends()
+      opts?.onDone?.()
+    } catch (e: any) {
+      toast.error(e?.message || "Failed")
     }
   }
-  async function handleReject(id: string) {
-    try {
-      await fetch(`/api/friends/request/${id}/reject`, { method: "POST" })
-      toast.success("Request rejected")
-      loadFriends()
-    } catch {
-      toast.error("Failed")
-    }
+
+  function handleAccept(id: string) {
+    return postAction(`/api/friends/request/${id}/accept`, undefined, "Friend request accepted", {
+      onDone: onConversationChanged,
+    })
   }
-  async function handleCancel(id: string) {
-    try {
-      await fetch(`/api/friends/request/${id}/cancel`, { method: "POST" })
-      toast.success("Request cancelled")
-      loadFriends()
-    } catch {
-      toast.error("Failed")
-    }
+  function handleReject(id: string) {
+    return postAction(`/api/friends/request/${id}/reject`, undefined, "Request rejected")
+  }
+  function handleCancel(id: string) {
+    return postAction(`/api/friends/request/${id}/cancel`, undefined, "Request cancelled")
   }
 
   const filteredConversations = query.trim()
@@ -229,6 +234,7 @@ export function Sidebar({
                 <button
                   key={c.id}
                   onClick={() => onSelect(c.id)}
+                  data-testid="sidebar-conversation"
                   className={`w-full flex items-center gap-2 px-3 py-2.5 hover:bg-muted transition text-left ${
                     selectedId === c.id ? "bg-muted" : ""
                   }`}
@@ -366,6 +372,7 @@ export function Sidebar({
       {/* Bottom: new chat + signout */}
       <div className="border-t border-border p-2 flex items-center gap-1">
         <Button
+          data-testid="new-chat"
           className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white"
           onClick={onOpenNewChat}
         >

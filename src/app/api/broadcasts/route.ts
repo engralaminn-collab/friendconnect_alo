@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // GET my broadcast lists
 export async function GET() {
@@ -22,8 +23,8 @@ export async function GET() {
         createdAt: l.createdAt.toISOString(),
       })),
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/broadcasts')
   }
 }
 
@@ -77,8 +78,8 @@ export async function POST(req: NextRequest) {
     }
 
     return errorJson('Unknown action', 400)
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/broadcasts')
   }
 }
 
@@ -93,7 +94,7 @@ export async function DELETE(req: NextRequest) {
     if (!list || list.ownerId !== me.id) return errorJson('Not found', 404)
     await db.broadcastList.delete({ where: { id } })
     return json({ ok: true })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/broadcasts')
   }
 }

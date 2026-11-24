@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { errorJson, json } from '@/lib/serialize'
 import { db } from '@/lib/db'
 import { JARA_ID } from '@/lib/jara'
+import { handleRouteError } from '@/lib/api-errors'
 
 // GET /api/jara/profile — Jara's public profile (anyone can view)
 export async function GET() {
@@ -51,7 +52,7 @@ export async function GET() {
       },
       profile: user.profile,
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/jara/profile')
   }
 }

@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // GET all my chat preferences (for the conversation list to show pin/mute/disappearing/wallpaper)
 export async function GET() {
@@ -20,8 +21,8 @@ export async function GET() {
         folder: p.folder,
       })),
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/preferences')
   }
 }
 
@@ -56,7 +57,7 @@ export async function POST(req: NextRequest) {
         folder: pref.folder,
       },
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/preferences')
   }
 }

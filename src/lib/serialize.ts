@@ -42,6 +42,13 @@ export function json(data: unknown, status = 200) {
   })
 }
 
-export function errorJson(message: string, status = 400) {
-  return json({ error: message }, status)
+/**
+ * Error response body: `{ error, code? }`.
+ *
+ * `code` is a stable identifier clients can branch on; `error` is the message a
+ * human reads. Never pass a raw exception message here — use
+ * `handleRouteError` from `@/lib/api-errors`, which sanitises and logs.
+ */
+export function errorJson(message: string, status = 400, code?: string) {
+  return json(code ? { error: message, code } : { error: message }, status)
 }

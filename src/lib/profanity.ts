@@ -1,5 +1,9 @@
 // Simple profanity filter — blocks common bad words.
 // For production, use a more comprehensive list or an AI moderation service.
+//
+// STATUS: not wired up. Nothing calls this, so message content is NOT filtered.
+// A word-list filter is also easy to bypass; treat it as a starting point for
+// moderation, not as an enforcement control.
 
 const BAD_WORDS = [
   "fuck", "shit", "ass", "bitch", "bastard", "damn", "crap", "dick",

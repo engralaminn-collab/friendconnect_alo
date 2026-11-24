@@ -107,13 +107,32 @@ export function AuthScreen({ onAuthed }: { onAuthed: () => void }) {
               <form onSubmit={handleLogin} className="space-y-3">
                 <div className="space-y-1">
                   <Label htmlFor="identifier">Email or username</Label>
-                  <Input id="identifier" value={identifier} onChange={(e) => setIdentifier(e.target.value)} required autoFocus />
+                  <Input
+                    id="identifier"
+                    data-testid="auth-identifier"
+                    value={identifier}
+                    onChange={(e) => setIdentifier(e.target.value)}
+                    required
+                    autoFocus
+                  />
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="password">Password</Label>
-                  <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+                  <Input
+                    id="password"
+                    type="password"
+                    data-testid="auth-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                  />
                 </div>
-                <Button type="submit" className="w-full bg-emerald-500 hover:bg-emerald-600 text-white" disabled={loading}>
+                <Button
+                  type="submit"
+                  data-testid="auth-submit"
+                  className="w-full bg-emerald-500 hover:bg-emerald-600 text-white"
+                  disabled={loading}
+                >
                   {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
                   Sign in
                 </Button>

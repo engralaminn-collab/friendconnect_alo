@@ -287,8 +287,10 @@ export default function Home() {
   }
 
   // Layout: sidebar + main chat
+  // `data-testid="app-shell"` marks "authenticated shell is rendered"; the
+  // end-to-end suite waits on it instead of guessing at markup.
   return (
-    <div className="h-screen flex bg-background text-foreground overflow-hidden">
+    <div data-testid="app-shell" className="h-screen flex bg-background text-foreground overflow-hidden">
       {/* Sidebar - hidden on mobile when a chat is open */}
       <div className={`${selectedId || jaraView ? "hidden md:flex" : "flex"} w-full md:w-[340px] lg:w-[380px] shrink-0 flex-col`}>
         {/* Jara entry - always on top */}

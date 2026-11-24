@@ -25,7 +25,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       sender: { select: { id: true, username: true, name: true, avatarUrl: true } },
       attachments: true,
       reactions: { include: { user: { select: { id: true, username: true } } } },
-      reads: { select: { userId: true, readAt: true } },
       replyTo: { select: { id: true, content: true, senderId: true, sender: { select: { username: true, name: true } } } },
     },
   })
@@ -64,7 +63,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       sender: { select: { id: true, username: true, name: true, avatarUrl: true } },
       attachments: true,
       reactions: { include: { user: { select: { id: true, username: true } } } },
-      reads: { select: { userId: true, readAt: true } },
     },
   })
 

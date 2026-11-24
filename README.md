@@ -2,6 +2,16 @@
 
 Private social platform: friends, chat, groups, stories, voice/video calls.
 
+## Documentation
+
+| Document | What it covers |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | processes, request/authorization flow, database layer, schema pipeline, files, realtime |
+| [`docs/TESTING.md`](docs/TESTING.md) | every test suite, what it proves, what is verified in CI only |
+| [`docs/REMEDIATION_REPORT.md`](docs/REMEDIATION_REPORT.md) | the 17 review findings: what was wrong, what changed, how it is proven, residual risks |
+| [`docs/DEPLOYMENT_AND_RECOVERY.md`](docs/DEPLOYMENT_AND_RECOVERY.md) | deploy, backup, restore, rollback |
+| [`docs/archive/`](docs/archive/README.md) | superseded audits and build history — **not** current behaviour |
+
 ## Stack
 
 - Next.js 16 (App Router) + TypeScript + Tailwind CSS 4 + shadcn/ui
@@ -128,6 +138,7 @@ Deployment to the confirmed target, and the access it requires:
 | `scripts/deploy.sh` | install, build, migrate, PM2 reload, health |
 | `scripts/backup.sh` / `restore.sh` | DB + uploads |
 | `scripts/healthcheck.sh` | curl app + socket |
+| `scripts/backfill-file-access.cjs` | re-derive `FileAccess` grants for existing data (idempotent) |
 | `coturn/install.sh` | TURN server |
 
 ## Calls / images not working? Checklist

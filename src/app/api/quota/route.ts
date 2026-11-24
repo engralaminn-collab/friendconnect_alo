@@ -1,6 +1,7 @@
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // GET file quota for the current user
 export async function GET() {
@@ -19,7 +20,7 @@ export async function GET() {
       quotaMB: (quota / 1048576).toFixed(2),
       percent: quota > 0 ? Math.round((used / quota) * 100) : 0,
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/quota')
   }
 }

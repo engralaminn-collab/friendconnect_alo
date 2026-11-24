@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -23,8 +24,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       create: { groupId: id, userId: targetId, role: 'MEMBER' },
     })
     return json({ ok: true })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/groups/[id]/members')
   }
 }
 
@@ -59,7 +60,7 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
 
     await db.groupMember.deleteMany({ where: { groupId: id, userId: targetId } })
     return json({ ok: true })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/groups/[id]/members')
   }
 }

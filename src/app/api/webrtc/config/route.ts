@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { getSessionUser } from '@/lib/session'
 import { isTurnConfigured, STUN_SERVERS, TURN_SERVERS, turnCredentials } from '@/lib/ice'
 import { json, errorJson } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 const LOOPBACK = /^(turns?:)(127\.0\.0\.1|localhost|0\.0\.0\.0|\[::1\])(?=[:?]|$)/i
 
@@ -36,8 +37,7 @@ export async function GET(req: NextRequest) {
       turnConfigured,
       iceTransportPolicy: 'all',
     })
-  } catch (e: unknown) {
-    const err = e as Error
-    return errorJson(err?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/webrtc/config')
   }
 }

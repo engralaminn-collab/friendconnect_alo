@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // POST /api/stories/[id]/highlight { highlight: true|false } — toggle highlight (saves story from expiry)
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -20,7 +21,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       data: { isHighlight: highlight },
     })
     return json({ ok: true, isHighlight: updated.isHighlight })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/stories/[id]/highlight')
   }
 }

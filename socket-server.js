@@ -31,6 +31,12 @@ const {
   canInteract,
   eventRateLimit,
 } = require('./src/lib/socket-security.cjs')
+const fileAccess = require('./src/lib/file-access.cjs')
+
+// Finding #10: socket-sent attachments must create the same `FileAccess`
+// grants the REST route creates, otherwise the attachment the recipient just
+// received over the socket returns 403 when they open it.
+fileAccess.setStoreProvider(() => prisma)
 
 const PORT = Number(process.env.SOCKET_PORT || 3003)
 const APP_ORIGIN = process.env.APP_ORIGIN || process.env.NEXTAUTH_URL || true
@@ -241,7 +247,113 @@ io.on('connection', (socket) => {
 
   const requireAuth = () => socket.data.userId
 
+  /**
+   * Conversation-scoped helpers.
+   *
+   * The chat UI talks in conversations (`conversationId`), which is how the schema
+   * models a thread: `Message.conversationId` is the field the chat view reads
+   * back. Only the older DM/group handlers existed here, so every send from the UI
+   * was dropped — `message:send` without `receiverId` was refused with
+   * "Unauthorized", and a message stored without `conversationId` never appeared in
+   * the thread.
+   */
+  function conversationIdOf(data) {
+    return typeof data?.conversationId === 'string' ? data.conversationId : null
+  }
+
+  async function memberIdsOf(conversationId) {
+    const members = await prisma.conversationMember.findMany({
+      where: { conversationId },
+      select: { userId: true },
+    }).catch(() => [])
+    return members.map((m) => m.userId)
+  }
+
+  async function requireMembership(conversationId, userId) {
+    if (!conversationId || !userId) return null
+    return prisma.conversationMember.findUnique({
+      where: { conversationId_userId: { conversationId, userId } },
+      select: { conversationId: true },
+    }).catch(() => null)
+  }
+
+  /** Members other than the sender; a direct conversation has exactly one. */
+  async function conversationPeers(conversationId, userId) {
+    return (await memberIdsOf(conversationId)).filter((id) => id !== userId)
+  }
+
+  function messagePayload(msg) {
+    return {
+      id: msg.id,
+      senderId: msg.senderId,
+      receiverId: msg.receiverId ?? null,
+      groupId: msg.groupId ?? null,
+      conversationId: msg.conversationId ?? null,
+      content: msg.content,
+      type: msg.type,
+      fileUrl: msg.fileUrl,
+      fileName: msg.fileName,
+      fileSize: msg.fileSize,
+      mimeType: msg.mimeType,
+      replyToId: msg.replyToId,
+      status: msg.status,
+      createdAt: msg.createdAt instanceof Date ? msg.createdAt.toISOString() : msg.createdAt,
+    }
+  }
+
+  socket.on('conversation:join', async (conversationId) => {
+    const me = requireAuth()
+    if (!me || typeof conversationId !== 'string') return
+    // Joining is an acknowledgement only: every broadcast goes to `user:<id>`
+    // rooms, so being in this room grants no read access on its own.
+    if (!(await requireMembership(conversationId, me))) return
+    socket.join(`conversation:${conversationId}`)
+  })
+
   socket.on('message:send', async (data, ack) => {
+    const conversationId = conversationIdOf(data)
+    if (conversationId) {
+      const senderId = requireAuth()
+      const fail = (error) => { if (typeof ack === 'function') ack({ ok: false, error }) }
+      if (!senderId) return fail('Unauthorized')
+      if (!(await requireMembership(conversationId, senderId))) return fail('Not a member')
+      const content = String(data.content || '')
+      if (content.length > 10000) return fail('Message too long')
+      if (!content.trim()) return fail('Empty message')
+      try {
+        const peers = await conversationPeers(conversationId, senderId)
+        const msg = await prisma.message.create({
+          data: {
+            conversationId,
+            senderId,
+            // A direct conversation keeps the receiver so the DM-oriented
+            // endpoints (receipts, notifications) stay meaningful; groups leave it
+            // null.
+            receiverId: peers.length === 1 ? peers[0] : null,
+            content,
+            type: data.type || 'text',
+            replyToId: typeof data.replyToId === 'string' ? data.replyToId : null,
+            status: 'SENT',
+          },
+        })
+        const payload = messagePayload(msg)
+        for (const userId of await memberIdsOf(conversationId)) {
+          emitToUser(userId, 'message:new', payload)
+        }
+        if (typeof ack === 'function') ack({ ok: true, message: payload, tempId: data.tempId })
+        for (const peer of peers) {
+          notifyUser(peer, {
+            type: 'message',
+            title: socket.data.user?.name || 'New message',
+            body: content.slice(0, 80),
+          }).catch(() => {})
+        }
+      } catch (e) {
+        if (typeof ack === 'function') ack({ ok: false, error: e.message })
+      }
+      return
+    }
+
     const senderId = requireAuth()
     if (!senderId || !data?.receiverId || typeof data.receiverId !== 'string') {
       if (typeof ack === 'function') ack({ ok: false, error: 'Unauthorized' })
@@ -278,6 +390,7 @@ io.on('connection', (socket) => {
           status: await isUserOnline(data.receiverId) ? 'DELIVERED' : 'SENT',
         },
       })
+      await fileAccess.grantMessageFileAccess(msg)
       const payload = {
         id: msg.id,
         senderId,
@@ -347,6 +460,7 @@ io.on('connection', (socket) => {
         },
         include: { sender: { include: { profile: true } } },
       })
+      await fileAccess.grantMessageFileAccess(msg)
       const payload = {
         id: msg.id,
         senderId,
@@ -406,6 +520,90 @@ io.on('connection', (socket) => {
     }
   })
 
+  // --- Conversation-scoped events the chat UI emits -----------------------
+  // `typing:start`/`typing:stop` carry a conversation id (the older `typing` event
+  // carries a receiver id), and `message:read` marks the conversation read and
+  // emits the per-message receipt the UI listens for.
+  async function relayTyping(conversationId, isTyping) {
+    const me = requireAuth()
+    if (!me || typeof conversationId !== 'string') return
+    if (!(await requireMembership(conversationId, me))) return
+    for (const userId of await memberIdsOf(conversationId)) {
+      if (userId !== me) emitToUser(userId, 'typing:update', { conversationId, userId: me, isTyping })
+    }
+  }
+
+  socket.on('typing:start', (data) => relayTyping(typeof data === 'string' ? data : conversationIdOf(data), true).catch(() => {}))
+  socket.on('typing:stop', (data) => relayTyping(typeof data === 'string' ? data : conversationIdOf(data), false).catch(() => {}))
+
+  socket.on('message:read', async (data = {}) => {
+    const me = requireAuth()
+    const conversationId = conversationIdOf(data)
+    if (!me || !conversationId) return
+    if (!(await requireMembership(conversationId, me))) return
+    await prisma.conversationMember.updateMany({
+      where: { conversationId, userId: me },
+      data: { lastReadAt: new Date() },
+    }).catch(() => {})
+    const members = await memberIdsOf(conversationId)
+    for (const userId of members) {
+      if (userId !== me) emitToUser(userId, 'message:read', { conversationId, userId: me })
+    }
+
+    // Direct conversations additionally carry a per-message delivery status.
+    const peers = members.filter((id) => id !== me)
+    if (peers.length !== 1) return
+    const profile = await prisma.profile.findUnique({ where: { userId: me }, select: { readReceipts: true } }).catch(() => null)
+    if (profile?.readReceipts === false) return
+    const senderId = peers[0]
+    const unread = await prisma.message.findMany({
+      where: { conversationId, senderId, status: { not: 'SEEN' } },
+      select: { id: true },
+    }).catch(() => [])
+    if (!unread.length) return
+    await prisma.message.updateMany({
+      where: { conversationId, senderId, status: { not: 'SEEN' } },
+      data: { status: 'SEEN', seenAt: new Date() },
+    }).catch(() => {})
+    for (const row of unread) emitToUser(senderId, 'message:status', { id: row.id, status: 'SEEN' })
+  })
+
+  // `message:react` toggles a reaction and is what the chat UI emits; the older
+  // `reaction:add` / `reaction:remove` events remain for other clients.
+  socket.on('message:react', async (data = {}, ack) => {
+    const me = requireAuth()
+    const messageId = typeof data.messageId === 'string' ? data.messageId : null
+    const emoji = typeof data.emoji === 'string' ? data.emoji : ''
+    const fail = (error) => { if (typeof ack === 'function') ack({ ok: false, error }) }
+    if (!me || !messageId) return fail('Unauthorized')
+    if (!emoji || emoji.length > 32) return fail('Invalid emoji')
+    const message = await prisma.message.findUnique({ where: { id: messageId } }).catch(() => null)
+    if (!message) return fail('Not found')
+    // A non-participant gets the same answer as a missing message, so an id cannot
+    // be probed for existence.
+    if (!(await isMessageParticipant(prisma, me, message))) return fail('Not found')
+    const existing = await prisma.messageReaction.findUnique({
+      where: { messageId_userId_emoji: { messageId, userId: me, emoji } },
+    }).catch(() => null)
+    if (existing) {
+      await prisma.messageReaction.delete({ where: { id: existing.id } }).catch(() => {})
+    } else {
+      await prisma.messageReaction.create({ data: { messageId, userId: me, emoji } }).catch(() => {})
+    }
+    const payload = {
+      messageId,
+      conversationId: message.conversationId ?? null,
+      userId: me,
+      emoji,
+      op: existing ? 'remove' : 'add',
+    }
+    const recipients = message.conversationId
+      ? await memberIdsOf(message.conversationId)
+      : [message.senderId, message.receiverId].filter(Boolean)
+    for (const userId of recipients) emitToUser(userId, 'message:reaction', payload)
+    if (typeof ack === 'function') ack({ ok: true, ...payload })
+  })
+
   socket.on('reaction:add', async ({ messageId, emoji } = {}) => {
     const me = requireAuth()
     if (!me || typeof messageId !== 'string' || typeof emoji !== 'string' || !emoji || emoji.length > 32) return
@@ -451,11 +649,16 @@ io.on('connection', (socket) => {
       where: { id: messageId },
       data: { deletedFor, content: deletedFor === 'everyone' ? '' : msg.content },
     })
-    const payload = { id: messageId, deletedFor }
-    if (msg.receiverId) {
-      emitToUser(msg.receiverId, 'message:deleted', payload)
-      emitToUser(msg.senderId, 'message:deleted', payload)
-    }
+    // Withdrawing an attachment revokes only the grants this message created,
+    // so the same upload stays reachable in any other thread that shares it.
+    if (deletedFor === 'everyone') await fileAccess.revokeMessageGrants(msg)
+    const payload = { id: messageId, conversationId: msg.conversationId ?? null, deletedFor }
+    // A conversation message must reach every member: the chat UI drops the row
+    // from an open thread on this event.
+    const recipients = msg.conversationId
+      ? await memberIdsOf(msg.conversationId)
+      : [msg.senderId, msg.receiverId].filter(Boolean)
+    for (const userId of recipients) emitToUser(userId, 'message:deleted', payload)
   })
 
   socket.on('message:edit', async ({ messageId, content }, ack) => {

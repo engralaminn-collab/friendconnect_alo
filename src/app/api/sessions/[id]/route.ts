@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { audit } from '@/lib/audit'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // DELETE revoke a session (logout a device)
 export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -16,7 +17,7 @@ export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ 
     await db.session.delete({ where: { id } })
     await audit({ userId: me.id, action: 'session_revoke', resource: `session:${id}`, userAgent: session.userAgent, ip: session.ipAddress })
     return json({ ok: true })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/sessions/[id]')
   }
 }

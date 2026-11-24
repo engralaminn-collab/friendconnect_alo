@@ -10,6 +10,7 @@ import { uploadDir } from '@/lib/paths'
 import { rateLimit } from '@/lib/cache'
 import { clientIp } from '@/lib/auth'
 import { safeDownloadName, validateUpload, sanitizeRasterImage } from '@/lib/upload-security.cjs'
+import { grantFileAccess } from '@/lib/file-access'
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024
 const IMAGE_MIME = new Set(['image/jpeg', 'image/png', 'image/webp'])
@@ -82,11 +83,16 @@ export async function POST(req: NextRequest) {
       },
     })
     createdFileId = fileRecord.id
+
+    // Finding #10: record the owner's download grant at upload time. Deriving it
+    // later meant every download scanned the Message table.
+    await grantFileAccess(fileRecord.url, me.id, 'owner')
+
     await db.user.update({ where: { id: me.id }, data: { fileUsedBytes: { increment: finalSize } } })
     usageIncremented = true
     logger.info('file uploaded', { userId: me.id, fileId: id, size: finalSize, mime: finalMime })
     return json({ file: { id, url: fileRecord.url, name: originalName, mimeType: finalMime, size: finalSize } })
-  } catch (e: unknown) {
+  } catch (error) {
     // Roll back every completed stage: failed DB writes must not leave an
     // orphaned storage object or a dangling File row.
     if (createdFileId) await db.file.delete({ where: { id: createdFileId } }).catch(() => {})
@@ -94,8 +100,7 @@ export async function POST(req: NextRequest) {
       await db.user.update({ where: { id: ownerId }, data: { fileUsedBytes: { decrement: finalSize } } }).catch(() => {})
     }
     if (diskPath) await unlink(diskPath).catch(() => {})
-    const err = e as Error
-    logger.error('file upload failed', { error: err?.message })
+    logger.error('file upload failed', { error: (error as Error)?.message })
     return errorJson('Upload failed', 500)
   }
 }

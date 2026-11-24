@@ -2,6 +2,7 @@ import { db } from '@/lib/db'
 import { clearSessionCookie, getCurrentSessionToken, getLegacyCookieSessionToken, getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
 import { audit } from '@/lib/audit'
+import { handleRouteError } from '@/lib/api-errors'
 
 export async function POST() {
   try {
@@ -17,8 +18,7 @@ export async function POST() {
     }
     await clearSessionCookie()
     return json({ ok: true })
-  } catch (e: unknown) {
-    const err = e as Error
-    return errorJson(err?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/auth/logout')
   }
 }

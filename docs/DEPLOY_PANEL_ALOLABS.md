@@ -99,4 +99,4 @@ curl -fsS http://127.0.0.1:3003/health
   Set `OLLAMA_URL` or a provider key, then confirm `GET /api/ai/status` → `configured:true`.
 - **Audio/video calls** — needs a real browser with camera/mic, plus reachable TURN.
 - **Browser E2E** — Playwright browsers cannot be downloaded here.
-- **MySQL path** — untested end to end (see DATABASE_ACCEPTANCE_REPORT.md).
+- **MySQL path** — untested end to end (see [TESTING.md](TESTING.md#what-is-deliberately-not-covered)).

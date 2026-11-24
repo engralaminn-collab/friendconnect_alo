@@ -2,6 +2,7 @@ import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { isTurnConfigured, STUN_SERVERS, TURN_SERVERS, TURN_REALM } from '@/lib/ice'
 import { json, errorJson } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // GET /api/webrtc/diagnostics — authenticated diagnostics (no secrets exposed)
 // Reports signaling/STUN/TURN/Redis status + recent call stats for the user.
@@ -46,7 +47,7 @@ export async function GET() {
         ? 'TURN not configured. For calls across different networks (WiFi↔Mobile Data, different ISPs, different countries), configure a TURN server. See coturn/README.md.'
         : 'TURN configured. Cross-network calls should work.',
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/webrtc/diagnostics')
   }
 }

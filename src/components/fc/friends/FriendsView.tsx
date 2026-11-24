@@ -91,6 +91,16 @@ export function FriendsView() {
     }
   }, [])
 
+  const loadRequests = useCallback(async () => {
+    try {
+      const data = await api<{ incoming: Req[]; outgoing: Req[] }>('/api/friends/requests')
+      setIncoming(data.incoming || [])
+      setOutgoing(data.outgoing || [])
+    } catch {
+      // keep previous state on a transient failure
+    }
+  }, [])
+
   const addSuggestion = useCallback(async (id: string) => {
     setActionLoading((s) => ({ ...s, [id + 'request']: true }))
     try {
@@ -118,12 +128,29 @@ export function FriendsView() {
     }
   }, [tab, loadSuggestions])
 
+  /**
+   * Accept / reject / cancel go through the dedicated request endpoints so the
+   * server can enforce "only the recipient may accept"; everything else uses
+   * the single POST /api/friends action contract.
+   */
   const doAction = async (targetId: string, action: string, msg?: string) => {
     setActionLoading((s) => ({ ...s, [targetId + action]: true }))
     try {
-      await api('/api/friends', { method: 'POST', body: JSON.stringify({ action, targetId }) })
+      const endpoint =
+        action === 'accept'
+          ? `/api/friends/request/${targetId}/accept`
+          : action === 'reject'
+            ? `/api/friends/request/${targetId}/reject`
+            : action === 'cancel'
+              ? `/api/friends/request/${targetId}/cancel`
+              : null
+      if (endpoint) {
+        await api(endpoint, { method: 'POST' })
+      } else {
+        await api('/api/friends', { method: 'POST', body: JSON.stringify({ action, targetId }) })
+      }
       if (msg) toast.success(msg)
-      await loadFriends()
+      await Promise.all([loadFriends(), loadRequests()])
       await runSearch(query)
     } catch (e: any) {
       toast.error(e.message || 'Failed')

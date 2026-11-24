@@ -1,107 +1,129 @@
+/**
+ * Typed facade over the grant-based file download authorization introduced for
+ * finding #10.
+ *
+ * The implementation lives in `file-access.cjs` because the standalone Socket.IO
+ * server (`socket-server.js`) is plain CommonJS and must issue the *same* grants
+ * when a message with an attachment is sent over the socket. Duplicating the
+ * logic in two languages is how the REST and socket paths drifted apart before,
+ * so the logic exists once and both entry points import it.
+ *
+ * Download decisions resolve in this order, cheapest first:
+ *   1. the caller owns the file                         (one indexed read)
+ *   2. an explicit, unexpired grant exists              (one indexed read)
+ *   3. the URL is a public profile photo / avatar       (public media only)
+ *   4. the URL belongs to an approved Jara asset        (public media only)
+ *
+ * Steps 3 and 4 never consult message contents, so they cannot widen access to
+ * private chat attachments. Grants are written when a file becomes reachable
+ * (upload, message send, story post) and removed when sharing stops.
+ * `backfillFileAccess()` plus migration v2 cover data written before this model
+ * existed.
+ */
 import { db } from '@/lib/db'
+import {
+  setStoreProvider,
+  grantFileAccess as coreGrantFileAccess,
+  revokeFileAccess as coreRevokeFileAccess,
+  revokeMessageGrants as coreRevokeMessageGrants,
+  grantMessageFileAccess as coreGrantMessageFileAccess,
+  grantStoryFileAccess as coreGrantStoryFileAccess,
+  grantGroupFileAccess as coreGrantGroupFileAccess,
+  canDownloadFile as coreCanDownloadFile,
+  backfillFileAccess as coreBackfillFileAccess,
+} from './file-access.cjs'
 
-/** A stored file is private unless its owner has explicitly shared it. */
-export async function canDownloadFile(userId: string, file: { ownerId: string; url: string }, store: typeof db = db): Promise<boolean> {
-  if (file.ownerId === userId) return true
+export type FileAccessSource =
+  | 'owner'
+  | 'message_sender'
+  | 'message_recipient'
+  | 'group_member'
+  | 'story_viewer'
+  | 'profile_public'
+  | 'jara_asset'
 
-  // Files attached to a direct message are visible only to its two participants.
-  const messages = await store.message.findMany({
-    where: {
-      fileUrl: file.url,
-      deletedFor: { not: 'everyone' },
-      OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }],
-    },
-    take: 100,
-  })
-  for (const message of messages) {
-    if (message.senderId === userId || message.receiverId === userId) return true
-    if (message.groupId) {
-      const membership = await store.groupMember.findUnique({
-        where: { groupId_userId: { groupId: message.groupId, userId } },
-        select: { id: true },
-      })
-      if (membership) return true
-    }
-  }
+export interface StoredFile {
+  ownerId: string
+  url: string
+}
 
-  // Profile photos are public only when the profile is public; FRIENDS profiles
-  // continue to work for accepted friends without making private files public.
-  const profile = await store.profile.findFirst({ where: { photoUrl: file.url } })
-  if (profile) {
-    if (profile.userId === userId) return true
-    const blocked = await store.block.findFirst({
-      where: { OR: [{ fromId: userId, toId: profile.userId }, { fromId: profile.userId, toId: userId }] },
-      select: { id: true },
-    })
-    if (blocked) return false
-    if (profile.profileVisibility === 'PUBLIC') return true
-    if (profile.profileVisibility === 'FRIENDS') {
-      const friendship = await store.friendship.findFirst({
-        where: {
-          status: 'ACCEPTED',
-          OR: [
-            { requesterId: userId, receiverId: profile.userId },
-            { requesterId: profile.userId, receiverId: userId },
-          ],
-        },
-      })
-      if (friendship) return true
-    }
-  }
-  const avatarOwners = await store.user.findMany({ where: { avatarUrl: file.url }, take: 100 })
-  for (const avatarOwner of avatarOwners) {
-    if (avatarOwner.id === userId) return true
-    const blocked = await store.block.findFirst({
-      where: { OR: [{ fromId: userId, toId: avatarOwner.id }, { fromId: avatarOwner.id, toId: userId }] },
-      select: { id: true },
-    })
-    if (blocked) continue
-    const ownerProfile = await store.profile.findFirst({ where: { userId: avatarOwner.id } })
-    if (ownerProfile?.profileVisibility === 'PUBLIC') return true
-    if (ownerProfile?.profileVisibility === 'FRIENDS') {
-      const friendship = await store.friendship.findFirst({
-        where: {
-          status: 'ACCEPTED',
-          OR: [
-            { requesterId: userId, receiverId: avatarOwner.id },
-            { requesterId: avatarOwner.id, receiverId: userId },
-          ],
-        },
-      })
-      if (friendship) return true
-    }
-  }
+/** The database handle (or a test double implementing the queries used here). */
+type Store = typeof db
 
-  // Approved Jara reference media is presented to authenticated users by the
-  // existing Jara UI. Older SQLite runtimes may not expose this optional model.
-  const jaraAssetModel = (store as any).jaraAsset
-  if (jaraAssetModel?.findFirst) {
-    const approvedAsset = await jaraAssetModel.findFirst({ where: { fileUrl: file.url, isApproved: true } }).catch(() => null)
-    if (approvedAsset) return true
-  }
+/**
+ * The CJS core takes its store by injection so tests can pass doubles and the
+ * app never has to import the database at module scope. Register the app handle
+ * lazily: `db` is a lazy proxy, so wrapping it in a thunk keeps `next build`
+ * database-free.
+ */
+setStoreProvider(() => db)
 
-  // Stories are shared with accepted friends by the existing stories API.
-  const stories = await store.story.findMany({
-    where: { userId: { not: userId }, content: file.url, OR: [{ expiresAt: { gt: new Date() } }, { isHighlight: true }] },
-    take: 100,
-  })
-  for (const story of stories) {
-    const [friendship, blocked] = await Promise.all([
-      store.friendship.findFirst({
-        where: {
-          status: 'ACCEPTED',
-          OR: [
-            { requesterId: userId, receiverId: story.userId },
-            { requesterId: story.userId, receiverId: userId },
-          ],
-        },
-      }),
-      store.block.findFirst({
-        where: { OR: [{ fromId: userId, toId: story.userId }, { fromId: story.userId, toId: userId }] },
-        select: { id: true },
-      }),
-    ])
-    if (friendship && !friendship.storiesMuted && !blocked) return true
-  }
-  return false
+/** Grant access to a file, ignoring the unique-constraint race on (fileUrl, userId). */
+export async function grantFileAccess(
+  fileUrl: string,
+  userId: string,
+  source: FileAccessSource,
+  options: { messageId?: string | null; expiresAt?: Date | null } = {},
+  store: Store = db,
+): Promise<void> {
+  await coreGrantFileAccess(fileUrl, userId, source, options, store)
+}
+
+/** Remove a grant. Used when a message is deleted or sharing is withdrawn. */
+export async function revokeFileAccess(fileUrl: string, userId: string, store: Store = db): Promise<void> {
+  await coreRevokeFileAccess(fileUrl, userId, store)
+}
+
+/**
+ * Revoke only the grants created by one message.
+ *
+ * Deleting a message for everyone clears its `fileUrl`, but the same upload may
+ * be shared in other threads, so revoking by URL would break those. Grants carry
+ * the `messageId` that created them, which is the precise key.
+ */
+export async function revokeMessageGrants(
+  message: { id: string } | null | undefined,
+  store: Store = db,
+): Promise<void> {
+  await coreRevokeMessageGrants(message, store)
+}
+
+/** Grant access for every participant of a message that carries an attachment. */
+export async function grantMessageFileAccess(
+  message: {
+    id: string
+    fileUrl?: string | null
+    senderId: string
+    receiverId?: string | null
+    groupId?: string | null
+  },
+  store: Store = db,
+): Promise<void> {
+  await coreGrantMessageFileAccess(message, store)
+}
+
+/** Grant story media to accepted, unblocked, unmuted friends. */
+export async function grantStoryFileAccess(
+  story: { userId: string; content?: string | null; mediaUrl?: string | null; expiresAt?: Date | null },
+  store: Store = db,
+): Promise<void> {
+  await coreGrantStoryFileAccess(story, store)
+}
+
+/** Grant access to current members of a group. */
+export async function grantGroupFileAccess(fileUrl: string, groupId: string, store: Store = db): Promise<void> {
+  await coreGrantGroupFileAccess(fileUrl, groupId, store)
+}
+
+/** True when `userId` may download `file`. */
+export async function canDownloadFile(userId: string, file: StoredFile, store: Store = db): Promise<boolean> {
+  return Boolean(await coreCanDownloadFile(userId, file, store))
+}
+
+/** Idempotently rebuild owner/participant grants for existing data. */
+export async function backfillFileAccess(
+  store: Store = db,
+  options: { limit?: number } = {},
+): Promise<{ files: number; grants: number }> {
+  return coreBackfillFileAccess(store, options)
 }

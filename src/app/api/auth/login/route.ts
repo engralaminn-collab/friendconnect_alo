@@ -2,10 +2,11 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { verifyPassword, needsRehash, hashPassword, clientIp, validatePassword } from '@/lib/auth'
 import { createSession, setSessionCookie } from '@/lib/session'
-import { verifyTotp } from '@/lib/totp'
+import { MAX_TOTP_ATTEMPTS, verifySecondFactor } from '@/lib/two-factor'
 import { audit } from '@/lib/audit'
 import { errorJson, json } from '@/lib/serialize'
 import { rateLimit } from '@/lib/cache'
+import { handleRouteError } from '@/lib/api-errors'
 
 export async function POST(req: NextRequest) {
   try {
@@ -35,10 +36,28 @@ export async function POST(req: NextRequest) {
       if (!totp) {
         return json({ requires2fa: true, message: 'Two-factor authentication required' }, 200)
       }
-      const totpOk = user.twoFactorSecret ? verifyTotp(String(totp), user.twoFactorSecret) : false
-      if (!totpOk) {
+
+      // Finding #6: honour an unused backup code here too, so losing the
+      // authenticator does not lock the account out permanently, and cap the
+      // number of failed challenges.
+      if (Number(user.twoFactorAttempts ?? 0) >= MAX_TOTP_ATTEMPTS) {
+        await audit({ userId: user.id, action: 'login_2fa_locked', ip })
+        return errorJson('Too many incorrect codes. Try again later.', 429)
+      }
+
+      const second = await verifySecondFactor(user, String(totp))
+      if (!second.ok) {
+        await db.user.update({
+          where: { id: user.id },
+          data: { twoFactorAttempts: Number(user.twoFactorAttempts ?? 0) + 1 },
+        })
+        await audit({ userId: user.id, action: 'login_2fa_failed', ip })
         return errorJson('Invalid authenticator code', 401)
       }
+      if (second.method === 'backup') {
+        await audit({ userId: user.id, action: 'login_2fa_backup_code_used', ip })
+      }
+      await db.user.update({ where: { id: user.id }, data: { twoFactorAttempts: 0 } })
     }
 
     if (needsRehash(user.passwordHash)) {
@@ -64,8 +83,7 @@ export async function POST(req: NextRequest) {
         role: user.role,
       },
     })
-  } catch (error: unknown) {
-    const err = error as Error
-    return errorJson(err.message || 'Login failed', 500)
+  } catch (error) {
+    return handleRouteError(error, 'POST /api/auth/login')
   }
 }

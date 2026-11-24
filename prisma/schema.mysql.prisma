@@ -1,9 +1,20 @@
-// FriendConnect - Private Social Platform schema
+// ============================================================================
+// GENERATED FILE — DO NOT EDIT BY HAND.
+//
+// Generated from prisma/schema.prisma by scripts/generate-schema-variants.mjs
+// Provider: mysql
+// Wide-text columns are declared in scripts/lib/schema-codegen.mjs (WIDE_TEXT).
+//
+// Edit prisma/schema.prisma instead, then run:
+//   node scripts/generate-schema-variants.mjs
+// CI runs the same generator in --check mode and fails on any manual edit.
+// ============================================================================
+
+// Matches the field names used by socket-server.js, all 100 API routes,
+// and all FC components. This is the single source of truth.
+
 generator client {
-  provider   = "prisma-client-js"
-  // Rust-free Prisma Client: no query-engine binary, uses a JS driver adapter
-  // (src/lib/db-runtime.js). Works the same on servers and in Next standalone builds.
-  engineType = "client"
+  provider = "prisma-client-js"
 }
 
 datasource db {
@@ -11,237 +22,228 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model User {
-  id           String   @id @default(cuid())
-  email        String   @unique
-  phone         String?   @unique
-  username     String   @unique
-  passwordHash String   @db.VarChar(255)
-  name         String
-  createdAt    DateTime @default(now())
-  updatedAt    DateTime @updatedAt
-  // Additive (round 11): enterprise auth
-  emailVerified     Boolean  @default(false)
-  twoFactorSecret   String?
-  twoFactorEnabled  Boolean  @default(false)
-  twoFactorBackup   String?  @db.Text
-  role              String   @default("user") // user | admin
-  fileQuotaBytes    Int      @default(104857600) // 100MB default quota
-  fileUsedBytes     Int @default(0)
+// ============================================================
+// USER & AUTH
+// ============================================================
 
-  profile       Profile?
-  sessions      Session[]
-  sentRequests  Friendship[] @relation("FriendshipRequester")
-  recvRequests  Friendship[] @relation("FriendshipReceiver")
-  sentMessages  Message[]     @relation("MessageSender")
-  recvMessages  Message[]     @relation("MessageReceiver")
-  ownedGroups   Group[]       @relation("GroupOwner")
-  memberships   GroupMember[]
-  callsInitiated Call[]      @relation("CallCaller")
-  callsReceived   Call[]      @relation("CallReceiver")
-  notifications Notification[]
-  files         File[]
-  otpCode       String?
-  otpExpiry     DateTime?
-  reactions     MessageReaction[]
-  chatPrefs     ChatPreference[]
-  stories       Story[]
-  storyViews    StoryView[]
-  starredMessages MessageStar[]
-  storyReplies  StoryReply[]
-  drafts        MessageDraft[]
-  storyReactions StoryReaction[]
-  blocksMade    Block[]        @relation("BlockFrom")
-  blocksReceived Block[]       @relation("BlockTo")
-  friendRequestsSent     FriendRequest[] @relation("FriendRequestFrom")
-  friendRequestsReceived FriendRequest[] @relation("FriendRequestTo")
-  posts         Post[]
-  postComments  PostComment[]
-  postReactions PostReaction[]
-  reportsMade   Report[]       @relation("ReportFrom")
-  reportsReceived Report[]     @relation("ReportTo")
-  pollVotes     PollVote[]
-  conversationMembers ConversationMember[]
-  starredMessageList StarredMessage[]
-  broadcastLists BroadcastList[]
-  // Round 9 fix: back-relation for BroadcastMember.recipient (see comment on
-  // BroadcastMember). Additive — no existing fields changed.
+model User {
+  id                 String   @id @default(cuid())
+  email              String   @unique
+  username           String   @unique
+  name               String
+  passwordHash       String
+  avatarUrl          String?
+  bio                String? @db.Text
+  status             String   @default("")
+  role               String   @default("user") // user | admin
+  // Boolean, not DateTime: every caller treats this as a flag
+  // (`where: { emailVerified: true }`, `emailVerified ?? false`).
+  emailVerified      Boolean  @default(false)
+  lastSeenAt         DateTime @default(now())
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  // 2FA
+  twoFactorEnabled   Boolean  @default(false)
+  // Unconfirmed secret from /api/2fa/setup. Only /api/2fa/verify reads it, and
+  // only until the first valid code confirms it (finding #6).
+  twoFactorSecret    String?
+  // Confirmed TOTP secret. Set at the same moment 2FA becomes enabled.
+  twoFactorConfirmedSecret String?
+  // Newline-separated SHA-256 digests of the backup codes; each is removed on
+  // use so it can never be redeemed twice.
+  twoFactorBackup    String? @db.Text
+  twoFactorBackupUsed Int     @default(0)
+  // Failed-code counter for the login challenge, cleared on success.
+  twoFactorAttempts  Int      @default(0)
+
+  // One-time codes (password reset / e-mail verification).
+  // `otpCode` holds a scrypt hash, never the code itself (finding #5).
+  otpCode            String?
+  otpExpiry          DateTime?
+  // Brute-force counter; the code is destroyed once MAX_ATTEMPTS is reached.
+  otpAttempts        Int       @default(0)
+  // Earliest time a new code may be issued, to throttle re-sends.
+  otpSentAt          DateTime?
+  // SHA-256 digest of the opaque, single-use credential issued by verify-otp.
+  resetTokenHash     String?
+  resetTokenExpiry   DateTime?
+
+  // File quota
+  fileUsedBytes      Int      @default(0)
+  fileQuotaBytes     Int      @default(104857600) // 100 MB
+
+  // E2EE
+  publicKey          String?
+
+  // Relations
+  sessions           Session[]
+  profile            Profile?
+  ownedGroups        Group[]                @relation("GroupOwner")
+  groupMemberships   GroupMember[]
+  sentMessages       Message[]              @relation("MessageSender")
+  receivedMessages   Message[]              @relation("MessageReceiver")
+  callsMade          Call[]                 @relation("CallCaller")
+  callsReceived      Call[]                 @relation("CallReceiver")
+  files              File[]
+  notifications      Notification[]         @relation("NotificationOwner")
+  messageStars       MessageStar[]
+  messageDrafts      MessageDraft[]
+  messageReminders   MessageReminder[]
+  friendRequestsSent   FriendRequest[]      @relation("FriendRequestFrom")
+  friendRequestsRecv   FriendRequest[]      @relation("FriendRequestTo")
+  friendshipRequests  Friendship[]          @relation("FriendshipRequester")
+  friendshipReceived  Friendship[]          @relation("FriendshipReceiver")
+  conversationMemberships ConversationMember[]
+  blocksIssued  Block[]              @relation("BlockFrom")
+  blocksRecv    Block[]              @relation("BlockTo")
+  reportsIssued Report[]             @relation("ReportFrom")
+  reportsRecv   Report[]             @relation("ReportTo")
+  chatPreferences    ChatPreference[]
+  auditLogs          AuditLog[]
+  pushSubscriptions  PushSubscription[]
+  fileAccessGrants   FileAccess[]         @relation("FileAccessUser")
+  messageReactions   MessageReaction[]    @relation("MessageReactionUser")
+  stories            Story[]
+  storyViews         StoryView[]
+  storyReplies       StoryReply[]
+  storyReactions     StoryReaction[]
+  broadcastLists     BroadcastList[]        @relation("BroadcastOwner")
   broadcastMemberships BroadcastMember[]
-  reminders      MessageReminder[]
-  auditLogs      AuditLog[]
-  pushSubscriptions PushSubscription[]
+  posts              Post[]
+  postComments       PostComment[]
+  postReactions      PostReaction[]
+  pollVotes          PollVote[]
 }
 
-model Profile {
-  id                 String   @id @default(cuid())
-  userId             String   @unique
-  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  photoUrl           String?
-  bio                String?  @db.Text
-  phone              String?
-  location           String?  @db.Text
-  birthday           String?
-  education          String?  @db.Text
-  work               String?  @db.Text
-  // privacy: PUBLIC | FRIENDS | PRIVATE
-  profileVisibility  String   @default("PUBLIC")
-  messagePermission  String   @default("FRIENDS")
-  callPermission     String   @default("FRIENDS")
-  // Additive (round 2): read-receipts toggle
-  readReceipts       Boolean  @default(true)
-  // Additive (round 6): CSS filter for profile photo (e.g. "grayscale(1)", "sepia(0.5)", "none")
-  photoFilter        String?  
-  // Additive (round 10): profile verification badge (verified | unverified | pending)
-  verified           String   @default("unverified")
-  lastSeen           DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+model VerificationToken {
+  id         String   @id @default(cuid())
+  identifier String
+  token      String   @unique
+  expires    DateTime
 }
 
 model Session {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  token     String   @unique
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-  // Additive (round 11): device management
-  userAgent   String?  @db.Text
-  deviceName  String?  // parsed friendly name (e.g. "Chrome on macOS")
-  ipAddress   String?  // last known IP
-  lastActiveAt DateTime @default(now())
+  id            String   @id @default(cuid())
+  userId        String
+  sessionToken  String   @unique
+  token         String?
+  expiresAt     DateTime
+  userAgent     String? @db.Text
+  ipAddress     String?
+  deviceName    String?
+  createdAt     DateTime @default(now())
+  lastActiveAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
+model Profile {
+  id                  String   @id @default(cuid())
+  userId              String   @unique
+  photoUrl            String?
+  bio                 String? @db.Text
+  phone               String?
+  location            String? @db.Text
+  birthday            DateTime?
+  education           String? @db.Text
+  work                String? @db.Text
+  lastSeen            DateTime @default(now())
+  profileVisibility   String   @default("PUBLIC")
+  messagePermission   String   @default("FRIENDS")
+  callPermission      String   @default("FRIENDS")
+  readReceipts        Boolean  @default(true)
+  photoFilter         String?
+  verified            String   @default("unverified")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+// ============================================================
+// FRIENDSHIP (requesterId / receiverId — matches socket-server.js)
+// ============================================================
+
 model Friendship {
-  id          String   @id @default(cuid())
-  requesterId String
-  receiverId  String
-  status      String   @default("PENDING") // PENDING | ACCEPTED | DECLINED | BLOCKED
-  blockerId   String?
-  // Additive (round 8): close friends — marks this friendship as a "close friend"
-  isCloseFriend Boolean @default(false)
-  // Additive (round 8): mute their stories
-  storiesMuted Boolean @default(false)
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id              String   @id @default(cuid())
+  requesterId     String
+  receiverId      String
+  status          String   @default("PENDING") // PENDING | ACCEPTED | BLOCKED
+  blockerId       String?
+  isCloseFriend   Boolean  @default(false)
+  storiesMuted    Boolean  @default(false)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
   requester User @relation("FriendshipRequester", fields: [requesterId], references: [id], onDelete: Cascade)
   receiver User @relation("FriendshipReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
 
   @@unique([requesterId, receiverId])
+  @@index([receiverId, status])
+  @@index([requesterId, status])
 }
+
+// ============================================================
+// MESSAGING (receiverId / groupId / type / fileUrl / status / deletedFor / edited / etc.)
+// ============================================================
 
 model Message {
-  id         String   @id @default(cuid())
-  senderId   String
-  receiverId String?
-  groupId    String?
-  content    String   @db.Text
-  type       String   @default("text") // text | image | video | audio | document
-  fileUrl    String?
-  fileName   String?  @db.Text
-  fileSize   Int?
-  mimeType   String?
-  status     String   @default("SENT") // SENDING | SENT | DELIVERED | SEEN
-  createdAt  DateTime @default(now())
-  seenAt     DateTime?
-  // Additive (round 2): soft-delete. "me" = deleted for sender only;
-  // "everyone" = deleted for all participants (content cleared).
-  deletedFor String   @default("") @db.VarChar(4096)
-  forwardedFrom String? // userId of original sender if forwarded
-  // Additive (round 3): disappearing messages — when set, message auto-deletes after expiresAt
-  expiresAt DateTime?
-  // Additive (round 5): message edit tracking
-  editedAt  DateTime?
-  edited    Boolean  @default(false)
-  // Additive (round 6): pin message within a 1:1 chat (per-user, stores userId who pinned)
-  pinnedBy  String?  
-  // Additive (round 7): reply-to (quote) — stores the id of the message being replied to
-  replyToId String?
-  // Additive (round 8): scheduled messages — when set, message is delivered at this future time
-  scheduledFor DateTime?
+  id              String    @id @default(cuid())
+  senderId        String
+  receiverId      String?
+  groupId         String?
+  conversationId  String?
+  content         String @db.Text
+  type            String    @default("text") // text | image | video | audio | file | location | poll | admin | custom | system
+  fileUrl         String?
+  fileName        String? @db.Text
+  fileSize        Int?
+  mimeType        String?
+  replyToId       String?
+  forwardedFrom   String?
+  status          String    @default("SENT") // SENT | DELIVERED | SEEN
+  deletedFor      String? @db.Text   // null | "everyone" | comma-separated user IDs
+  edited          Boolean   @default(false)
+  editedAt        DateTime?
+  pinnedBy        String?
+  seenAt          DateTime?
+  scheduledFor    DateTime?
+  expiresAt       DateTime?
+  metadata        String? @db.Text
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  sender   User   @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
-  receiver User?  @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
-  group    Group? @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  reactions MessageReaction[]
-  starredBy MessageStar[]
-  attachments   Attachment[]
-  reminders MessageReminder[]
+  sender    User       @relation("MessageSender", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver  User?      @relation("MessageReceiver", fields: [receiverId], references: [id], onDelete: SetNull)
+  replyTo   Message?   @relation("MessageReply", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies   Message[]  @relation("MessageReply")
+  group        Group?             @relation("MessageGroup", fields: [groupId], references: [id], onDelete: SetNull)
+  conversation Conversation?      @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+  stars        MessageStar[]
+  reminders    MessageReminder[]
+  reactions    MessageReaction[]
+  attachments  Attachment[]
+  fileAccess   FileAccess[]
+
+  @@index([receiverId, status])
+  @@index([senderId])
+  @@index([groupId])
+  @@index([conversationId])
 }
 
-model Group {
-  id          String   @id @default(cuid())
-  name        String
-  description String?  @db.Text
-  photoUrl    String?
-  createdBy   String
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  owner     User         @relation("GroupOwner", fields: [createdBy], references: [id], onDelete: Cascade)
-  members   GroupMember[]
-  messages  Message[]
-}
-
-model GroupMember {
+model MessageStar {
   id        String   @id @default(cuid())
-  groupId   String
+  messageId String
   userId    String
-  role      String   @default("MEMBER") // OWNER | ADMIN | MEMBER
-  joinedAt  DateTime @default(now())
-
-  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([groupId, userId])
-}
-
-model Call {
-  id         String    @id @default(cuid())
-  callerId   String
-  receiverId String?
-  groupId    String?
-  type       String    @default("audio") // audio | video
-  status     String    @default("ringing") // ringing | connected | ended | missed | declined | busy | failed | cancelled | timeout
-  startedAt  DateTime  @default(now())
-  endedAt    DateTime?
-  duration   Int?
-  // Additive (round 13): call tracking for diagnostics + history
-  answeredAt DateTime?
-  failureReason String?  // e.g. "ice_failed", "timeout", "rejected"
-  connectionType String? // "p2p" | "turn" | "stun" (best-guess from ICE candidate stats)
-
-  caller   User   @relation("CallCaller", fields: [callerId], references: [id], onDelete: Cascade)
-  receiver User?  @relation("CallReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
-
-  @@index([callerId])
-  @@index([receiverId])
-}
-
-model Notification {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  type      String   // friend_request | message | call | group | system
-  title     String
-  body      String   @db.Text
-  data      String?  @db.Text
-  read      Boolean  @default(false)
   createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
 }
 
-model File {
-  id        String   @id @default(cuid())
-  ownerId   String
-  owner     User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
-  name      String
-  mimeType  String
-  size      Int
-  url       String
-  createdAt DateTime @default(now())
-}
-
-// ---- Additive: message reactions ----
 model MessageReaction {
   id        String   @id @default(cuid())
   messageId String
@@ -250,50 +252,180 @@ model MessageReaction {
   createdAt DateTime @default(now())
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Required by every read path: `reactions: { include: { user: ... } }`.
+  user    User    @relation("MessageReactionUser", fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([messageId, userId, emoji])
   @@index([messageId])
 }
 
-// ---- Additive: per-user chat preferences (pin / mute) ----
-model ChatPreference {
+model MessageDraft {
   id        String   @id @default(cuid())
   userId    String
-  peerId    String   // the other participant's userId (1:1 chats)
-  pinned    Boolean  @default(false)
-  muted     Boolean  @default(false)
-  // Additive (round 3): disappearing messages timer. OFF | 24H | 7D
-  disappearing String @default("OFF")
-  // Additive (round 3): chat wallpaper (CSS background value or preset id)
-  wallpaper String?  @db.Text
-  // Additive (round 4): chat archive
-  archived  Boolean  @default(false)
-  // Additive (round 10): chat folder name (null = no folder; e.g. "Work", "Family")
-  folder    String?
+  peerId    String
+  isGroup   Boolean  @default(false)
+  content   String @db.Text
+  createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, peerId, isGroup])
+}
+
+model MessageReminder {
+  id        String   @id @default(cuid())
+  messageId String
+  userId    String
+  remindAt  DateTime
+  notified  Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([userId, notified])
+}
+
+model ChatPreference {
+  id           String   @id @default(cuid())
+  userId       String
+  peerId       String
+  pinned       Boolean  @default(false)
+  muted        Boolean  @default(false)
+  archived     Boolean  @default(false)
+  disappearing String?  // off | 24h | 7d | 30d
+  wallpaper    String? @db.Text
+  folder       String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, peerId])
 }
 
-// ---- Additive (round 2): stories / status updates ----
-model Story {
+// ============================================================
+// GROUPS
+// ============================================================
+
+model Group {
+  id          String   @id @default(cuid())
+  name        String
+  description String? @db.Text
+  photoUrl    String?
+  createdBy   String
+  ownerId     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  owner    User?          @relation("GroupOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  members  GroupMember[]
+  messages Message[]      @relation("MessageGroup")
+}
+
+model GroupMember {
+  id        String   @id @default(cuid())
+  groupId   String
+  userId    String
+  role      String   @default("member") // owner | admin | member
+  joinedAt  DateTime @default(now())
+
+  group Group @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  user  User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([groupId, userId])
+}
+
+// ============================================================
+// CALLS (receiverId — matches socket-server.js)
+// ============================================================
+
+model Call {
+  id              String    @id @default(cuid())
+  callerId        String
+  receiverId      String
+  type            String    // audio | video
+  status          String    @default("ringing") // ringing | accepted | rejected | missed | completed | failed
+  startedAt       DateTime?
+  endedAt         DateTime?
+  duration        Int?      // seconds
+  failureReason   String? @db.Text
+  connectionType  String?   // p2p | relay | srflx
+  createdAt       DateTime  @default(now())
+
+  caller   User @relation("CallCaller", fields: [callerId], references: [id], onDelete: Cascade)
+  receiver User @relation("CallReceiver", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@index([callerId])
+  @@index([receiverId])
+}
+
+// ============================================================
+// FILES (name — matches API routes)
+// ============================================================
+
+model File {
+  id         String   @id @default(cuid())
+  ownerId    String
+  name       String
+  // Optional: upload routes write `name` + `url` only. A required `filename`
+  // made every POST /api/files/upload fail against a Prisma backend.
+  filename   String?
+  mimeType   String
+  size       Int
+  url        String   @unique
+  thumbUrl   String?
+  createdAt  DateTime @default(now())
+
+  owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  // Download authorization resolves through this relation instead of scanning
+  // the Message table for a matching fileUrl.
+  @@index([ownerId])
+}
+
+// ============================================================
+// NOTIFICATIONS (userId — matches API routes)
+// ============================================================
+
+model Notification {
   id        String   @id @default(cuid())
   userId    String
-  type      String   @default("text") // text | image
-  content   String   @db.Text
-  bg        String?  // background color/gradient for text stories
+  type      String
+  title     String
+  body      String? @db.Text
+  data      String? @db.Text
+  link      String?
+  read      Boolean  @default(false)
   createdAt DateTime @default(now())
-  expiresAt DateTime // 24h after createdAt
-  // Additive (round 7): highlight — saved story that doesn't expire
-  isHighlight Boolean @default(false)
 
-  user   User        @relation(fields: [userId], references: [id], onDelete: Cascade)
-  views  StoryView[]
-  replies StoryReply[]
-  reactions StoryReaction[]
+  user User @relation("NotificationOwner", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+}
+
+// ============================================================
+// STORIES
+// ============================================================
+
+model Story {
+  id          String   @id @default(cuid())
+  userId      String
+  mediaUrl    String? @db.Text
+  mediaType   String   @default("image") // image | video
+  type        String   @default("text") // text | image | video
+  content     String? @db.Text
+  bg          String?
+  caption     String? @db.Text
+  isHighlight Boolean  @default(false)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  user       User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  views      StoryView[]
+  replies    StoryReply[]
+  reactions  StoryReaction[]
 
   @@index([userId])
 }
@@ -303,6 +435,7 @@ model StoryView {
   storyId   String
   userId    String
   viewedAt  DateTime @default(now())
+  createdAt DateTime @default(now())
 
   story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -310,48 +443,17 @@ model StoryView {
   @@unique([storyId, userId])
 }
 
-// ---- Additive (round 3): starred / favorited messages ----
-model MessageStar {
-  id        String   @id @default(cuid())
-  messageId String
-  userId    String
-  createdAt DateTime @default(now())
-
-  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([messageId, userId])
-}
-
-// ---- Additive (round 4): story replies ----
 model StoryReply {
   id        String   @id @default(cuid())
   storyId   String
-  userId    String  // replier
-  content   String  @db.Text
+  userId    String
+  content   String @db.Text
   createdAt DateTime @default(now())
 
   story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([storyId])
 }
 
-// ---- Additive (round 4): message drafts (auto-saved per conversation) ----
-model MessageDraft {
-  id        String   @id @default(cuid())
-  userId    String  // owner of the draft
-  peerId    String  // conversation peer (user id or group id)
-  isGroup   Boolean @default(false)
-  content   String   @db.Text
-  updatedAt DateTime @updatedAt
-
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, peerId, isGroup])
-}
-
-// ---- Additive (round 8): story reactions ----
 model StoryReaction {
   id        String   @id @default(cuid())
   storyId   String
@@ -362,115 +464,317 @@ model StoryReaction {
   story Story @relation(fields: [storyId], references: [id], onDelete: Cascade)
   user  User  @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([storyId, userId])
+  @@unique([storyId, userId, emoji])
 }
 
-// ---- Additive (round 9): broadcast lists (send one message to many 1:1 chats) ----
+// ============================================================
+// BROADCASTS
+// ============================================================
+
 model BroadcastList {
   id        String   @id @default(cuid())
   ownerId   String
   name      String
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 
-  owner   User             @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  owner   User             @relation("BroadcastOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   members BroadcastMember[]
-
-  @@index([ownerId])
 }
 
 model BroadcastMember {
-  id            String   @id @default(cuid())
-  broadcastId   String
-  recipientId   String   // the friend's userId to receive the broadcast
-  createdAt     DateTime @default(now())
+  id             String   @id @default(cuid())
+  broadcastListId String
+  recipientId    String
+  createdAt      DateTime @default(now())
 
-  broadcast BroadcastList @relation(fields: [broadcastId], references: [id], onDelete: Cascade)
-  // Round 9 fix: the GET /api/broadcasts route does
-  // `include: { members: { include: { recipient: ... } } }` to populate each
-  // member's name + username. The relation was missing from the original
-  // round-9 schema (backend route returned 500). Adding it is purely additive
-  // (no existing fields or constraints changed).
-  recipient User @relation(fields: [recipientId], references: [id], onDelete: Cascade)
-
-  @@unique([broadcastId, recipientId])
+  broadcastList BroadcastList @relation(fields: [broadcastListId], references: [id], onDelete: Cascade)
+  recipient    User           @relation(fields: [recipientId], references: [id], onDelete: Cascade)
 }
 
-// ---- Additive (round 10): message reminders ----
-model MessageReminder {
-  id          String   @id @default(cuid())
-  userId      String  // who set the reminder
-  messageId   String  // the message to be reminded of
-  remindAt    DateTime // when to notify
-  createdAt   DateTime @default(now())
-  notified    Boolean  @default(false)
+// ============================================================
+// PUSH SUBSCRIPTIONS
+// ============================================================
 
-  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
-
-  @@index([userId, notified])
-}
-
-// ---- Additive (round 11): audit log (enterprise security) ----
-model AuditLog {
-  id        String   @id @default(cuid())
-  userId    String?  // actor (null for system)
-  action    String   // e.g. "login", "logout", "2fa_enable", "admin_user_view"
-  resource  String?  // e.g. "user:abc123", "message:def456"
-  ip        String?
-  userAgent String?  @db.Text
-  meta      String?  @db.Text
-  createdAt DateTime @default(now())
-
-  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
-
-  @@index([userId])
-  @@index([action])
-  @@index([createdAt])
-}
-
-// ---- Additive (round 15): Web Push subscriptions ----
 model PushSubscription {
   id        String   @id @default(cuid())
   userId    String
-  endpoint  String   @unique @db.VarChar(512)
-  p256dh    String
-  auth      String
+  endpoint  String
+  p256dh    String?
+  auth      String?
+  keys      String? @db.Text
   userAgent String?
   createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  updatedAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@index([userId])
+  @@unique([userId, endpoint])
 }
 
-// ---- JARA: Permanent AI User + Governance ----
+// ============================================================
+// AUDIT LOG
+// ============================================================
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  action     String
+  entity     String?
+  entityId   String?
+  resource   String?
+  ip         String?
+  userAgent  String? @db.Text
+  detail     String? @db.Text
+  meta       String? @db.Text
+  createdAt  DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+}
+
+// ============================================================
+// POSTS (activity feed)
+// ============================================================
+
+model Post {
+  id          String   @id @default(cuid())
+  authorId    String
+  content     String @db.Text
+  mediaUrl    String? @db.Text
+  visibility  String   @default("friends")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  author       User           @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  comments     PostComment[]
+  reactions    PostReaction[]
+}
+
+model PostComment {
+  id        String   @id @default(cuid())
+  postId    String
+  authorId  String
+  content   String @db.Text
+  createdAt DateTime @default(now())
+
+  post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+}
+
+model PostReaction {
+  id        String   @id @default(cuid())
+  postId    String
+  userId    String
+  emoji     String
+  createdAt DateTime @default(now())
+
+  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([postId, userId, emoji])
+}
+
+// ============================================================
+// POLLS
+// ============================================================
+
+model Poll {
+  id          String    @id @default(cuid())
+  messageId   String
+  question    String
+  options     String    // JSON array
+  expiresAt   DateTime?
+  createdAt   DateTime  @default(now())
+
+  votes PollVote[]
+}
+
+model PollVote {
+  id        String   @id @default(cuid())
+  pollId    String
+  userId    String
+  optionIdx Int
+  createdAt DateTime @default(now())
+
+  poll Poll @relation(fields: [pollId], references: [id], onDelete: Cascade)
+  user  User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([pollId, userId])
+}
+
+// ============================================================
+// CONVERSATIONS (legacy — kept for backward compat)
+// ============================================================
+
+model Conversation {
+  id          String   @id @default(cuid())
+  type        String   @default("direct")
+  title       String?
+  avatarUrl   String? @db.Text
+  description String? @db.Text
+  ownerId     String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  members  ConversationMember[]
+  messages Message[]
+}
+
+model ConversationMember {
+  id              String   @id @default(cuid())
+  conversationId  String
+  userId          String
+  role            String   @default("member")
+  joinedAt        DateTime @default(now())
+  lastReadAt      DateTime?
+  muted           Boolean  @default(false)
+  pinned          Boolean  @default(false)
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+}
+
+model Block {
+  id        String   @id @default(cuid())
+  fromId    String
+  toId      String
+  createdAt DateTime @default(now())
+
+  from User @relation("BlockFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  to   User @relation("BlockTo", fields: [toId], references: [id], onDelete: Cascade)
+
+  @@unique([fromId, toId])
+}
+
+model Report {
+  id        String   @id @default(cuid())
+  fromId    String
+  toId      String
+  reason    String
+  detail    String? @db.Text
+  status    String   @default("open")
+  createdAt DateTime @default(now())
+
+  from User @relation("ReportFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  to   User @relation("ReportTo", fields: [toId], references: [id], onDelete: Cascade)
+}
+
+model Attachment {
+  id         String   @id @default(cuid())
+  messageId  String?
+  ownerId    String
+  filename   String
+  mimeType   String
+  size       Int
+  url        String
+  thumbUrl   String?
+  createdAt  DateTime @default(now())
+
+  message Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([url])
+  @@index([ownerId])
+}
+
+// ============================================================
+// FILE ACCESS GRANTS
+// ============================================================
+//
+// Download authorization for a stored file used to be decided by scanning the
+// whole Message table for a matching `fileUrl` (unindexed, capped at 100 rows,
+// and silently wrong once a URL had more than 100 references). Each row here is
+// one explicit, indexed grant: "`userId` may read `fileUrl`".
+//
+// Grants are written when a file is attached to a message and are revoked when
+// the message is deleted for everyone or the story expires. Legacy files that
+// predate this table are covered by a one-off backfill in
+// `prisma/migrations/..._add_fileaccess_and_attachments` and by the ownership
+// and profile-visibility rules that remain in `src/lib/file-access.ts`.
+
+model FileAccess {
+  id        String   @id @default(cuid())
+  fileUrl   String
+  userId    String
+  // owner | message_recipient | group_member | story_viewer | profile_public
+  source    String
+  // Populated when the grant comes from a message so it can be revoked.
+  messageId String?
+  createdAt DateTime @default(now())
+  expiresAt DateTime?
+
+  user    User     @relation("FileAccessUser", fields: [userId], references: [id], onDelete: Cascade)
+  message Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([fileUrl, userId])
+  @@index([fileUrl])
+  @@index([userId])
+  @@index([messageId])
+}
+
+
+model FriendRequest {
+  id        String   @id @default(cuid())
+  fromId    String
+  toId      String
+  message   String?
+  status    String   @default("pending")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  from User @relation("FriendRequestFrom", fields: [fromId], references: [id], onDelete: Cascade)
+  to   User @relation("FriendRequestTo", fields: [toId], references: [id], onDelete: Cascade)
+
+  @@unique([fromId, toId])
+}
+
+// ============================================================
+// JARA — Permanent AI User + Governance
+// ============================================================
+
 model JaraConfig {
   id                String   @id @default(cuid())
   version           Int      @unique @default(1)
-  face              String   @default("friendly") @db.VarChar(100)
-  avatar            String   @default("default") @db.VarChar(100)
-  avatarUrl         String?  @db.Text
-  background        String   @default("gradient-emerald") @db.VarChar(100)
-  backgroundUrl     String?  @db.Text
-  theme             String   @default("light") @db.VarChar(50)
-  colors            String?  @db.Text
-  animation         String?  @db.Text
-  clothing          String?  @db.Text
-  voiceModel        String   @default("default") @db.VarChar(100)
-  voiceLanguage     String   @default("bn") @db.VarChar(20)
-  voiceAccent       String?  @db.VarChar(50)
+  // Identity
+  displayName       String   @default("Jara AI")
+  aiDisclosure      String @db.Text   @default("I am Jara AI, a digital human assistant. I am not a real human.")
+  isEnabled         Boolean  @default(true) // emergency disable / kill switch
+  // Visual identity
+  face              String   @default("friendly") // realistic | illustrated | anime | friendly | professional
+  avatar            String   @default("default")  // 2d | 3d | default
+  avatarUrl         String? @db.Text
+  background        String   @default("gradient-emerald")
+  backgroundUrl     String? @db.Text
+  theme             String   @default("light") // light | dark | futuristic
+  colors            String? @db.Text  // JSON string
+  animation         String? @db.Text  // JSON string
+  clothing          String? @db.Text  // JSON string
+  defaultAppearanceProfileId String?
+  // Voice
+  voiceModel        String   @default("default")
+  voiceLanguage     String   @default("bn")
+  voiceAccent       String?
   speakingSpeed     Float    @default(1.0)
   pitch             Float    @default(1.0)
-  personality       String   @default("friendly") @db.VarChar(100)
-  responseLength    String   @default("medium") @db.VarChar(20)
-  communicationStyle String  @default("conversational") @db.VarChar(100)
-  llmProvider       String   @default("ollama") @db.VarChar(100)
-  llmModel          String   @default("llama3.2") @db.VarChar(100)
-  sttModel          String   @default("whisper") @db.VarChar(100)
-  ttsModel          String   @default("default") @db.VarChar(100)
+  // Personality
+  personality       String   @default("friendly")
+  responseLength    String   @default("medium") // short | medium | long
+  communicationStyle String  @default("conversational")
+  // AI configuration
+  llmProvider       String   @default("ollama")
+  llmModel          String   @default("llama3.2")
+  sttModel          String   @default("whisper")
+  ttsModel          String   @default("default")
   memoryEnabled     Boolean  @default(true)
+  // Communication permissions
+  smsEnabled        Boolean  @default(false)
+  callsEnabled      Boolean  @default(true)
+  meetingsEnabled   Boolean  @default(false)
+  allowGroupListening Boolean @default(false)
+  humanHandoffEnabled Boolean @default(true)
+  recordingConsentRequired Boolean @default(true)
+  approvedKnowledgeMode String @default("open") // open | approved_only
+  // Metadata
   isLive            Boolean  @default(false)
   createdBy         String?
   createdAt         DateTime @default(now())
@@ -481,16 +785,16 @@ model JaraProposal {
   id              String   @id @default(cuid())
   version         Int
   previousVersion Int?
-  configJson      String   @db.LongText
-  configHash      String   @db.VarChar(128)
-  status          String   @default("pending") @db.VarChar(50)
+  configJson      String @db.Text   // JSON of proposed config
+  configHash      String   // SHA256 hash for integrity
+  status          String   @default("pending") // pending | approved | rejected | expired | applied
   createdBy       String
   createdAt       DateTime @default(now())
   expiresAt       DateTime
   approvedBy      String?
   approvedAt      DateTime?
   appliedAt       DateTime?
-  changeSummary   String?  @db.Text
+  changeSummary   String? @db.Text
   auditLogs       JaraAuditLog[]
 
   @@index([status])
@@ -498,28 +802,35 @@ model JaraProposal {
 }
 
 model JaraAuditLog {
-  id         String   @id @default(cuid())
-  proposalId String?
-  version    Int?
-  action     String   @db.VarChar(100)
-  actorId    String?
-  actorRole  String?  @db.VarChar(50)
-  detail     String?  @db.Text
-  ip         String?  @db.VarChar(100)
-  userAgent  String?  @db.Text
-  createdAt  DateTime @default(now())
+  id                String   @id @default(cuid())
+  proposalId        String?
+  version           Int?
+  action            String   // propose | approve | reject | expire | apply | rollback | attempt_blocked | config_change | emergency_disable | emergency_enable
+  actorId           String?
+  actorRole         String?
+  detail            String? @db.Text
+  previousValue     String? @db.Text  // JSON/string snapshot
+  newValue          String? @db.Text  // JSON/string snapshot
+  authorizationResult String? // allowed | denied | pending
+  changeReason      String? @db.Text
+  requestId         String?
+  sessionId         String?
+  ip                String?
+  userAgent         String? @db.Text
+  createdAt         DateTime @default(now())
 
   proposal JaraProposal? @relation(fields: [proposalId], references: [id], onDelete: SetNull)
 
   @@index([action])
   @@index([createdAt])
+  @@index([actorId])
 }
 
 model JaraMemory {
   id        String   @id @default(cuid())
   userId    String
-  key       String   @db.VarChar(255)
-  value     String   @db.Text
+  key       String
+  value     String @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -539,190 +850,286 @@ model JaraGroupConsent {
 }
 
 // ============================================================
-// SOCIAL: blocks, friend requests, posts, reports
+// JARA — Command Center Extensions (additive, backward-compatible)
 // ============================================================
 
-model Block {
-  id        String   @id @default(cuid())
-  fromId    String
-  toId      String
-  createdAt DateTime @default(now())
+model JaraAppearanceProfile {
+  id              String   @id @default(cuid())
+  name            String
+  description     String? @db.Text
+  profileType     String   @default("custom") // office | outdoor | studio | meeting_room | custom
+  isDefault       Boolean  @default(false)
+  isTemporary     Boolean  @default(false)
+  expiresAt       DateTime?
+  // Visual
+  face            String   @default("friendly")
+  avatar          String   @default("default")
+  avatarUrl       String?
+  background      String   @default("gradient-emerald")
+  backgroundUrl   String?
+  theme           String   @default("light")
+  colors          String?  // JSON
+  clothing        String?  // JSON
+  animation       String?  // JSON
+  // Voice/persona overrides (optional)
+  voiceModel      String?
+  voiceLanguage   String?  // bn | en | mixed
+  speakingSpeed   Float?
+  pitch           Float?
+  personality     String?
+  communicationStyle String?
+  // Governance
+  createdBy       String?
+  updatedBy       String?
+  isActive        Boolean  @default(true)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  from User @relation("BlockFrom", fields: [fromId], references: [id], onDelete: Cascade)
-  to   User @relation("BlockTo", fields: [toId], references: [id], onDelete: Cascade)
+  callAssignments JaraCallPresentation[]
 
-  @@unique([fromId, toId])
-  @@index([toId])
+  @@index([isDefault])
+  @@index([isActive])
 }
 
-model FriendRequest {
-  id        String   @id @default(cuid())
-  fromId    String
-  toId      String
-  message   String?  @db.Text
-  status    String   @default("pending") @db.VarChar(50)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+model JaraCallPresentation {
+  id              String   @id @default(cuid())
+  sessionType     String   // audio_call | video_call | meeting | sms | chat
+  sessionId       String?  // call/meeting/session id
+  roomId          String?
+  profileId       String?
+  profileSnapshot String?  // JSON snapshot of profile at assignment time
+  isTemporary     Boolean  @default(true)
+  expiresAt       DateTime?
+  status          String   @default("active") // active | expired | cancelled | completed
+  createdBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  from User @relation("FriendRequestFrom", fields: [fromId], references: [id], onDelete: Cascade)
-  to   User @relation("FriendRequestTo", fields: [toId], references: [id], onDelete: Cascade)
+  profile JaraAppearanceProfile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
 
-  @@unique([fromId, toId])
-  @@index([toId, status])
+  @@index([sessionType, sessionId])
+  @@index([status])
 }
 
-model Post {
-  id         String   @id @default(cuid())
-  authorId   String
-  content    String   @db.Text
-  mediaUrl   String?  @db.Text
-  visibility String   @default("friends") @db.VarChar(50)
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
-
-  author    User          @relation(fields: [authorId], references: [id], onDelete: Cascade)
-  comments  PostComment[]
-  reactions PostReaction[]
-
-  @@index([authorId, createdAt])
+model JaraSmsConfig {
+  id                    String   @id @default(cuid())
+  enabled               Boolean  @default(false)
+  provider              String   @default("none") // none | twilio | vonage | local_gateway
+  senderId              String?
+  webhookSecret         String?
+  inboundEnabled        Boolean  @default(false)
+  outboundEnabled       Boolean  @default(false)
+  requireHumanApproval  Boolean  @default(true)
+  allowedCountries      String?  // JSON array
+  rateLimitPerHour      Int      @default(20)
+  optOutKeywords        String?  // JSON array
+  createdBy             String?
+  updatedBy             String?
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 }
 
-model PostComment {
-  id        String   @id @default(cuid())
-  postId    String
-  authorId  String
-  content   String   @db.Text
-  createdAt DateTime @default(now())
+model JaraSmsContact {
+  id              String   @id @default(cuid())
+  phoneNumber     String
+  name            String?
+  email           String?
+  consentStatus   String   @default("unknown") // unknown | granted | revoked | opted_out
+  consentAt       DateTime?
+  consentSource   String?
+  optedOutAt      DateTime?
+  notes           String?
+  createdBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  post   Post @relation(fields: [postId], references: [id], onDelete: Cascade)
-  author User @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  messages JaraSmsMessage[]
 
-  @@index([postId, createdAt])
+  @@unique([phoneNumber])
+  @@index([consentStatus])
 }
 
-model PostReaction {
-  id        String   @id @default(cuid())
-  postId    String
-  userId    String
-  emoji     String   @db.VarChar(32)
-  createdAt DateTime @default(now())
+model JaraSmsMessage {
+  id              String   @id @default(cuid())
+  contactId       String?
+  direction       String   @default("outbound") // inbound | outbound
+  fromNumber      String?
+  toNumber        String?
+  body            String @db.Text
+  language        String?  // bn | en | mixed
+  status          String   @default("draft") // draft | pending_approval | approved | queued | sent | delivered | failed | received | blocked
+  provider        String?
+  providerMessageId String?
+  errorMessage    String?
+  requiresApproval Boolean @default(true)
+  approvedBy      String?
+  approvedAt      DateTime?
+  consentChecked  Boolean  @default(false)
+  metadata        String?  // JSON
+  createdBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  post Post @relation(fields: [postId], references: [id], onDelete: Cascade)
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contact JaraSmsContact? @relation(fields: [contactId], references: [id], onDelete: SetNull)
 
-  @@unique([postId, userId, emoji])
+  @@index([direction, status])
+  @@index([createdAt])
 }
 
-model Report {
-  id        String   @id @default(cuid())
-  fromId    String
-  toId      String
-  reason    String   @db.VarChar(255)
-  detail    String?  @db.Text
-  status    String   @default("open") @db.VarChar(50)
-  createdAt DateTime @default(now())
+model JaraDonorContribution {
+  id              String   @id @default(cuid())
+  fullName        String
+  email           String
+  country         String?
+  contributionType String  @default("support") // monetary | non_monetary | volunteer | other
+  amount          String?  // store as string; no auto-charge
+  currency        String?
+  message         String? @db.Text
+  consentToContact Boolean @default(false)
+  privacyAccepted Boolean  @default(false)
+  status          String   @default("pending_review") // pending_review | verified | acknowledged | rejected
+  verifiedBy      String?
+  verifiedAt      DateTime?
+  acknowledgementSentAt DateTime?
+  isPublic        Boolean  @default(false) // never expose by default
+  adminNotes      String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  from User @relation("ReportFrom", fields: [fromId], references: [id], onDelete: Cascade)
-  to   User @relation("ReportTo", fields: [toId], references: [id], onDelete: Cascade)
-
-  @@index([status, createdAt])
-  @@index([toId])
+  @@index([status])
+  @@index([createdAt])
 }
 
-// ============================================================
-// CONVERSATIONS: thread model used by the chat API
-// ============================================================
+model JaraConsentRecord {
+  id              String   @id @default(cuid())
+  subjectType     String   // user | contact | meeting_participant | donor
+  subjectId       String?
+  subjectLabel    String?
+  consentType     String   // sms | call_recording | video_recording | data_processing | contact
+  status          String   @default("granted") // granted | revoked | pending
+  source          String?  // ui | sms | api | admin
+  details         String?
+  grantedAt       DateTime?
+  revokedAt       DateTime?
+  recordedBy      String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-model Conversation {
-  id          String   @id @default(cuid())
-  type        String   @default("direct") @db.VarChar(50)
-  title       String?  @db.VarChar(255)
-  avatarUrl   String?  @db.Text
-  description String?  @db.Text
-  ownerId     String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  members  ConversationMember[]
-  messages Message[]
+  @@index([subjectType, subjectId])
+  @@index([consentType, status])
 }
 
-model ConversationMember {
-  id             String    @id @default(cuid())
-  conversationId String
-  userId         String
-  role           String    @default("member") @db.VarChar(50)
-  joinedAt       DateTime  @default(now())
-  lastReadAt     DateTime?
-  muted          Boolean   @default(false)
-  pinned         Boolean   @default(false)
+model JaraMeetingIntegration {
+  id              String   @id @default(cuid())
+  platform        String   // zoom | google_meet | microsoft_teams | livekit | custom
+  displayName     String
+  enabled         Boolean  @default(false)
+  config          String?  // JSON, secrets must be redacted/encrypted outside DB in production
+  authStatus      String   @default("not_configured") // not_configured | configured | error
+  lastCheckedAt   DateTime?
+  createdBy       String?
+  updatedBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
-  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([conversationId, userId])
-  @@index([userId])
+  @@index([platform, enabled])
 }
 
-// ============================================================
-// POLLS
-// ============================================================
+model JaraKnowledgeSource {
+  id              String   @id @default(cuid())
+  title           String
+  sourceType      String   @default("text") // text | url | file | faq | policy
+  content         String? @db.Text
+  sourceUrl       String?
+  language        String?  // bn | en | mixed
+  tags            String?  // JSON array
+  isApproved      Boolean  @default(false)
+  approvedBy      String?
+  approvedAt      DateTime?
+  status          String   @default("draft") // draft | approved | archived
+  createdBy       String?
+  updatedBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-model Poll {
-  id        String    @id @default(cuid())
-  messageId String
-  question  String    @db.Text
-  options   String    @db.Text
-  expiresAt DateTime?
-  createdAt DateTime  @default(now())
-
-  votes PollVote[]
-
-  @@index([messageId])
+  @@index([status, isApproved])
 }
 
-model PollVote {
-  id        String   @id @default(cuid())
-  pollId    String
-  userId    String
-  optionIdx Int
-  createdAt DateTime @default(now())
+model JaraAsset {
+  id              String   @id @default(cuid())
+  kind            String   @default("background") // background | clothing | avatar | branding | environment
+  name            String
+  description     String?
+  fileUrl         String? @db.Text
+  storageKey      String? @db.Text
+  mimeType        String?
+  fileSize        Int?
+  width           Int?
+  height          Int?
+  sha256          String?
+  isApproved      Boolean  @default(false)
+  approvedBy      String?
+  approvedAt      DateTime?
+  status          String   @default("pending_review") // pending_review | approved | rejected | archived
+  source          String   @default("upload") // upload | generated | system
+  ownerId         String?
+  metadata        String? @db.Text  // JSON
+  createdBy         String?
+  updatedBy         String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
 
-  poll Poll @relation(fields: [pollId], references: [id], onDelete: Cascade)
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([pollId, userId])
+  @@index([kind, status])
+  @@index([isApproved])
 }
 
-// ============================================================
-// MESSAGE STARS (matches db.starredMessage used by the API)
-// ============================================================
+model JaraMeetingProfile {
+  id              String   @id @default(cuid())
+  title           String
+  purpose         String?
+  meetingType     String   @default("custom_video_call") // internal | business_presentation | student_consultation | interview | online_class | training | client_meeting | custom_video_call
+  scheduledAt     DateTime?
+  durationMinutes Int?
+  platform        String   @default("internal") // internal | zoom | google_meet | microsoft_teams | custom
+  participants    String?  // JSON array
+  // Presentation
+  appearanceProfileId String?
+  clothing        String?  // JSON or preset id
+  background      String?
+  backgroundUrl   String?
+  avatarStyle     String?
+  presentationStyle String?
+  voiceLanguage   String?  // bn | en | mixed
+  voiceProfile    String?
+  speakingStyle   String?
+  // Content/instructions
+  script          String?
+  talkingPoints   String?  // JSON array or text
+  instructions    String?
+  // Media references (trusted local paths/asset IDs)
+  referenceImageAssetId String?
+  referenceVideoAssetId String?
+  voiceSampleAssetId    String?
+  referenceImageUrl     String? @db.Text
+  referenceVideoUrl     String? @db.Text
+  voiceSampleUrl        String? @db.Text
+  // Status/governance
+  status          String   @default("draft") // draft | preview | approved | scheduled | active | completed | cancelled
+  scope           String   @default("meeting_specific") // meeting_specific | temporary_next_call | persistent
+  approvedBy      String?
+  approvedAt      DateTime?
+  cancelledAt     DateTime?
+  startedAt       DateTime?
+  endedAt         DateTime?
+  configVersion   Int      @default(1)
+  configSnapshot  String?  // JSON snapshot at approval/start
+  rendererStatus  String   @default("unconfigured") // unconfigured | browser_fallback | gpu_worker | livekit_avatar
+  createdBy       String?
+  updatedBy       String?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 
-
-// Used by /api/conversations/[id]/messages (attachmentIds -> attachments connect)
-// and by NextAuth email flows.
-model Attachment {
-  id        String   @id @default(cuid())
-  messageId String?
-  ownerId   String
-  filename  String   @db.VarChar(255)
-  mimeType  String   @db.VarChar(255)
-  size      Int
-  url       String   @db.Text
-  thumbUrl  String?  @db.Text
-  createdAt DateTime @default(now())
-
-  message Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
-
-  @@index([messageId])
-  @@index([ownerId])
-}
-
-model VerificationToken {
-  id         String   @id @default(cuid())
-  identifier String   @db.VarChar(255)
-  token      String   @unique @db.VarChar(255)
-  expires    DateTime
-
-  @@unique([identifier, token])
+  @@index([status])
+  @@index([scheduledAt])
+  @@index([createdBy])
 }

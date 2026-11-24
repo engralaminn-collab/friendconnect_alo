@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { hashPassword } from '@/lib/auth'
 import { ensureProfile, json, errorJson } from '@/lib/serialize'
 import { getSessionUser } from '@/lib/session'
+import { handleRouteError } from '@/lib/api-errors'
 
 const DEMO = [
   { name: 'Aria Ahmed', username: 'aria', email: 'aria@friendconnect.app', password: 'password123', bio: 'Reconnecting with old classmates.', location: 'Dhaka, Bangladesh' },
@@ -64,8 +65,7 @@ export async function POST(req: NextRequest) {
     }
 
     return json({ ok: true, accounts: created })
-  } catch (e: unknown) {
-    const err = e as Error
-    return errorJson(err?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/setup')
   }
 }

@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server"
 import { getSessionUser } from "@/lib/session"
 import { errorJson, json } from "@/lib/serialize"
+import { handleRouteError } from '@/lib/api-errors'
 
 // Transcribe an audio file (voice message) to text using z-ai-web-dev-sdk ASR
 export async function POST(req: NextRequest) {
@@ -33,14 +34,16 @@ export async function POST(req: NextRequest) {
       } else {
         return errorJson("ASR not available in this SDK version", 501)
       }
-    } catch (e: any) {
-      console.error("[ASR] transcription failed", e?.message)
-      return errorJson(`Transcription failed: ${e?.message}`, 500)
+    } catch (error) {
+      // Provider errors can carry request details and upstream keys; log the
+      // cause, return a stable message (finding #15).
+      console.error("[ASR] transcription failed", (error as Error)?.message)
+      return handleRouteError(error, 'POST /api/ai/transcribe')
     }
 
     return json({ text })
-  } catch (e: any) {
-    console.error("[ASR] error", e)
-    return errorJson(`Transcription failed: ${e?.message}`, 500)
+  } catch (error) {
+    console.error("[ASR] error", error)
+    return handleRouteError(error, 'POST /api/ai/transcribe')
   }
 }

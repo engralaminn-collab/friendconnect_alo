@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 export async function GET() {
   try {
@@ -22,8 +23,8 @@ export async function GET() {
         createdAt: m.group.createdAt.toISOString(),
       })),
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/groups')
   }
 }
 
@@ -63,7 +64,7 @@ export async function POST(req: NextRequest) {
       })
     }
     return json({ group: { id: group.id, name: group.name } })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/groups')
   }
 }

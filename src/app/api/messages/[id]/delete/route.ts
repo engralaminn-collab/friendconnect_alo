@@ -2,6 +2,8 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
+import { revokeMessageGrants } from '@/lib/file-access'
 
 // POST /api/messages/[id]/delete  { scope: 'me' | 'everyone' }
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -33,6 +35,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         where: { id },
         data: { deletedFor: 'everyone', content: '', fileUrl: null, fileName: null, fileSize: null, mimeType: null },
       })
+      // Withdraw only the grants this message created; the same upload may
+      // still be shared elsewhere.
+      await revokeMessageGrants({ id })
     } else {
       // Preserve delete-for-everyone and normalize the legacy sender-only marker
       // before adding another participant to the per-user visibility list.
@@ -46,7 +51,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       }
     }
     return json({ ok: true, scope })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/messages/[id]/delete')
   }
 }

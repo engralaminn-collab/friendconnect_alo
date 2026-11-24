@@ -51,16 +51,42 @@ prompt
 
 server.log
 
-# FriendConnect runtime artifacts
+# FriendConnect runtime artifacts.
+#
+# `upload/` is the default UPLOAD_DIR (src/lib/paths.ts) and holds user files
+# keyed by random id. Only the directory itself is tracked, via .gitkeep: the
+# previous ignore rule listed `public/uploads/`, a path the code never writes to,
+# so real uploads were one `git add` away from being committed.
+/upload/*
+!/upload/.gitkeep
+
+# Runtime database files. `db/` is where DATABASE_URL=file:./db/… resolves; a
+# committed database would leak messages and, on `git checkout`, silently revert
+# a production database to an old copy.
 /db/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# SQLite backups taken by scripts/deploy.sh before a migration.
+/backups/
+
+# Local upload overrides and per-service environment files.
 /public/uploads/
-/.zscripts/dev.pid
 /mini-services/chat-service/.env
+
+# Runtime PID and log files.
+/.zscripts/dev.pid
+.zscripts/*.log
 /tmp/
 
-# Skills directory
-/skills/!.env.example
+# NOTE: `.env.example` is intentionally NOT ignored — it documents every required
+# variable. The previous `/skills/!.env.example` line was a malformed rule that
+# did nothing (the `!` cannot un-ignore inside a pattern).
 
-# Runtime database and PID files
-db/
-.zscripts/dev.pid
+# Playwright output (traces, screenshots, video)
+playwright-report/
+test-results/
+playwright/.cache/
+e2e-run.log

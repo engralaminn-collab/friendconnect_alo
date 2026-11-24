@@ -79,7 +79,7 @@ test('messaging/calling policy denies blocks and non-friend private targets', as
 test('accepted friends and public permissions are allowed; self calls are denied', async () => {
   const friends = {
     block: { findFirst: async () => null },
-    friendship: { findFirst: async () => ({ id: 'friendship' }) },
+    friendship: { findFirst: async () => ({ id: 'friendship', status: 'ACCEPTED' }) },
     user: { findUnique: async () => ({ profile: { messagePermission: 'FRIENDS' } }) },
   }
   assert.equal(await canInteract(friends, 'a', 'b', 'messagePermission'), true)

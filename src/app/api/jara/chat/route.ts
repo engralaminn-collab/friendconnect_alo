@@ -9,6 +9,7 @@ import { rateLimit } from '@/lib/cache'
 import { JARA_ID, parseInstructionToPatch, hashConfig, proposalExpiresAt, JARA_DEFAULT_CONFIG } from '@/lib/jara'
 import { getRendererCapability } from '@/lib/jara-renderer'
 import { assertJaraEnabled, applyJaraConfigPatch, isSuperAdmin as isSuperAdminRole, writeJaraAudit, requestMeta } from '@/lib/jara-admin'
+import { handleRouteError } from '@/lib/api-errors'
 
 // POST /api/jara/chat — chat with Jara (text)
 // Handles both normal conversation and Super Admin configuration instructions
@@ -22,9 +23,16 @@ export async function POST(req: NextRequest) {
 
   try {
     await assertJaraEnabled('chat')
-  } catch (e: any) {
-    if (e?.status === 503) return errorJson('Jara AI is currently disabled by a Super Admin.', 503)
-    return errorJson(e?.message || 'Jara unavailable', e?.status || 403)
+  } catch (error) {
+    const candidate = error as { status?: number; message?: string }
+    if (candidate?.status === 503) {
+      return errorJson('Jara AI is currently disabled by a Super Admin.', 503)
+    }
+    // Policy denials carry a safe reason; anything else is logged and generic.
+    if (candidate?.status && candidate.status < 500 && candidate.message) {
+      return errorJson(candidate.message, candidate.status)
+    }
+    return handleRouteError(error, 'POST /api/jara/chat')
   }
 
   let body: any

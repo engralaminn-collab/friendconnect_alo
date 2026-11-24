@@ -1,25 +1,57 @@
 import { db } from '@/lib/db'
-import { getSessionUser } from '@/lib/session'
-import { errorJson, json } from '@/lib/serialize'
+import { getCurrentUser } from '@/lib/session'
+import { handleRouteError } from '@/lib/api-errors'
+import { json } from '@/lib/serialize'
 
+/**
+ * GET /api/friends/blocked
+ *
+ * Users this account has blocked. Reads the `Block` table — the authority for
+ * block enforcement — rather than `Friendship.status`, so the list cannot
+ * disagree with the messaging checks.
+ */
 export async function GET() {
   try {
-    const me = await getSessionUser()
-    if (!me) return errorJson('Unauthorized', 401)
-    const blocked = await db.friendship.findMany({
-      where: { blockerId: me.id, status: 'BLOCKED' },
-      include: { receiver: { include: { profile: true } } },
+    const me = await getCurrentUser()
+    if (!me) return json({ error: 'Unauthorized', code: 'UNAUTHORIZED' }, 401)
+
+    const blocks = await db.block.findMany({
+      where: { fromId: me.id },
+      orderBy: { createdAt: 'desc' },
     })
+
+    const targetIds = blocks.map((b: { toId: string }) => b.toId)
+    const users = targetIds.length
+      ? await db.user.findMany({
+          where: { id: { in: targetIds } },
+          select: {
+            id: true,
+            username: true,
+            name: true,
+            avatarUrl: true,
+            profile: { select: { photoUrl: true } },
+          },
+        })
+      : []
+    const userMap = new Map(users.map((user: any) => [user.id, user]))
+
     return json({
-      blocked: blocked.map((f) => ({
-        id: f.receiver.id,
-        username: f.receiver.username,
-        name: f.receiver.name,
-        photoUrl: f.receiver.profile?.photoUrl ?? null,
-        blockedAt: f.updatedAt.toISOString(),
-      })),
+      blocked: blocks
+        .map((block: any) => {
+          const user = userMap.get(block.toId) as any
+          if (!user) return null
+          return {
+            id: user.id,
+            username: user.username,
+            name: user.name,
+            photoUrl: user.profile?.photoUrl ?? user.avatarUrl ?? null,
+            blockedAt:
+              block.createdAt instanceof Date ? block.createdAt.toISOString() : block.createdAt,
+          }
+        })
+        .filter(Boolean),
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, 'GET /api/friends/blocked')
   }
 }

@@ -1,6 +1,7 @@
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // GET my friends who are currently considered "online" (recent lastSeen)
 export async function GET() {
@@ -32,7 +33,7 @@ export async function GET() {
       }
     }
     return json({ online })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/friends/online')
   }
 }

@@ -25,19 +25,38 @@ model User {
   bio                String?
   status             String   @default("")
   role               String   @default("user") // user | admin
-  emailVerified      DateTime?
+  // Boolean, not DateTime: every caller treats this as a flag
+  // (`where: { emailVerified: true }`, `emailVerified ?? false`).
+  emailVerified      Boolean  @default(false)
   lastSeenAt         DateTime @default(now())
   createdAt          DateTime @default(now())
   updatedAt          DateTime @updatedAt
 
   // 2FA
   twoFactorEnabled   Boolean  @default(false)
+  // Unconfirmed secret from /api/2fa/setup. Only /api/2fa/verify reads it, and
+  // only until the first valid code confirms it (finding #6).
   twoFactorSecret    String?
+  // Confirmed TOTP secret. Set at the same moment 2FA becomes enabled.
+  twoFactorConfirmedSecret String?
+  // Newline-separated SHA-256 digests of the backup codes; each is removed on
+  // use so it can never be redeemed twice.
   twoFactorBackup    String?
+  twoFactorBackupUsed Int     @default(0)
+  // Failed-code counter for the login challenge, cleared on success.
+  twoFactorAttempts  Int      @default(0)
 
-  // OTP
+  // One-time codes (password reset / e-mail verification).
+  // `otpCode` holds a scrypt hash, never the code itself (finding #5).
   otpCode            String?
   otpExpiry          DateTime?
+  // Brute-force counter; the code is destroyed once MAX_ATTEMPTS is reached.
+  otpAttempts        Int       @default(0)
+  // Earliest time a new code may be issued, to throttle re-sends.
+  otpSentAt          DateTime?
+  // SHA-256 digest of the opaque, single-use credential issued by verify-otp.
+  resetTokenHash     String?
+  resetTokenExpiry   DateTime?
 
   // File quota
   fileUsedBytes      Int      @default(0)
@@ -72,6 +91,8 @@ model User {
   chatPreferences    ChatPreference[]
   auditLogs          AuditLog[]
   pushSubscriptions  PushSubscription[]
+  fileAccessGrants   FileAccess[]         @relation("FileAccessUser")
+  messageReactions   MessageReaction[]    @relation("MessageReactionUser")
   stories            Story[]
   storyViews         StoryView[]
   storyReplies       StoryReply[]
@@ -192,6 +213,7 @@ model Message {
   reminders    MessageReminder[]
   reactions    MessageReaction[]
   attachments  Attachment[]
+  fileAccess   FileAccess[]
 
   @@index([receiverId, status])
   @@index([senderId])
@@ -219,8 +241,11 @@ model MessageReaction {
   createdAt DateTime @default(now())
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  // Required by every read path: `reactions: { include: { user: ... } }`.
+  user    User    @relation("MessageReactionUser", fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([messageId, userId, emoji])
+  @@index([messageId])
 }
 
 model MessageDraft {
@@ -333,14 +358,20 @@ model File {
   id         String   @id @default(cuid())
   ownerId    String
   name       String
-  filename   String
+  // Optional: upload routes write `name` + `url` only. A required `filename`
+  // made every POST /api/files/upload fail against a Prisma backend.
+  filename   String?
   mimeType   String
   size       Int
-  url        String
+  url        String   @unique
   thumbUrl   String?
   createdAt  DateTime @default(now())
 
   owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  // Download authorization resolves through this relation instead of scanning
+  // the Message table for a matching fileUrl.
+  @@index([ownerId])
 }
 
 // ============================================================
@@ -630,6 +661,44 @@ model Attachment {
   createdAt  DateTime @default(now())
 
   message Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([url])
+  @@index([ownerId])
+}
+
+// ============================================================
+// FILE ACCESS GRANTS
+// ============================================================
+//
+// Download authorization for a stored file used to be decided by scanning the
+// whole Message table for a matching `fileUrl` (unindexed, capped at 100 rows,
+// and silently wrong once a URL had more than 100 references). Each row here is
+// one explicit, indexed grant: "`userId` may read `fileUrl`".
+//
+// Grants are written when a file is attached to a message and are revoked when
+// the message is deleted for everyone or the story expires. Legacy files that
+// predate this table are covered by a one-off backfill in
+// `prisma/migrations/..._add_fileaccess_and_attachments` and by the ownership
+// and profile-visibility rules that remain in `src/lib/file-access.ts`.
+
+model FileAccess {
+  id        String   @id @default(cuid())
+  fileUrl   String
+  userId    String
+  // owner | message_recipient | group_member | story_viewer | profile_public
+  source    String
+  // Populated when the grant comes from a message so it can be revoked.
+  messageId String?
+  createdAt DateTime @default(now())
+  expiresAt DateTime?
+
+  user    User     @relation("FileAccessUser", fields: [userId], references: [id], onDelete: Cascade)
+  message Message? @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@unique([fileUrl, userId])
+  @@index([fileUrl])
+  @@index([userId])
+  @@index([messageId])
 }
 
 

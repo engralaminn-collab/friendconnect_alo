@@ -171,13 +171,13 @@ function Login() {
         <div className="space-y-1.5">
           <Label htmlFor="li-id">Email or username</Label>
           <FieldShell icon={Mail}>
-            <Input id="li-id" value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="you@example.com" className="rounded-xl pl-9" onKeyDown={(e) => e.key === 'Enter' && submit()} />
+            <Input id="li-id" data-testid="auth-identifier" value={identifier} onChange={(e) => setIdentifier(e.target.value)} placeholder="you@example.com" className="rounded-xl pl-9" onKeyDown={(e) => e.key === 'Enter' && submit()} />
           </FieldShell>
         </div>
         <div className="space-y-1.5">
           <Label htmlFor="li-pw">Password</Label>
           <FieldShell icon={Lock}>
-            <Input id="li-pw" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" className="rounded-xl pl-9" onKeyDown={(e) => e.key === 'Enter' && submit()} />
+            <Input id="li-pw" data-testid="auth-password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="••••••••" className="rounded-xl pl-9" onKeyDown={(e) => e.key === 'Enter' && submit()} />
           </FieldShell>
         </div>
         {needs2fa && (
@@ -190,7 +190,7 @@ function Login() {
           Forgot password?
         </button>
       </div>
-      <Button size="lg" className="mt-6 w-full rounded-2xl" disabled={loading} onClick={submit}>
+      <Button size="lg" data-testid="auth-submit" className="mt-6 w-full rounded-2xl" disabled={loading} onClick={submit}>
         {loading ? 'Signing in…' : 'Sign in'}
       </Button>
       <div className="mt-6 rounded-2xl border border-dashed border-border bg-muted/40 p-3 text-xs text-muted-foreground">
@@ -253,7 +253,7 @@ function Register() {
           <FieldShell icon={Lock}><Input type="password" value={form.password} onChange={set('password')} placeholder="At least 8 characters, letter + number" className="rounded-xl pl-9" /></FieldShell>
         </div>
       </div>
-      <Button size="lg" className="mt-6 w-full rounded-2xl" disabled={loading} onClick={submit}>
+      <Button size="lg" data-testid="auth-submit" className="mt-6 w-full rounded-2xl" disabled={loading} onClick={submit}>
         {loading ? 'Creating…' : 'Create account'}
       </Button>
       <p className="mt-6 flex items-center justify-center gap-1 text-xs text-muted-foreground">

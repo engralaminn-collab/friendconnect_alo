@@ -1,6 +1,7 @@
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 // GET friend suggestions ranked by mutual friends count
 export async function GET() {
@@ -66,7 +67,7 @@ export async function GET() {
       .slice(0, 10)
 
     return json({ suggestions })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/friends/suggestions')
   }
 }

@@ -68,7 +68,13 @@ export function ProfileView() {
   const act = async (action: string, msg: string) => {
     setActionLoading(true)
     try {
-      await api('/api/friends', { method: 'POST', body: JSON.stringify({ action, targetId: u.id }) })
+      // Accept has its own endpoint so the server can verify that only the
+      // recipient accepts; the rest share the action contract.
+      if (action === 'accept') {
+        await api(`/api/friends/request/${u.id}/accept`, { method: 'POST' })
+      } else {
+        await api('/api/friends', { method: 'POST', body: JSON.stringify({ action, targetId: u.id }) })
+      }
       toast.success(msg)
       const p = await api<ProfileResult>(`/api/users/${u.id}`)
       setProfile(p)

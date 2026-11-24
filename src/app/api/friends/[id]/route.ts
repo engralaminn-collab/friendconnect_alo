@@ -1,16 +1,25 @@
-import { NextResponse } from "next/server"
-import { getCurrentUser } from "@/lib/session"
-import { db } from "@/lib/db"
+import { NextRequest } from 'next/server'
+import { getCurrentUser } from '@/lib/session'
+import { applyFriendAction, FriendError } from '@/lib/friendship'
+import { handleRouteError } from '@/lib/api-errors'
+import { errorJson, json } from '@/lib/serialize'
 
-export async function DELETE(_req: Request, { params }: { params: Promise<{ id: string }> }) {
-  const me = await getCurrentUser()
-  if (!me) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  // (await params).id here is the other user's id (we use it as the friend id)
-  const otherId = (await params).id
-  const fr = await db.friendship.findFirst({
-    where: { OR: [{ requesterId: me.id, receiverId: otherId }, { requesterId: otherId, receiverId: me.id }] },
-  })
-  if (!fr) return NextResponse.json({ error: "Friendship not found" }, { status: 404 })
-  await db.friendship.delete({ where: { id: fr.id } })
-  return NextResponse.json({ ok: true })
+/**
+ * DELETE /api/friends/[id]
+ *
+ * Remove a friendship. `id` is the other user's id.
+ */
+export async function DELETE(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  try {
+    const me = await getCurrentUser()
+    if (!me) return errorJson('Unauthorized', 401)
+    const { id } = await params
+    if (!id) return errorJson('Friend id required', 400)
+
+    const result = await applyFriendAction(me.id, id, 'remove')
+    return json(result)
+  } catch (error) {
+    if (error instanceof FriendError) return errorJson(error.message, error.status, error.code)
+    return handleRouteError(error, 'DELETE /api/friends/[id]')
+  }
 }

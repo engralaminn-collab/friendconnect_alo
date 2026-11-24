@@ -1,5 +1,6 @@
 import { getSessionUser, getCurrentSessionToken } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 
 export async function GET() {
   try {
@@ -13,7 +14,7 @@ export async function GET() {
         'cache-control': 'private, no-store',
       },
     })
-  } catch (e: any) {
-    return errorJson(e?.message || 'Server error', 500)
+  } catch (error) {
+    return handleRouteError(error, '/api/auth/token')
   }
 }

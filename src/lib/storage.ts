@@ -1,3 +1,8 @@
+// STATUS: not wired up. Uploads go through `src/app/api/files/upload` and
+// `src/lib/paths`/`uploadDir()` today. This provider abstraction exists for a
+// future move to S3-compatible object storage (see @aws-sdk/client-s3 in
+// package.json); nothing imports it.
+
 import { writeFileSync, readFileSync, existsSync, mkdirSync, unlinkSync, readdirSync } from 'fs'
 import { join } from 'path'
 import { logger } from '@/lib/logger'
