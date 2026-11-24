@@ -168,8 +168,11 @@ export async function befriend(
  * same thread; both users therefore open the same conversation.
  */
 export async function openChatWith(page: Page, peer: Account) {
+  // Wait for the sidebar itself. Waiting on `.or()` of the row and the new-chat
+  // button trips Playwright's strict mode as soon as both exist (a retry sees the
+  // conversation the first attempt created).
+  await expect(page.getByTestId('new-chat')).toBeVisible({ timeout: 30_000 })
   const existing = page.getByTestId('sidebar-conversation').filter({ hasText: peer.name })
-  await expect(existing.or(page.getByTestId('new-chat'))).toBeVisible({ timeout: 30_000 })
   if ((await existing.count()) === 0) {
     await page.getByTestId('new-chat').click()
     const friend = page.getByTestId('new-chat-friend').filter({ hasText: peer.name })
