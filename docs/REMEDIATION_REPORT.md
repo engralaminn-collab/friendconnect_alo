@@ -205,14 +205,19 @@ exactly that).
   which allocates ports, a temp SQLite file, a temp `UPLOAD_DIR` and a
   non-production secret.
 - `tests/e2e/02-chat.spec.ts` registers two users and exchanges a message through
-  the real UI; `data-testid` hooks were added to `AuthFlow.tsx`, `Composer.tsx`
-  and `app/page.tsx`.
+  the real UI; `data-testid` hooks were added to `AuthScreen.tsx`, `Sidebar.tsx`,
+  `ChatView.tsx` and `Composer.tsx` — the components `app/page.tsx` mounts. (An
+  earlier attempt put the sign-in ids on `fc/auth/AuthFlow.tsx`, a component this
+  app never renders, so no spec could get past login.)
 - CI installs Chromium and runs the suite; the report is uploaded on failure.
 
-The chat spec drives the flow the way a user does: log in through the form, send
-the friend request through the UI's API, open the conversation with the sidebar's
-**New chat** dialog, type into the composer, and assert the message is delivered,
-survives a reload and is readable through the REST contract. Its first version
+The chat spec drives the flow the way a user does: log in through the sign-in
+form, send the friend request through the UI's API, open the conversation from the
+sidebar (falling back to the **New chat** dialog), type into the composer, and
+assert the message is delivered, survives a reload and is readable through the REST
+contract. The realtime socket is not asserted: proving arrival without a reload
+needs the separate socket server and is flaky at one worker, so the suite asserts
+the persisted message both sides read instead of claiming a realtime guarantee. Its first version
 navigated to `/?view=chat&user=<id>`; the app has no URL routing, so that
 navigation stayed on the welcome screen and the spec could never have passed. The
 rewrite added the `new-chat` / `new-chat-friend` test hooks and removed the
