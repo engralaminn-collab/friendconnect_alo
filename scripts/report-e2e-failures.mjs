@@ -48,8 +48,22 @@ function annotateLogTail(reason) {
   }
   const lines = readFileSync(logPath, 'utf8').replace(/\r/g, '').split('\n').filter(Boolean)
   // The interesting part of a Playwright startup failure is at the end.
-  const tail = lines.slice(-25).join('\n')
+  const tail = lines.slice(-60).join('\n')
   annotate(`${reason}\n--- last lines of the end-to-end run ---\n${tail}`)
+}
+
+/**
+ * `tests/e2e/support.ts` writes console errors, page errors, failed requests and
+ * the rendered text of every tracked page when a test fails. That file is the only
+ * view into the browser from an environment where one cannot be run.
+ */
+const diagnosticsPath = 'test-results/diagnostics.txt'
+if (existsSync(diagnosticsPath)) {
+  const diagnostics = readFileSync(diagnosticsPath, 'utf8')
+  // One annotation per attempt, so the retry does not hide the first failure.
+  for (const attempt of diagnostics.split(/\n##### /).filter(Boolean)) {
+    annotate(`browser diagnostics\n${attempt}`)
+  }
 }
 
 if (!existsSync(reportPath)) {
@@ -67,16 +81,27 @@ try {
   process.exit(0)
 }
 
-const failed = []
-for (const suite of report.suites ?? []) {
-  for (const spec of suite.specs ?? []) {
-    for (const test of spec.tests ?? []) {
-      if (test.status === 'unexpected' || test.status === 'flaky' || test.status === 'timedOut') {
-        failed.push({ spec, test })
+/**
+ * Playwright's JSON report nests one suite per file and one more per
+ * `test.describe`, so a non-recursive walk finds nothing — which is exactly what
+ * made the first version of this script report "no failed test" while two tests
+ * were failing.
+ */
+function collectFailedSuites(suites, out = []) {
+  for (const suite of suites ?? []) {
+    for (const spec of suite.specs ?? []) {
+      for (const test of spec.tests ?? []) {
+        if (test.status === 'unexpected' || test.status === 'flaky' || test.status === 'timedOut') {
+          out.push({ spec, test })
+        }
       }
     }
+    collectFailedSuites(suite.suites, out)
   }
+  return out
 }
+
+const failed = collectFailedSuites(report.suites)
 
 if (!failed.length) {
   // Every test either passed or never ran: this is a webServer/startup failure
@@ -90,7 +115,8 @@ if (!failed.length) {
 for (const { spec, test } of failed) {
   const title = spec.title || spec.file
   const firstError = test.results?.find((result) => result.error)?.error?.message ?? 'no error message'
-  const detailFile = test.results?.[0]?.attachments?.find((a) => a.name === 'error-context')?.path
+  const attachments = (test.results ?? []).flatMap((result) => result.attachments ?? [])
+  const detailFile = attachments.find((a) => a.name === 'error-context')?.path
   let context = ''
   if (detailFile && existsSync(detailFile)) {
     // Playwright writes an ARIA snapshot of the page at the moment of failure.
