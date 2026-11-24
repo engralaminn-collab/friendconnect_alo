@@ -11,7 +11,10 @@
  *
  * Usage (in CI, after a failed `npm run test:e2e`):
  *
- *   node scripts/report-e2e-failures.mjs test-results/report.json
+ *   node scripts/report-e2e-failures.mjs test-results/report.json e2e-run.log
+ *
+ * The log must be written outside `test-results/`: Playwright empties its
+ * `outputDir` when a run starts, which unlinks a log `tee` is still writing to.
  *
  * Playwright's JSON reporter writes one entry per test; this prints a
  * `::error::` workflow command per failed test with its first error message and
@@ -35,7 +38,7 @@ function annotate(message, file) {
 }
 
 /** The step's combined output, captured by CI (`| tee test-results/e2e.log`). */
-const logPath = process.argv[3] || 'test-results/e2e.log'
+const logPath = process.argv[3] || 'e2e-run.log'
 
 /** Annotate the tail of the run log — the only way to see a startup failure. */
 function annotateLogTail(reason) {
