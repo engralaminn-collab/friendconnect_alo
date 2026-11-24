@@ -82,7 +82,7 @@ export default function Home() {
   }
   function handleRejectCall() {
     if (!incomingCall) return
-    if (socket?.connected) socket.emit("call:reject", { toUserId: incomingCall.fromUserId, callId: incomingCall.callId })
+    if (socket?.connected) socket.emit("call:rejected", { toUserId: incomingCall.fromUserId, callId: incomingCall.callId })
     setIncomingCall(null)
   }
   function handleEndCall() { setActiveCall(null) }
@@ -98,24 +98,27 @@ export default function Home() {
     } catch {}
   }, [])
 
-  // Bootstrap: fetch current user, conversations, friends
+  // Bootstrap: fetch current user, conversations, friends, starred messages
   const bootstrap = useCallback(async () => {
     try {
-      const [meR, convsR, friendsR, notifR] = await Promise.all([
+      const [meR, convsR, friendsR, notifR, starredR] = await Promise.all([
         fetch("/api/me"),
         fetch("/api/conversations"),
         fetch("/api/friends"),
         fetch("/api/notifications?unread=1"),
+        fetch("/api/messages/starred"),
       ])
       if (!meR.ok) throw new Error("not authed")
       const meBody = await meR.json()
       const convsBody = await convsR.json()
       const friendsBody = await friendsR.json()
       const notifBody = await notifR.json()
+      const starredBody = starredR.ok ? await starredR.json() : { starred: [] }
       setCurrentUser(meBody.user)
       setConversations(convsBody.conversations || [])
       setFriends(friendsBody.friends || [])
       setUnreadNotifications(notifBody.unreadCount || 0)
+      setStarredIds(new Set((starredBody.starred || []).map((s: any) => s.id)))
       setBootstrapped(true)
       fetchJara()
     } catch (e) {
@@ -182,7 +185,7 @@ export default function Home() {
           console.warn("[socket] connect_error", err.message)
         })
         s.on("call:incoming", (data: any) => {
-          if (activeCallRef.current) { s.emit("call:reject", { toUserId: data.fromUserId, callId: data.callId }); return }
+          if (activeCallRef.current) { s.emit("call:busy", { toUserId: data.fromUserId, callId: data.callId }); return }
           const peer = findPeerName(data.fromUserId)
           setIncomingCall({ callId: data.callId, callType: data.callType, fromUserId: data.fromUserId, fromName: peer?.name || "Unknown", fromAvatarUrl: peer?.avatarUrl || null, offer: data.offer })
         })
@@ -371,6 +374,14 @@ export default function Home() {
             onBlock={handleBlock}
             onReport={handleReport}
             onConversationChanged={refreshConversations}
+            onStarChanged={(messageId, isStarred) => {
+              setStarredIds((prev) => {
+                const next = new Set(prev)
+                if (isStarred) next.add(messageId)
+                else next.delete(messageId)
+                return next
+              })
+            }}
             onStartCall={handleStartCall}
           />
         ) : (

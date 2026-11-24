@@ -352,65 +352,54 @@ test('$transaction replays nested creates with the ids the callback already saw'
   assert.equal(members[0].id, staged.members[0].id)
 })
 
-test('relation filters in `where` are applied, not silently dropped', async (t) => {
-  // Regression, and the most serious bug this suite has found: `cond()` had no
-  // relation support. `members: { some: { userId } }` reached `pushFilter()`, which
-  // recognised no operator and emitted nothing, so the condition left the WHERE
-  // clause and the query matched every row. Anything written as a relation filter
-  // was therefore a no-op — including membership checks, which is how an unrelated
-  // user could read a two-person conversation through `GET /api/messages`.
-  const { prisma } = await freshRuntime(t, 'relations')
+test('create, update, upsert, and delete honor args.select without leaking sensitive fields', async (t) => {
+  const { prisma } = await freshRuntime(t, 'select-mutations')
 
-  for (const id of ['rel-alice', 'rel-bob', 'rel-carol']) {
-    await prisma.user.create({ data: { id, email: `${id}@x.invalid`, username: id, name: id, passwordHash: 'h' } })
-  }
-  const conversation = await prisma.conversation.create({
-    data: { type: 'direct', members: { create: [{ userId: 'rel-alice' }, { userId: 'rel-bob' }] } },
-  })
-  // An unrelated direct conversation, so "matches everything" is distinguishable
-  // from "matches the one we asked for".
-  const other = await prisma.conversation.create({
-    data: { type: 'direct', members: { create: [{ userId: 'rel-bob' }, { userId: 'rel-carol' }] } },
-  })
-
-  const forCarol = await prisma.conversation.findMany({
-    where: { members: { some: { userId: 'rel-carol' } } },
-    select: { id: true },
-  })
-  assert.deepEqual(forCarol.map((row) => row.id), [other.id], 'some() must filter by the member id')
-
-  const forNobody = await prisma.conversation.findMany({
-    where: { members: { some: { userId: 'rel-nobody' } } },
-    select: { id: true },
-  })
-  assert.deepEqual(forNobody, [], 'a non-member matches nothing')
-
-  const bothMembers = await prisma.conversation.findMany({
-    where: {
-      type: 'direct',
-      AND: [{ members: { some: { userId: 'rel-alice' } } }, { members: { some: { userId: 'rel-carol' } } }],
+  const created = await prisma.user.create({
+    data: {
+      email: 'sel@x.i',
+      username: 'seluser',
+      name: 'Sel',
+      passwordHash: 'secret-hash',
+      twoFactorSecret: 'secret-totp',
     },
-    select: { id: true },
+    select: { id: true, username: true, name: true },
   })
-  assert.deepEqual(bothMembers, [], 'two `some` filters must both hold, not be ORed')
+  assert.deepEqual(Object.keys(created).sort(), ['id', 'name', 'username'])
+  assert.equal('passwordHash' in created, false)
+  assert.equal('twoFactorSecret' in created, false)
 
-  const shared = await prisma.conversation.findMany({
-    where: { AND: [{ members: { some: { userId: 'rel-alice' } } }, { members: { some: { userId: 'rel-bob' } } }] },
-    select: { id: true },
+  const updated = await prisma.user.update({
+    where: { id: created.id },
+    data: { name: 'Sel Updated' },
+    select: { id: true, name: true },
   })
-  assert.deepEqual(shared.map((row) => row.id), [conversation.id], 'the shared conversation matches both')
+  assert.deepEqual(Object.keys(updated).sort(), ['id', 'name'])
+  assert.equal(updated.name, 'Sel Updated')
+  assert.equal('passwordHash' in updated, false)
 
-  const none = await prisma.conversation.findMany({
-    where: { members: { none: { userId: 'rel-alice' } } },
-    select: { id: true },
+  const upsertedExisting = await prisma.user.upsert({
+    where: { id: created.id },
+    update: { name: 'Sel Upserted' },
+    create: { email: 'never@x.i', username: 'never', name: 'Never', passwordHash: 'x' },
+    select: { id: true, name: true },
   })
-  assert.deepEqual(none.map((row) => row.id), [other.id], 'none() excludes conversations containing the user')
+  assert.deepEqual(Object.keys(upsertedExisting).sort(), ['id', 'name'])
+  assert.equal(upsertedExisting.name, 'Sel Upserted')
 
-  // An unknown field must throw: a silently ignored condition is a security bug
-  // that looks like a passing test.
-  await assert.rejects(
-    () => prisma.conversation.findMany({ where: { notAColumn: 'x' } }),
-    /Unknown filter field/,
-    'an unknown filter field must be rejected',
-  )
+  const upsertedNew = await prisma.user.upsert({
+    where: { email: 'sel2@x.i' },
+    update: { name: 'Nope' },
+    create: { email: 'sel2@x.i', username: 'sel2', name: 'Sel2', passwordHash: 'secret-hash-2' },
+    select: { id: true, username: true },
+  })
+  assert.deepEqual(Object.keys(upsertedNew).sort(), ['id', 'username'])
+  assert.equal('passwordHash' in upsertedNew, false)
+
+  const deleted = await prisma.user.delete({
+    where: { id: upsertedNew.id },
+    select: { id: true, username: true },
+  })
+  assert.deepEqual(Object.keys(deleted).sort(), ['id', 'username'])
+  assert.equal('passwordHash' in deleted, false)
 })

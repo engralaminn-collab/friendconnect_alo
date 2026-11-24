@@ -31,15 +31,65 @@ export function JaraVoiceCall({ config, onEnd, onTranscript }: JaraVoiceCallProp
   const speakingRef = useRef(false)
   const analyserRef = useRef<AnalyserNode | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
+  const audioRef = useRef<HTMLAudioElement | null>(null)
 
-  // TTS using browser speechSynthesis with Bangla support
-  const speak = useCallback(async (text: string) => {
-    if (!text) return
-    // Cancel any ongoing speech (barge-in support: user interrupted)
+  // TTS: plays server-synthesized audio (Piper/Orpheus/OpenAI) with real audio lip-sync when returned,
+  // or falls back to browser speechSynthesis.
+  const speak = useCallback(async (text: string, audioBase64?: string, audioMimeType?: string) => {
+    if (!text && !audioBase64) return
+    if (audioRef.current) {
+      try { audioRef.current.pause() } catch {}
+      audioRef.current = null
+    }
     if (window.speechSynthesis.speaking) window.speechSynthesis.cancel()
 
     setJaraMood("speaking")
     speakingRef.current = true
+
+    if (audioBase64) {
+      try {
+        const audio = new Audio(`data:${audioMimeType || "audio/mpeg"};base64,${audioBase64}`)
+        audioRef.current = audio
+        let rafId = 0
+        let audioCtx: AudioContext | null = null
+        try {
+          const Ctx = window.AudioContext || (window as any).webkitAudioContext
+          audioCtx = new Ctx()
+          const source = audioCtx.createMediaElementSource(audio)
+          const analyser = audioCtx.createAnalyser()
+          analyser.fftSize = 128
+          source.connect(analyser)
+          analyser.connect(audioCtx.destination)
+          const freq = new Uint8Array(analyser.frequencyBinCount)
+          const tick = () => {
+            if (!speakingRef.current) return
+            analyser.getByteFrequencyData(freq)
+            const level = Math.min(1, freq.reduce((a, b) => a + b, 0) / (freq.length * 140))
+            setSpeakingLevel(level)
+            rafId = requestAnimationFrame(tick)
+          }
+          rafId = requestAnimationFrame(tick)
+        } catch {}
+
+        const cleanup = (nextMood: "listening" | "idle") => {
+          if (rafId) cancelAnimationFrame(rafId)
+          if (audioCtx) audioCtx.close().catch(() => {})
+          audioRef.current = null
+          setSpeakingLevel(0)
+          setJaraMood(nextMood)
+          speakingRef.current = false
+          if (nextMood === "listening") {
+            try { recognitionRef.current?.start() } catch {}
+          }
+        }
+        audio.onended = () => cleanup("listening")
+        audio.onerror = () => cleanup("idle")
+        await audio.play()
+        return
+      } catch {
+        // Fall through to browser speechSynthesis if audio playback fails
+      }
+    }
 
     // Prefer Bangla voice if config is bn
     const voices = window.speechSynthesis.getVoices()
@@ -57,16 +107,12 @@ export function JaraVoiceCall({ config, onEnd, onTranscript }: JaraVoiceCallProp
     utter.pitch = Number(config?.pitch) || 1.0
     utter.lang = lang === "bn" ? "bn-BD" : "en-US"
 
-    // Lip-sync via audio analysis is not available for speechSynthesis; simulate with text length + interval
-    let lvl = 0
+    // Lip-sync via audio analysis is not available for speechSynthesis; simulate with interval
     const lvlInterval = setInterval(() => {
-      // simulate mouth movement while speaking
-      lvl = 0.3 + Math.random() * 0.7
-      setSpeakingLevel(lvl)
+      setSpeakingLevel(0.3 + Math.random() * 0.7)
     }, 110)
 
     utter.onboundary = () => {
-      // small accent on word boundaries
       setSpeakingLevel(0.8)
     }
     utter.onend = () => {
@@ -74,7 +120,6 @@ export function JaraVoiceCall({ config, onEnd, onTranscript }: JaraVoiceCallProp
       setSpeakingLevel(0)
       setJaraMood("listening")
       speakingRef.current = false
-      // resume listening
       try { recognitionRef.current?.start() } catch {}
     }
     utter.onerror = () => {
@@ -104,7 +149,7 @@ export function JaraVoiceCall({ config, onEnd, onTranscript }: JaraVoiceCallProp
       if (res.ok && data.reply) {
         historyRef.current.push({ role: "assistant", content: data.reply })
         onTranscript?.(data.reply, false)
-        await speak(data.reply)
+        await speak(data.reply, data.audioBase64, data.audioMimeType)
       } else {
         throw new Error(data.error || "Voice reply failed")
       }
@@ -179,6 +224,10 @@ export function JaraVoiceCall({ config, onEnd, onTranscript }: JaraVoiceCallProp
             setInterim("")
             // Barge-in: if Jara is speaking, interrupt
             if (speakingRef.current) {
+              if (audioRef.current) {
+                try { audioRef.current.pause() } catch {}
+                audioRef.current = null
+              }
               window.speechSynthesis.cancel()
               setSpeakingLevel(0)
               speakingRef.current = false
@@ -240,6 +289,8 @@ export function JaraVoiceCall({ config, onEnd, onTranscript }: JaraVoiceCallProp
       mounted = false
       listeningRef.current = false
       try { recognitionRef.current?.stop() } catch {}
+      try { audioRef.current?.pause() } catch {}
+      audioRef.current = null
       try { window.speechSynthesis.cancel() } catch {}
       streamRef.current?.getTracks().forEach(t => t.stop())
       streamRef.current = null
@@ -262,6 +313,8 @@ export function JaraVoiceCall({ config, onEnd, onTranscript }: JaraVoiceCallProp
   const handleEnd = useCallback(() => {
     setState("ended")
     try { recognitionRef.current?.stop() } catch {}
+    try { audioRef.current?.pause() } catch {}
+    audioRef.current = null
     try { window.speechSynthesis.cancel() } catch {}
     streamRef.current?.getTracks().forEach(t => t.stop())
     onEnd()

@@ -17,9 +17,11 @@ function mockStore(seed: Record<string, any[]> = {}) {
   const tables: Record<string, any[]> = {
     fileAccess: seed.fileAccess ?? [],
     profile: seed.profile ?? [],
+    user: seed.user ?? [],
     block: seed.block ?? [],
     friendship: seed.friendship ?? [],
     groupMember: seed.groupMember ?? [],
+    conversationMember: seed.conversationMember ?? [],
     message: seed.message ?? [],
     file: seed.file ?? [],
     jaraAsset: seed.jaraAsset ?? [],
@@ -69,6 +71,11 @@ function mockStore(seed: Record<string, any[]> = {}) {
         return tables.profile.find((row) => where?.photoUrl === undefined || row.photoUrl === where.photoUrl) ?? null
       },
     },
+    user: {
+      async findFirst({ where }: any = {}) {
+        return tables.user.find((row) => where?.avatarUrl === undefined || row.avatarUrl === where.avatarUrl) ?? null
+      },
+    },
     block: {
       // Honour the OR pair: a block row only applies to its own two users.
       async findFirst({ where }: any = {}) {
@@ -105,6 +112,13 @@ function mockStore(seed: Record<string, any[]> = {}) {
     groupMember: {
       async findMany({ where }: any = {}) {
         return tables.groupMember.filter((row) => where?.groupId === undefined || row.groupId === where.groupId)
+      },
+    },
+    conversationMember: {
+      async findMany({ where }: any = {}) {
+        return tables.conversationMember.filter(
+          (row) => where?.conversationId === undefined || row.conversationId === where.conversationId,
+        )
       },
     },
     message: {
@@ -313,4 +327,31 @@ test('the core refuses to run without a configured store instead of guessing a b
   } finally {
     core.setStoreProvider(() => db)
   }
+})
+
+test('conversation attachments grant access to every conversation member and User.avatarUrl respects ownership + visibility', async () => {
+  const attUrl = '/api/files/conv-att'
+  const convStore = mockStore({
+    conversationMember: [
+      { conversationId: 'c1', userId: 'sender' },
+      { conversationId: 'c1', userId: 'peer' },
+    ],
+  })
+  await grantMessageFileAccess(
+    { id: 'mc1', senderId: 'sender', conversationId: 'c1', attachments: [{ url: attUrl }] },
+    convStore,
+  )
+  assert.equal(await canDownloadFile('peer', { ownerId: 'sender', url: attUrl }, convStore), true)
+  assert.equal(await canDownloadFile('outsider', { ownerId: 'sender', url: attUrl }, convStore), false)
+
+  const avatarUrl = '/api/files/user-avatar'
+  const avatarStore = mockStore({
+    user: [{ id: 'avatar-owner', avatarUrl, profile: { profileVisibility: 'PUBLIC' } }],
+  })
+  assert.equal(await canDownloadFile('viewer', { ownerId: 'avatar-owner', url: avatarUrl }, avatarStore), true)
+  // An attacker claiming someone else's file URL as their own avatarUrl cannot make it public.
+  const spoofedStore = mockStore({
+    user: [{ id: 'attacker', avatarUrl, profile: { profileVisibility: 'PUBLIC' } }],
+  })
+  assert.equal(await canDownloadFile('viewer', { ownerId: 'victim-owner', url: avatarUrl }, spoofedStore), false)
 })

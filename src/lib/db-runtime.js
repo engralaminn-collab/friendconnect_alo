@@ -1046,10 +1046,10 @@ function delegate(name) {
       // The whole tree commits or nothing does, so a group can never be created
       // without the members the same call promised.
       db.transaction(() => insertTree(db, tree))()
-      const parent = await this.findUnique({ where: { id: tree.row.id }, include: args.include })
+      const parent = await this.findUnique({ where: { id: tree.row.id }, include: args.include, select: args.select })
       if (!parent) return parent
       for (const [field, children] of Object.entries(tree.children)) {
-        if (parent[field] === undefined) {
+        if (parent[field] === undefined && (!args.select || args.select[field])) {
           parent[field] = model.relations[field].kind === 'many'
             ? children.map((child) => child.row)
             : children[0].row
@@ -1074,7 +1074,8 @@ function delegate(name) {
         }
         insertTree(db, { key: name, row: null, connects: trees.connects, children: trees.children })
       })()
-      return this.findFirst({ where: args.where, include: args.include })
+      const reloadWhere = existing.id !== undefined ? { id: existing.id } : args.where
+      return this.findFirst({ where: reloadWhere, include: args.include, select: args.select })
     },
     async updateMany(args = {}) {
       const db = getSqlite()
@@ -1084,7 +1085,7 @@ function delegate(name) {
       return { count: res.changes }
     },
     async delete(args = {}) {
-      const existing = await this.findFirst({ where: args.where })
+      const existing = await this.findFirst({ where: args.where, include: args.include, select: args.select })
       const db = getSqlite()
       const w = cond(model, args.where)
       db.prepare(`DELETE FROM "${model.table}" WHERE ${w.sql}`).run(...w.params)
@@ -1098,8 +1099,8 @@ function delegate(name) {
     },
     async upsert(args = {}) {
       const existing = await this.findFirst({ where: args.where })
-      if (existing) return this.update({ where: args.where, data: args.update, include: args.include })
-      return this.create({ data: { ...args.create }, include: args.include })
+      if (existing) return this.update({ where: args.where, data: args.update, include: args.include, select: args.select })
+      return this.create({ data: { ...args.create }, include: args.include, select: args.select })
     },
   }
 }

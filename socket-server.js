@@ -22,6 +22,7 @@ try {
 }
 
 const http = require('http')
+const crypto = require('crypto')
 const { Server } = require('socket.io')
 const { prisma } = require('./src/lib/db-runtime.js')
 const {
@@ -40,10 +41,70 @@ fileAccess.setStoreProvider(() => prisma)
 
 const PORT = Number(process.env.SOCKET_PORT || 3003)
 const APP_ORIGIN = process.env.APP_ORIGIN || process.env.NEXTAUTH_URL || true
+const INTERNAL_SECRET =
+  process.env.SOCKET_INTERNAL_SECRET ||
+  process.env.NEXTAUTH_SECRET ||
+  (process.env.NODE_ENV !== 'production' ? 'friendconnect-dev-secret-change-in-production' : '')
+const ALLOWED_INTERNAL_EVENTS = new Set([
+  'message:new',
+  'message:updated',
+  'message:deleted',
+  'message:reaction',
+  'notification',
+])
+
+function verifyInternalSecret(provided) {
+  if (!INTERNAL_SECRET || typeof provided !== 'string' || !provided.length) return false
+  const a = Buffer.from(INTERNAL_SECRET, 'utf8')
+  const b = Buffer.from(provided, 'utf8')
+  if (a.length !== b.length) return false
+  return crypto.timingSafeEqual(a, b)
+}
+
 const server = http.createServer((req, res) => {
   if (req.url === '/health' || req.url === '/healthz') {
     res.writeHead(200, { 'Content-Type': 'application/json' })
     res.end(JSON.stringify({ ok: true, service: 'friendconnect-socket', uptime: process.uptime() }))
+    return
+  }
+  if (req.method === 'POST' && req.url === '/internal/emit') {
+    const provided = req.headers['x-internal-secret']
+    if (!verifyInternalSecret(Array.isArray(provided) ? provided[0] : provided)) {
+      res.writeHead(401, { 'Content-Type': 'application/json' })
+      res.end(JSON.stringify({ error: 'Unauthorized' }))
+      return
+    }
+    const chunks = []
+    let bytes = 0
+    req.on('data', (chunk) => {
+      bytes += chunk.length
+      if (bytes <= 256 * 1024) chunks.push(chunk)
+    })
+    req.on('end', () => {
+      if (bytes > 256 * 1024) {
+        res.writeHead(413, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'Payload too large' }))
+        return
+      }
+      try {
+        const body = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+        const event = typeof body.event === 'string' ? body.event : ''
+        const userIds = Array.isArray(body.userIds) ? body.userIds : []
+        if (!ALLOWED_INTERNAL_EVENTS.has(event)) {
+          res.writeHead(400, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ error: 'Invalid event' }))
+          return
+        }
+        for (const uid of userIds) {
+          if (typeof uid === 'string' && uid) io.to(`user:${uid}`).emit(event, body.payload)
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ ok: true }))
+      } catch {
+        res.writeHead(400, { 'Content-Type': 'application/json' })
+        res.end(JSON.stringify({ error: 'Invalid JSON' }))
+      }
+    })
     return
   }
   res.writeHead(200, { 'Content-Type': 'text/plain' })
@@ -283,6 +344,7 @@ io.on('connection', (socket) => {
   }
 
   function messagePayload(msg) {
+    const u = socket.data.user
     return {
       id: msg.id,
       senderId: msg.senderId,
@@ -298,6 +360,11 @@ io.on('connection', (socket) => {
       replyToId: msg.replyToId,
       status: msg.status,
       createdAt: msg.createdAt instanceof Date ? msg.createdAt.toISOString() : msg.createdAt,
+      sender: u && u.id === msg.senderId
+        ? { id: u.id, username: u.username || '', name: u.name || 'User', avatarUrl: u.avatarUrl ?? null }
+        : undefined,
+      attachments: msg.attachments || [],
+      reactions: msg.reactions || [],
     }
   }
 
@@ -596,6 +663,7 @@ io.on('connection', (socket) => {
       userId: me,
       emoji,
       op: existing ? 'remove' : 'add',
+      action: existing ? 'removed' : 'added',
     }
     const recipients = message.conversationId
       ? await memberIdsOf(message.conversationId)
@@ -643,21 +711,43 @@ io.on('connection', (socket) => {
     const me = requireAuth()
     if (!me || !messageId) return
     const msg = await prisma.message.findUnique({ where: { id: messageId } })
-    if (!msg || msg.senderId !== me) return
-    const deletedFor = scope === 'everyone' ? 'everyone' : 'me'
-    await prisma.message.update({
-      where: { id: messageId },
-      data: { deletedFor, content: deletedFor === 'everyone' ? '' : msg.content },
-    })
-    // Withdrawing an attachment revokes only the grants this message created,
-    // so the same upload stays reachable in any other thread that shares it.
-    if (deletedFor === 'everyone') await fileAccess.revokeMessageGrants(msg)
-    const payload = { id: messageId, conversationId: msg.conversationId ?? null, deletedFor }
+    if (!msg) return
+    const isParticipant = await isMessageParticipant(prisma, me, msg)
+    if (!isParticipant) return
+    const wantsEveryone = scope === 'everyone' || scope === 'all'
+    if (wantsEveryone && msg.senderId !== me) return
+    const deletedFor = wantsEveryone ? 'everyone' : 'me'
+    if (wantsEveryone) {
+      await prisma.message.update({
+        where: { id: messageId },
+        data: { deletedFor: 'everyone', content: '', fileUrl: null, fileName: null, fileSize: null, mimeType: null },
+      })
+      // Withdrawing an attachment revokes only the grants this message created,
+      // so the same upload stays reachable in any other thread that shares it.
+      await fileAccess.revokeMessageGrants(msg)
+    } else {
+      const raw = typeof msg.deletedFor === 'string' ? msg.deletedFor.trim() : ''
+      if (raw !== 'everyone') {
+        const existing = raw === 'me' ? [msg.senderId] : raw.split(',').map((v) => v.trim()).filter(Boolean)
+        if (!existing.includes(me)) existing.push(me)
+        await prisma.message.update({
+          where: { id: messageId },
+          data: { deletedFor: existing.join(',') },
+        })
+      }
+    }
+    const payload = {
+      id: messageId,
+      messageId,
+      conversationId: msg.conversationId ?? null,
+      deletedFor,
+      deletedForAll: deletedFor === 'everyone',
+    }
     // A conversation message must reach every member: the chat UI drops the row
     // from an open thread on this event.
-    const recipients = msg.conversationId
-      ? await memberIdsOf(msg.conversationId)
-      : [msg.senderId, msg.receiverId].filter(Boolean)
+    const recipients = deletedFor === 'everyone'
+      ? (msg.conversationId ? await memberIdsOf(msg.conversationId) : [msg.senderId, msg.receiverId].filter(Boolean))
+      : [me]
     for (const userId of recipients) emitToUser(userId, 'message:deleted', payload)
   })
 
@@ -676,8 +766,18 @@ io.on('connection', (socket) => {
       where: { id: messageId },
       data: { content: String(content || ''), edited: true, editedAt: new Date() },
     })
-    const payload = { id: messageId, content: updated.content, edited: true, editedAt: updated.editedAt.toISOString() }
-    if (msg.receiverId) {
+    const payload = {
+      id: messageId,
+      conversationId: msg.conversationId ?? null,
+      content: updated.content,
+      edited: true,
+      editedAt: updated.editedAt.toISOString(),
+    }
+    if (msg.conversationId) {
+      for (const userId of await memberIdsOf(msg.conversationId)) {
+        emitToUser(userId, 'message:updated', payload)
+      }
+    } else if (msg.receiverId) {
       emitToUser(msg.receiverId, 'message:edited', payload)
       emitToUser(msg.senderId, 'message:edited', payload)
     }
@@ -789,6 +889,7 @@ io.on('connection', (socket) => {
   socket.on('call:ringing', (p = {}) => { relayCall('call:ringing', p).catch(() => {}) })
   socket.on('call:accepted', (p = {}) => { relayCall('call:accepted', p).catch(() => {}) })
   socket.on('call:rejected', (p = {}) => { relayCall('call:rejected', p).catch(() => {}) })
+  socket.on('call:reject', (p = {}) => { relayCall('call:rejected', p).catch(() => {}) })
   socket.on('call:busy', (p = {}) => { relayCall('call:busy', p).catch(() => {}) })
   socket.on('call:offer', (p = {}) => { relayCall('call:offer', { ...p, sdp: p.sdp || p.offer }).catch(() => {}) })
   socket.on('call:answer', (p = {}) => { relayCall('call:answer', { ...p, sdp: p.sdp || p.answer }, ['call:accepted']).catch(() => {}) })

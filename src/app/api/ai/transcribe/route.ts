@@ -2,8 +2,8 @@ import { NextRequest } from "next/server"
 import { getSessionUser } from "@/lib/session"
 import { errorJson, json } from "@/lib/serialize"
 import { handleRouteError } from '@/lib/api-errors'
+import { getVoiceCapability, transcribeAudioServer } from '@/lib/jara-voice'
 
-// Transcribe an audio file (voice message) to text using z-ai-web-dev-sdk ASR
 export async function POST(req: NextRequest) {
   const me = await getSessionUser()
   if (!me) return errorJson("Unauthorized", 401)
@@ -15,35 +15,35 @@ export async function POST(req: NextRequest) {
   if (!file.type.startsWith("audio/")) return errorJson("File must be audio", 400)
   if (file.size > 25 * 1024 * 1024) return errorJson("File too large (max 25MB)", 413)
 
+  const buffer = Buffer.from(await file.arrayBuffer())
+  const lang = typeof formData.get("language") === "string" ? String(formData.get("language")) : undefined
+
+  const cap = getVoiceCapability()
+  if (cap.stt.configured) {
+    const result = await transcribeAudioServer(buffer, file.name || "audio.webm", file.type, lang)
+    if (!result.ok) {
+      return errorJson(result.error || "Transcription failed", result.httpStatus || 502)
+    }
+    return json({ text: result.text, provider: result.provider })
+  }
+
   try {
     const ZAI = (await import("z-ai-web-dev-sdk")).default
     const zai: any = await (ZAI as any).create()
-    const buffer = Buffer.from(await file.arrayBuffer())
     const base64Audio = buffer.toString("base64")
 
-    let text = ""
-    try {
-      // Try different ASR method names the SDK might expose (cast to any to avoid TS errors for SDK variations)
-      const azai: any = zai
-      if (azai.asr?.transcribe) {
-        const result = await azai.asr.transcribe({ audio: base64Audio, mime_type: file.type })
-        text = result?.text || ""
-      } else if (azai.audio?.transcribe) {
-        const result = await azai.audio.transcribe({ audio: base64Audio, mime_type: file.type })
-        text = result?.text || ""
-      } else {
-        return errorJson("ASR not available in this SDK version", 501)
-      }
-    } catch (error) {
-      // Provider errors can carry request details and upstream keys; log the
-      // cause, return a stable message (finding #15).
-      console.error("[ASR] transcription failed", (error as Error)?.message)
-      return handleRouteError(error, 'POST /api/ai/transcribe')
+    const azai: any = zai
+    if (azai.asr?.transcribe) {
+      const result = await azai.asr.transcribe({ audio: base64Audio, mime_type: file.type })
+      return json({ text: result?.text || "", provider: "zai_asr" })
     }
-
-    return json({ text })
+    if (azai.audio?.transcribe) {
+      const result = await azai.audio.transcribe({ audio: base64Audio, mime_type: file.type })
+      return json({ text: result?.text || "", provider: "zai_audio" })
+    }
+    return errorJson("No server ASR configured (set JARA_ASR_URL / FASTER_WHISPER_URL or JARA_VOICE_USE_OPENAI=true)", 503)
   } catch (error) {
-    console.error("[ASR] error", error)
+    console.error("[ASR] error", (error as Error)?.message)
     return handleRouteError(error, 'POST /api/ai/transcribe')
   }
 }

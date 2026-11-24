@@ -2,6 +2,8 @@ import { NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/session"
 import { db } from "@/lib/db"
 import { filterMessagesVisibleToUser } from "@/lib/ai-input"
+import { grantMessageFileAccess } from "@/lib/file-access"
+import { emitRealtimeToUsers } from "@/lib/realtime-emit"
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const me = await getCurrentUser()
@@ -38,25 +40,64 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const me = await getCurrentUser()
   if (!me) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  const conversationId = (await params).id
   const membership = await db.conversationMember.findUnique({
-    where: { conversationId_userId: { conversationId: (await params).id, userId: me.id } },
+    where: { conversationId_userId: { conversationId, userId: me.id } },
   })
   if (!membership) return NextResponse.json({ error: "Not a member" }, { status: 403 })
 
   const body = await req.json().catch(() => ({}))
   const { content, replyToId, attachmentIds }: { content?: string; replyToId?: string; attachmentIds?: string[] } = body
-  if (!content?.trim() && (!attachmentIds || attachmentIds.length === 0)) {
+  const cleanAttachmentIds = Array.isArray(attachmentIds)
+    ? Array.from(new Set(attachmentIds.filter((v): v is string => typeof v === "string" && v.length > 0)))
+    : []
+  if (!content?.trim() && cleanAttachmentIds.length === 0) {
     return NextResponse.json({ error: "Empty message" }, { status: 400 })
   }
+  if (content && content.length > 10000) {
+    return NextResponse.json({ error: "Message too long" }, { status: 400 })
+  }
+
+  let ownedAttachments: Array<{ id: string; url: string; filename: string; mimeType: string; size: number }> = []
+  if (cleanAttachmentIds.length > 0) {
+    ownedAttachments = await db.attachment.findMany({
+      where: { id: { in: cleanAttachmentIds }, ownerId: me.id },
+      select: { id: true, url: true, filename: true, mimeType: true, size: true },
+    })
+    if (ownedAttachments.length !== cleanAttachmentIds.length) {
+      return NextResponse.json({ error: "Attachment not found or not owned by sender" }, { status: 403 })
+    }
+  }
+
+  const members = await db.conversationMember.findMany({
+    where: { conversationId },
+    select: { userId: true },
+  })
+  const peers = members.map((m) => m.userId).filter((uid) => uid !== me.id)
+  const firstAtt = ownedAttachments[0]
 
   const msg = await db.message.create({
     data: {
-      conversationId: (await params).id,
+      conversationId,
       senderId: me.id,
+      receiverId: peers.length === 1 ? peers[0] : null,
       content: content?.trim() || "",
+      type: firstAtt
+        ? firstAtt.mimeType.startsWith("image/")
+          ? "image"
+          : firstAtt.mimeType.startsWith("audio/")
+            ? "audio"
+            : firstAtt.mimeType.startsWith("video/")
+              ? "video"
+              : "file"
+        : "text",
+      fileUrl: firstAtt?.url ?? null,
+      fileName: firstAtt?.filename ?? null,
+      fileSize: firstAtt?.size ?? null,
+      mimeType: firstAtt?.mimeType ?? null,
       replyToId: replyToId || null,
-      ...(attachmentIds?.length
-        ? { attachments: { connect: attachmentIds.map((id) => ({ id })) } }
+      ...(cleanAttachmentIds.length
+        ? { attachments: { connect: cleanAttachmentIds.map((id) => ({ id })) } }
         : {}),
     },
     include: {
@@ -65,6 +106,23 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
       reactions: { include: { user: { select: { id: true, username: true } } } },
     },
   })
+
+  if (ownedAttachments.length > 0 || msg.fileUrl) {
+    await grantMessageFileAccess({
+      id: msg.id,
+      senderId: me.id,
+      receiverId: msg.receiverId,
+      conversationId,
+      fileUrl: msg.fileUrl,
+      attachments: msg.attachments?.length ? msg.attachments : ownedAttachments,
+    })
+  }
+
+  await emitRealtimeToUsers(
+    members.map((m) => m.userId),
+    "message:new",
+    msg,
+  )
 
   return NextResponse.json({ message: msg }, { status: 201 })
 }

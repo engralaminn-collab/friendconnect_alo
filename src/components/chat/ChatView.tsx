@@ -7,11 +7,14 @@ import { Composer } from "./Composer"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
-  Search, Phone, Video, MoreVertical, ArrowLeft, Star, UserX, Flag, BellOff,
+  Search, Phone, Video, MoreVertical, ArrowLeft, Star, UserX, Flag, BellOff, Bell, Pin,
 } from "lucide-react"
 import {
   DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger, DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu"
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription,
+} from "@/components/ui/dialog"
 import { formatTime, timeAgo } from "@/lib/api"
 import { toast } from "sonner"
 
@@ -47,6 +50,7 @@ export function ChatView({
   onBlock,
   onReport,
   onConversationChanged,
+  onStarChanged,
   onStartCall,
 }: {
   conversation: ConversationData
@@ -57,6 +61,7 @@ export function ChatView({
   onBlock: (userId: string) => void
   onReport: (userId: string) => void
   onConversationChanged: () => void
+  onStarChanged?: (messageId: string, starred: boolean) => void
   onStartCall: (peerUserId: string, peerName: string, peerAvatarUrl: string | null | undefined, callType: "audio" | "video") => void
 }) {
   const [messages, setMessages] = useState<MessageData[]>([])
@@ -67,6 +72,8 @@ export function ChatView({
   const [searchOpen, setSearchOpen] = useState(false)
   const [searchQuery, setSearchQuery] = useState("")
   const [searchResults, setSearchResults] = useState<MessageData[]>([])
+  const [starredOpen, setStarredOpen] = useState(false)
+  const [starredItems, setStarredItems] = useState<any[]>([])
   const [presence, setPresence] = useState<{ online: boolean; lastSeenAt?: string }>({ online: false })
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
@@ -148,33 +155,54 @@ export function ChatView({
   // Socket events
   useEffect(() => {
     if (!socket) return
-    const onNewMessage = (data: { conversationId: string; message: MessageData }) => {
-      if (data.conversationId !== conversation.id) return
+    const resolveSender = (msg: any) => {
+      if (msg?.sender?.name) return msg.sender
+      const member = conversation.members.find((mm) => mm.userId === msg?.senderId)
+      if (member) return member.user
+      return { id: msg?.senderId || "", username: "", name: "User", avatarUrl: null }
+    }
+    const onNewMessage = (data: any) => {
+      const raw = data?.message ?? data
+      const convId = data?.conversationId ?? raw?.conversationId
+      if (!raw?.id || convId !== conversation.id) return
+      const msg: MessageData = { ...raw, sender: resolveSender(raw) }
       setMessages((prev) => {
-        if (prev.some((m) => m.id === data.message.id)) return prev
-        return [...prev, data.message]
+        if (prev.some((m) => m.id === msg.id)) return prev
+        return [...prev, msg]
       })
       // auto-mark as read if this conversation is open
-      socket.emit("message:read", { conversationId: conversation.id })
+      if (msg.senderId !== currentUserId) {
+        socket.emit("message:read", { conversationId: conversation.id })
+      }
     }
-    const onUpdated = (data: { conversationId: string; message: MessageData }) => {
-      if (data.conversationId !== conversation.id) return
-      setMessages((prev) => prev.map((m) => (m.id === data.message.id ? data.message : m)))
-    }
-    const onDeleted = (data: { conversationId: string; messageId: string; deletedForAll: boolean }) => {
-      if (data.conversationId !== conversation.id) return
+    const onUpdated = (data: any) => {
+      const raw = data?.message ?? data
+      const convId = data?.conversationId ?? raw?.conversationId
+      if (!raw?.id || convId !== conversation.id) return
       setMessages((prev) =>
-        prev.map((m) => (m.id === data.messageId ? { ...m, deletedForAll: true, content: "" } : m))
+        prev.map((m) => (m.id === raw.id ? { ...m, ...raw, sender: raw.sender?.name ? raw.sender : m.sender } : m))
       )
     }
-    const onReaction = (data: { conversationId: string; messageId: string; userId: string; emoji: string; action: "added" | "removed" }) => {
-      if (data.conversationId !== conversation.id) return
+    const onDeleted = (data: any) => {
+      const msgId = data?.messageId || data?.id
+      if (!msgId) return
+      if (data?.conversationId && data.conversationId !== conversation.id) return
+      const forAll = Boolean(data?.deletedForAll ?? data?.deletedFor === "everyone")
+      setMessages((prev) =>
+        forAll
+          ? prev.map((m) => (m.id === msgId ? { ...m, deletedForAll: true, deletedFor: "everyone", content: "" } : m))
+          : prev.filter((m) => m.id !== msgId)
+      )
+    }
+    const onReaction = (data: any) => {
+      if (data?.conversationId && data.conversationId !== conversation.id) return
+      if (!data?.messageId || !data?.emoji || !data?.userId) return
+      const isAdd = data.action === "added" || data.op === "add"
       setMessages((prev) =>
         prev.map((m) => {
           if (m.id !== data.messageId) return m
           let reactions = m.reactions || []
-          if (data.action === "added") {
-            // remove existing by same user with same emoji if present
+          if (isAdd) {
             reactions = reactions.filter((r) => !(r.userId === data.userId && r.emoji === data.emoji))
             reactions = [
               ...reactions,
@@ -186,6 +214,10 @@ export function ChatView({
           return { ...m, reactions }
         })
       )
+    }
+    const onStatus = (data: { id?: string; status?: string }) => {
+      if (!data?.id || !data?.status) return
+      setMessages((prev) => prev.map((m) => (m.id === data.id ? { ...m, status: data.status } : m)))
     }
     const onTyping = (data: { conversationId: string; userId: string; isTyping: boolean }) => {
       if (data.conversationId !== conversation.id) return
@@ -205,7 +237,7 @@ export function ChatView({
         prev.map((m) => {
           if (m.senderId !== currentUserId) return m
           if (m.reads?.some((r) => r.userId === data.userId)) return m
-          return { ...m, reads: [...(m.reads || []), { userId: data.userId, readAt: new Date().toISOString() }] }
+          return { ...m, status: "SEEN", reads: [...(m.reads || []), { userId: data.userId, readAt: new Date().toISOString() }] }
         })
       )
     }
@@ -213,6 +245,7 @@ export function ChatView({
     socket.on("message:updated", onUpdated)
     socket.on("message:deleted", onDeleted)
     socket.on("message:reaction", onReaction)
+    socket.on("message:status", onStatus)
     socket.on("typing:update", onTyping)
     socket.on("message:read", onRead)
     return () => {
@@ -220,10 +253,11 @@ export function ChatView({
       socket.off("message:updated", onUpdated)
       socket.off("message:deleted", onDeleted)
       socket.off("message:reaction", onReaction)
+      socket.off("message:status", onStatus)
       socket.off("typing:update", onTyping)
       socket.off("message:read", onRead)
     }
-  }, [socket, conversation.id, currentUserId])
+  }, [socket, conversation.id, conversation.members, currentUserId])
 
   const handleSend = async (content: string, attachmentIds: string[], replyToId?: string | null) => {
     if (editing) {
@@ -291,23 +325,61 @@ export function ChatView({
 
   const handleStar = async (m: MessageData) => {
     try {
-      await fetch(`/api/messages/${m.id}/star`, { method: "POST" })
-      toast.success(starredIds.has(m.id) ? "Removed from starred" : "Added to starred")
-    } catch {
-      toast.error("Failed")
+      const r = await fetch(`/api/messages/${m.id}/star`, { method: "POST" })
+      const body = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(body?.error || "Failed")
+      const isNowStarred = Boolean(body?.starred ?? body?.action === "added")
+      onStarChanged?.(m.id, isNowStarred)
+      toast.success(isNowStarred ? "Added to starred" : "Removed from starred")
+    } catch (e: any) {
+      toast.error(e.message || "Failed")
     }
   }
 
   const handleDelete = async (m: MessageData, scope: "self" | "all") => {
     if (!confirm(scope === "all" ? "Delete this message for everyone?" : "Delete for you?")) return
-    if (socket?.connected) {
-      socket.emit("message:delete", { messageId: m.id, scope }, (res: any) => {
-        if (res?.error) toast.error(res.error)
+    try {
+      const r = await fetch(`/api/messages/${m.id}?scope=${scope}`, { method: "DELETE" })
+      const body = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(body?.error || "Delete failed")
+      if (scope === "all") {
+        setMessages((prev) => prev.map((x) => (x.id === m.id ? { ...x, deletedForAll: true, deletedFor: "everyone", content: "" } : x)))
+      } else {
+        setMessages((prev) => prev.filter((x) => x.id !== m.id))
+      }
+      onConversationChanged()
+    } catch (e: any) {
+      toast.error(e.message || "Delete failed")
+    }
+  }
+
+  const openStarred = async () => {
+    setStarredOpen(true)
+    try {
+      const r = await fetch("/api/messages/starred")
+      const body = await r.json()
+      if (r.ok) setStarredItems(body.starred || [])
+    } catch {}
+  }
+
+  const togglePreference = async (field: "muted" | "pinned") => {
+    const nextVal = field === "muted" ? !conversation.muted : !conversation.pinned
+    try {
+      const r = await fetch(`/api/conversations/${conversation.id}/preferences`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [field]: nextVal }),
       })
-    } else {
-      try {
-        await fetch(`/api/messages/${m.id}?scope=${scope}`, { method: "DELETE" })
-      } catch {}
+      const body = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(body?.error || "Failed")
+      toast.success(
+        field === "muted"
+          ? nextVal ? "Notifications muted" : "Notifications unmuted"
+          : nextVal ? "Conversation pinned" : "Conversation unpinned"
+      )
+      onConversationChanged()
+    } catch (e: any) {
+      toast.error(e.message || "Failed")
     }
   }
 
@@ -375,11 +447,15 @@ export function ChatView({
             <DropdownMenuItem onClick={() => setSearchOpen(true)}>
               <Search className="w-4 h-4 mr-2" /> Search messages
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => { window.open("/api/messages/starred", "_blank") }}>
+            <DropdownMenuItem onClick={openStarred}>
               <Star className="w-4 h-4 mr-2" /> Starred messages
             </DropdownMenuItem>
-            <DropdownMenuItem onClick={() => toast.info("Toggle mute in conversation settings")}>
-              <BellOff className="w-4 h-4 mr-2" /> Mute notifications
+            <DropdownMenuItem onClick={() => togglePreference("pinned")}>
+              <Pin className="w-4 h-4 mr-2" /> {conversation.pinned ? "Unpin chat" : "Pin chat"}
+            </DropdownMenuItem>
+            <DropdownMenuItem onClick={() => togglePreference("muted")}>
+              {conversation.muted ? <Bell className="w-4 h-4 mr-2" /> : <BellOff className="w-4 h-4 mr-2" />}
+              {conversation.muted ? "Unmute notifications" : "Mute notifications"}
             </DropdownMenuItem>
             {!isGroup && otherUser && (
               <>
@@ -492,6 +568,30 @@ export function ChatView({
         editing={editing}
         onCancelEdit={() => setEditing(null)}
       />
+
+      <Dialog open={starredOpen} onOpenChange={setStarredOpen}>
+        <DialogContent className="max-w-md max-h-[80vh] flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2"><Star className="w-4 h-4 text-amber-500" /> Starred messages</DialogTitle>
+            <DialogDescription>Messages you have starred across your chats.</DialogDescription>
+          </DialogHeader>
+          <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+            {starredItems.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-6">No starred messages yet.</p>
+            ) : (
+              starredItems.map((s) => (
+                <div key={s.id} className="rounded-lg border p-2.5 text-sm bg-muted/40 space-y-1">
+                  <div className="flex items-center justify-between text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground">{s.senderName || "User"}</span>
+                    <span>{s.createdAt ? new Date(s.createdAt).toLocaleString() : ""}</span>
+                  </div>
+                  <div className="text-sm break-words">{s.content || (s.fileName ? `📎 ${s.fileName}` : "[attachment]")}</div>
+                </div>
+              ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   )
 }

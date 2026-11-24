@@ -15,7 +15,7 @@ const NEXT_PORT = Number(process.env.NEXT_INTERNAL_PORT || 3001)
 const SOCKET_PORT = Number(process.env.SOCKET_PORT || 3003)
 
 function isSocket(url) {
-  return (url || '').startsWith('/socket.io')
+  return (url || '').startsWith('/socket.io') || (url || '').includes('XTransformPort=3003')
 }
 
 function proxyHttp(req, res, port) {

@@ -6,13 +6,21 @@ import { aiModerate, isAIConfigured } from "@/lib/ai"
 export async function POST(req: NextRequest) {
   const me = await getSessionUser()
   if (!me) return errorJson("Unauthorized", 401)
-  const { text } = await req.json()
-  if (!text) return errorJson("text required", 400)
+  const body = await req.json().catch(() => ({}))
+  const text = body?.text
+  if (!text || typeof text !== "string") return errorJson("text required", 400)
 
   if (!isAIConfigured()) {
     return errorJson("AI not configured", 503)
   }
 
-  const result = await aiModerate(text)
-  return json(result)
+  try {
+    const result = await aiModerate(text)
+    if (result.parseError) {
+      return errorJson(result.reason || "Moderation response could not be parsed", 502)
+    }
+    return json(result)
+  } catch (e: any) {
+    return errorJson(e?.message || "Moderation failed", 502)
+  }
 }

@@ -96,6 +96,8 @@ export async function grantMessageFileAccess(
     senderId: string
     receiverId?: string | null
     groupId?: string | null
+    conversationId?: string | null
+    attachments?: Array<{ url?: string | null }> | null
   },
   store: Store = db,
 ): Promise<void> {

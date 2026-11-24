@@ -17,6 +17,8 @@ export function AuthScreen({ onAuthed }: { onAuthed: () => void }) {
   // login fields
   const [identifier, setIdentifier] = useState("")
   const [password, setPassword] = useState("")
+  const [show2fa, setShow2fa] = useState(false)
+  const [totp, setTotp] = useState("")
   // register fields
   const [name, setName] = useState("")
   const [username, setUsername] = useState("")
@@ -31,10 +33,11 @@ export function AuthScreen({ onAuthed }: { onAuthed: () => void }) {
       const res = await signIn("credentials", {
         identifier,
         password,
+        ...(totp.trim() ? { totp: totp.trim() } : {}),
         redirect: false,
       })
       if (!res || !res.ok) {
-        toast.error("Invalid credentials")
+        toast.error(show2fa ? "Invalid credentials or 2FA code" : "Invalid credentials (if 2FA is enabled, enter your 2FA code below)")
         return
       }
       toast.success("Welcome back!")
@@ -127,6 +130,26 @@ export function AuthScreen({ onAuthed }: { onAuthed: () => void }) {
                     required
                   />
                 </div>
+                {show2fa ? (
+                  <div className="space-y-1">
+                    <Label htmlFor="totp">Two-factor or backup code</Label>
+                    <Input
+                      id="totp"
+                      value={totp}
+                      onChange={(e) => setTotp(e.target.value)}
+                      placeholder="6-digit code or backup code"
+                      autoComplete="one-time-code"
+                    />
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setShow2fa(true)}
+                    className="text-xs text-muted-foreground hover:text-foreground underline"
+                  >
+                    Have two-factor authentication enabled?
+                  </button>
+                )}
                 <Button
                   type="submit"
                   data-testid="auth-submit"
@@ -153,7 +176,7 @@ export function AuthScreen({ onAuthed }: { onAuthed: () => void }) {
                 </div>
                 <div className="space-y-1">
                   <Label htmlFor="regPassword">Password</Label>
-                  <Input id="regPassword" type="password" value={regPassword} onChange={(e) => setRegPassword(e.target.value)} required minLength={6} />
+                  <Input id="regPassword" type="password" value={regPassword} onChange={(e) => setRegPassword(e.target.value)} required minLength={8} placeholder="At least 8 chars, letter + number" />
                 </div>
                 <Button type="submit" className="w-full bg-emerald-500 hover:bg-emerald-600 text-white" disabled={loading}>
                   {loading && <Loader2 className="w-4 h-4 mr-2 animate-spin" />}
