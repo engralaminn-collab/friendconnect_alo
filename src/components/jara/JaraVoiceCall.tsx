@@ -15,7 +15,8 @@ interface JaraVoiceCallProps {
 }
 
 export function JaraVoiceCall({ config, onEnd, onTranscript }: JaraVoiceCallProps) {
-  const [state, setState] = useState<CallState>("requesting")
+  const [state, setState] = useState<CallState>("idle")
+  const [voiceReady, setVoiceReady] = useState(false)
   const [muted, setMuted] = useState(false)
   const [jaraMood, setJaraMood] = useState<"idle" | "listening" | "speaking" | "thinking">("idle")
   const [speakingLevel, setSpeakingLevel] = useState(0)
@@ -96,7 +97,8 @@ export function JaraVoiceCall({ config, onEnd, onTranscript }: JaraVoiceCallProp
       const res = await fetch("/api/jara/voice", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ transcript: text, history: historyRef.current.slice(-8) }),
+        // The server reconstructs visible conversation context from persisted DM history.
+        body: JSON.stringify({ transcript: text }),
       })
       const data = await res.json()
       if (res.ok && data.reply) {
@@ -112,9 +114,11 @@ export function JaraVoiceCall({ config, onEnd, onTranscript }: JaraVoiceCallProp
     }
   }, [speak, onTranscript])
 
-  // Setup speech recognition
+  // Ask for explicit user confirmation after explaining browser/provider handling.
   useEffect(() => {
+    if (!voiceReady) return
     let mounted = true
+    setState("requesting")
 
     async function init() {
       try {
@@ -240,7 +244,7 @@ export function JaraVoiceCall({ config, onEnd, onTranscript }: JaraVoiceCallProp
       streamRef.current?.getTracks().forEach(t => t.stop())
       streamRef.current = null
     }
-  }, [])
+  }, [voiceReady])
 
   const toggleMute = useCallback(() => {
     const next = !muted
@@ -263,12 +267,29 @@ export function JaraVoiceCall({ config, onEnd, onTranscript }: JaraVoiceCallProp
     onEnd()
   }, [onEnd])
 
+  if (state === "idle") {
+    return (
+      <div className="flex flex-col items-center justify-center py-10 px-6 gap-4 text-center">
+        <div className="max-w-lg space-y-2">
+          <h4 className="font-semibold">Browser voice mode</h4>
+          <p className="text-sm text-muted-foreground">
+            Your browser handles microphone speech recognition and speech playback; availability and processing depend on the browser. The recognized transcript and visible Jara chat context may be sent to the configured Jara text provider. Your transcript and Jara reply are saved as ordinary chat messages. This is not a server-side real-time audio call.
+          </p>
+        </div>
+        <div className="flex gap-2">
+          <Button onClick={() => setVoiceReady(true)}>Continue and request microphone</Button>
+          <Button variant="outline" onClick={onEnd}>Cancel</Button>
+        </div>
+      </div>
+    )
+  }
+
   if (state === "requesting") {
     return (
       <div className="flex flex-col items-center justify-center py-12 gap-4">
         <Loader2 className="w-10 h-10 animate-spin text-emerald-500" />
         <p className="text-sm text-muted-foreground">Requesting microphone permission…</p>
-        <p className="text-xs text-muted-foreground max-w-sm text-center">Calls require HTTPS (or localhost). If you opened via http://IP, switch to the https:// domain.</p>
+        <p className="text-xs text-muted-foreground max-w-sm text-center">Microphone access requires a secure context (HTTPS or localhost). If you opened via an HTTP IP address, use the HTTPS site.</p>
       </div>
     )
   }
@@ -279,7 +300,7 @@ export function JaraVoiceCall({ config, onEnd, onTranscript }: JaraVoiceCallProp
         <div className="w-14 h-14 rounded-2xl bg-red-100 dark:bg-red-950 flex items-center justify-center">
           <AlertCircle className="w-7 h-7 text-red-600" />
         </div>
-        <p className="text-sm font-medium">Voice call unavailable</p>
+        <p className="text-sm font-medium">Browser voice unavailable</p>
         <p className="text-xs text-muted-foreground max-w-sm">{error}</p>
         <Button variant="outline" onClick={handleEnd}>Close</Button>
       </div>
@@ -308,7 +329,7 @@ export function JaraVoiceCall({ config, onEnd, onTranscript }: JaraVoiceCallProp
             {jaraMood === "thinking" && <Loader2 className="w-4 h-4 animate-spin text-violet-500" />}
           </h3>
           <p className="text-xs text-muted-foreground">
-            {jaraMood === "listening" ? "Listening… speak now" : jaraMood === "speaking" ? "Jara is speaking… (speak to interrupt)" : jaraMood === "thinking" ? "Thinking…" : muted ? "Muted" : "Live voice conversation"}
+            {jaraMood === "listening" ? "Listening… speak now" : jaraMood === "speaking" ? "Jara is speaking… (speak to interrupt)" : jaraMood === "thinking" ? "Thinking…" : muted ? "Muted" : "Browser speech mode"}
           </p>
           <p className="text-[11px] text-muted-foreground/70">Bangla • English • Banglish</p>
         </div>
@@ -359,7 +380,7 @@ export function JaraVoiceCall({ config, onEnd, onTranscript }: JaraVoiceCallProp
 
       <div className="px-4 pb-3">
         <p className="text-[10px] text-center text-muted-foreground">
-          Voice uses browser speech recognition & synthesis (self-hosted, free). For best Bangla, use Chrome. Jara can be interrupted while speaking.
+          Speech recognition and playback are browser-dependent. Recognized text and visible Jara chat context may be processed by the configured text provider; transcripts and replies are saved in ordinary Jara chat history.
         </p>
       </div>
     </div>

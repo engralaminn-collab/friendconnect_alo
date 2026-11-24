@@ -66,11 +66,18 @@ export default function Home() {
   function handleStartCall(peerUserId: string, peerName: string, peerAvatarUrl: string | null | undefined, callType: "audio" | "video") {
     if (!socket?.connected) { toast.error("Realtime not connected"); return }
     if (activeCall) { toast.error("Already in a call"); return }
-    setActiveCall({ callId: nanoid(), callType, peer: { id: peerUserId, name: peerName, avatarUrl: peerAvatarUrl || null }, role: "caller" })
+    socket.emit("call:invite", { targetUserId: peerUserId, type: callType }, (result: any) => {
+      if (!result?.ok || !result.callId) {
+        toast.error(result?.error || "Call could not be started")
+        return
+      }
+      setActiveCall({ callId: result.callId, callType, peer: { id: peerUserId, name: peerName, avatarUrl: peerAvatarUrl || null }, role: "caller" })
+    })
   }
   function handleAcceptCall() {
     if (!incomingCall || !socket?.connected) return
-    setActiveCall({ callId: incomingCall.callId, callType: incomingCall.callType, peer: { id: incomingCall.fromUserId, name: incomingCall.fromName, avatarUrl: incomingCall.fromAvatarUrl }, role: "callee" })
+    socket.emit("call:accepted", { toUserId: incomingCall.fromUserId, callId: incomingCall.callId })
+    setActiveCall({ callId: incomingCall.callId, callType: incomingCall.callType, peer: { id: incomingCall.fromUserId, name: incomingCall.fromName, avatarUrl: incomingCall.fromAvatarUrl }, role: "callee", remoteOffer: incomingCall.offer })
     setIncomingCall(null)
   }
   function handleRejectCall() {
@@ -178,6 +185,10 @@ export default function Home() {
           if (activeCallRef.current) { s.emit("call:reject", { toUserId: data.fromUserId, callId: data.callId }); return }
           const peer = findPeerName(data.fromUserId)
           setIncomingCall({ callId: data.callId, callType: data.callType, fromUserId: data.fromUserId, fromName: peer?.name || "Unknown", fromAvatarUrl: peer?.avatarUrl || null, offer: data.offer })
+        })
+        s.on("call:offer", (data: any) => {
+          setIncomingCall((prev) => prev && prev.callId === data.callId ? { ...prev, offer: data.offer || data.sdp } : prev)
+          setActiveCall((prev) => prev && prev.callId === data.callId ? { ...prev, remoteOffer: data.offer || data.sdp } : prev)
         })
         s.on("call:cancelled", (data: any) => { setIncomingCall((prev) => (prev?.callId === data.callId ? null : prev)) })
         s.on("call:rejected", (data: any) => { if (activeCallRef.current?.callId === data.callId) { setActiveCall(null); toast.info("Call rejected") } })
@@ -394,7 +405,7 @@ export default function Home() {
       />
       <IncomingCallModal incomingCall={incomingCall} onAccept={handleAcceptCall} onReject={handleRejectCall} />
       {activeCall && currentUser && (
-        <CallView call={activeCall} socket={socket} remoteOffer={incomingCall?.offer} currentUser={currentUser} onEnd={handleEndCall} />
+        <CallView call={activeCall} socket={socket} remoteOffer={activeCall.remoteOffer} currentUser={currentUser} onEnd={handleEndCall} />
       )}
       <Dialog open={showJaraConfig} onOpenChange={setShowJaraConfig}>
         <DialogContent className="max-w-5xl w-[95vw] max-h-[90vh] p-0 overflow-hidden">

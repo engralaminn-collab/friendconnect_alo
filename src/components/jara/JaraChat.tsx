@@ -116,7 +116,7 @@ export function JaraChat({ config, currentUser, pendingProposal, onProposalAppro
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: [...historyMessages, { role: "user", content: text }].map(m => ({ role: m.role, content: m.content })),
+          messages: [...historyMessages.slice(-39), { role: "user", content: text }].map(m => ({ role: m.role, content: m.content })),
         }),
       })
       const data = await res.json()
@@ -261,7 +261,7 @@ export function JaraChat({ config, currentUser, pendingProposal, onProposalAppro
       {voiceOpen && (
         <div className="absolute inset-0 z-20 bg-background flex flex-col">
           <div className="flex items-center justify-between px-4 py-2 border-b">
-            <h3 className="font-medium text-sm flex items-center gap-2"><Phone className="w-4 h-4" /> Voice Call with Jara</h3>
+            <h3 className="font-medium text-sm flex items-center gap-2"><Phone className="w-4 h-4" /> Browser voice mode with Jara</h3>
             <Button variant="ghost" size="sm" onClick={() => setVoiceOpen(false)}>Close</Button>
           </div>
           <div className="flex-1 overflow-hidden">

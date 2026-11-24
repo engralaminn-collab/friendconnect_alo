@@ -1,0 +1,34 @@
+# Jara open-source stack evaluation
+
+**Checked:** 2026-11-24 UTC using repository source plus GitHub repository metadata.
+**Purpose:** shortlist and integration risks, not endorsement or evidence of deployment. No candidate was installed or contacted as a service.
+
+## Candidate comparison
+
+| Candidate | Repository / license metadata | Maintenance signal observed | Fit / limits for FriendConnect |
+|---|---|---|---|
+| LiveKit server + Agents | [livekit/livekit](https://github.com/livekit/livekit) (Apache-2.0); [livekit/agents](https://github.com/livekit/agents) (Apache-2.0) | Both active and not archived; API `pushed_at` 2026-11-23 and 2026-11-24 respectively | Best near-term fit for a LiveKit-centric room/agent prototype: this repo already contains LiveKit browser/server packages and group-call UI. Agents runtime is Python, therefore an authenticated sidecar and separate deployment/operations are needed. Existing usage is group media, not Jara agent audio/video understanding. Needs self-hosted/cloud SFU, TURN/NAT, participant consent, token scope, worker isolation, load/privacy tests. |
+| Pipecat | [pipecat-ai/pipecat](https://github.com/pipecat-ai/pipecat), BSD-2-Clause | Active, not archived; API `pushed_at` 2026-11-24 | Python realtime voice pipeline framework with broad transport/provider choices. Alternative if provider-agnostic pipeline flexibility outweighs keeping one LiveKit-native agent architecture. Adds a second Python runtime and transport integration; do not run LiveKit Agents and Pipecat together initially. Benchmark the exact Bengali ASR/TTS components and interruption/latency path before selection. |
+| Letta | [letta-ai/letta](https://github.com/letta-ai/letta), Apache-2.0 | Active, not archived; API `pushed_at` 2026-10-18 | Stateful agent/memory server candidate, not a drop-in for this app's identity and consent model. It would receive sensitive conversation/memory content and create a second persistence boundary. Do not adopt until data-processing terms, tenant isolation, per-user consent/revocation/delete, export, retention, backups and authorization behavior are independently verified. No memory framework is currently installed. |
+| Qdrant | [qdrant/qdrant](https://github.com/qdrant/qdrant), Apache-2.0 | Active, not archived; API `pushed_at` 2026-11-23 | Mature vector database candidate only if evaluation proves embeddings/retrieval are needed. It is infrastructure, not a consent, deletion, relevance, or access-control solution. Payload tenant filtering, deletion propagation, snapshots/backups, embedding provider governance and SQLite/MySQL source-of-truth consistency remain app responsibilities. Do not add it before approved memory/knowledge contracts. |
+| Whisper | [openai/whisper](https://github.com/openai/whisper), MIT | Active/not archived; API `pushed_at` 2026-08-31 | Offline ASR candidate for batch transcription, not a complete realtime audio stack or TTS service. Python/PyTorch and FFmpeg/runtime model weights are additional operational requirements. Evaluate Bangla/Banglish accuracy, latency, dialect/noise, consent and model artifact licensing; no weights or audio dataset were downloaded. Existing browser API is not Whisper. |
+| vLLM | [vllm-project/vllm](https://github.com/vllm-project/vllm), Apache-2.0 | Active, not archived; API `pushed_at` 2026-11-24 | High-throughput OpenAI-compatible inference server candidate for supported accelerators/models. Operationally heavy, model-specific hardware/VRAM and CUDA/runtime constraints apply. Sandbox has 2 vCPU and about 3.8 GiB RAM, no GPU tooling: it is not a suitable benchmark/deployment host. The app's OpenAI-compatible adapter is not evidence of a running vLLM service. |
+| Jasmin SMS Gateway | [jookies/jasmin](https://github.com/jookies/jasmin), GitHub license field `NOASSERTION` | Not archived; API `pushed_at` 2026-04-26 | SMPP gateway candidate, not a carrier/account and not a turnkey legal SMS provider. License cannot be cleared from GitHub metadata; inspect the full repository license and dependencies with counsel before use. Requires carrier SMPP credentials, sender approvals, operations/abuse monitoring, delivery handling and BD/country/provider compliance. No outbound SMS is implemented here. |
+
+GitHub `pushed_at`, archive and license values are point-in-time repository metadata, not a support SLA, vulnerability audit, dependency-license scan, model-weight license review or guarantee of compatibility. Confirm exact release/commit and transitive/model licenses before procurement/deployment.
+
+## Recommendation for an initial engineering spike
+
+1. Keep the existing Next.js/TypeScript app as the system of record and authorization boundary.
+2. Use its existing LiveKit group-call surface as media transport only; compare a single LiveKit Agents Python worker against a single Pipecat worker in an isolated test deployment. Do not choose based on UI labels, stars, or vendor demos. Measure join/start latency, end-to-end response latency, Bangla/Banglish transcripts, interruption, disconnect/cancellation, concurrent-session resource use, and privacy/security tests.
+3. Do not add Letta or Qdrant until the consent/memory policy is approved and deterministic owner-only local retrieval has a measured need. First memory milestone can be reviewed, explicit, owner-scoped records without vector search.
+4. Compare local Whisper/faster-whisper and any alternative ASR on a properly licensed, consented evaluation set. Select separate TTS after Bengali quality, voice rights, model license and GPU/CPU budget review.
+5. Treat vLLM as a separate serving choice after choosing a model and acquiring suitable GPU capacity; preserve OpenAI-compatible API but require explicit provider choice and privacy disclosures.
+6. Treat Jasmin as a carrier gateway integration project after license review, SMPP carrier relationship, sender ID approval, opt-in/STOP flows, webhook security and operational support are secured.
+
+## Compatibility and resource notes
+
+- Main app is Next.js 16 / React 19 / TypeScript, with installed LiveKit client/server SDKs and existing conversation-membership-based group token path. There is no Python worker service in the repo's production launch flow.
+- Python candidate frameworks imply a separately deployed service, authenticated internal network, timeouts, schema validation and versioned APIs. Do not expose worker credentials to the browser or trust user IDs in worker payloads without signed server context.
+- Sandbox measurement is only a constrained coding environment: Node 22.22.3, npm 10.9.8, 2 CPU cores, ~3.8 GiB RAM, no swap, ~20 GiB free disk. `docker`, `podman`, `nvidia-smi`, `psql` and `redis-cli` were unavailable. These facts say nothing about production infrastructure.
+- No new dependencies, model weights, provider credentials, or service containers were added as part of this evaluation.

@@ -72,19 +72,14 @@ export async function POST(req: NextRequest) {
 
   if (action === "end") {
     if (!conversationId) return errorJson("conversationId required", 400)
-    const livekitUrl = process.env.LIVEKIT_URL
-    const livekitApiKey = process.env.LIVEKIT_API_KEY
-    const livekitApiSecret = process.env.LIVEKIT_API_SECRET
-    if (!livekitUrl || !livekitApiKey || !livekitApiSecret) {
-      return errorJson("LiveKit not configured", 503)
-    }
-    try {
-      const roomService = new RoomServiceClient(livekitUrl, livekitApiKey, livekitApiSecret)
-      await roomService.deleteRoom(`fc-${conversationId}`)
-    } catch (e: any) {
-      // Room might already be gone
-    }
-    return json({ ok: true })
+    const membership = await db.conversationMember.findUnique({
+      where: { conversationId_userId: { conversationId, userId: me.id } },
+    })
+    if (!membership) return errorJson("Not a member", 403)
+
+    // Leaving a call must not destroy the shared room for every other member.
+    // Participant disconnect is handled by LiveKit; its empty-room timeout reaps the room.
+    return json({ ok: true, left: true })
   }
 
   return errorJson("Invalid action — use 'start', 'join', or 'end'", 400)

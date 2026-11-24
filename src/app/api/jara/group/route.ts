@@ -5,28 +5,44 @@ import { db } from '@/lib/db'
 import { JARA_ID } from '@/lib/jara'
 import { aiChat, isAIConfigured } from '@/lib/ai'
 import { assertJaraEnabled } from '@/lib/jara-admin'
+import { rateLimit } from '@/lib/cache'
+import { buildJaraSystemPrompt } from '@/lib/jara-prompt'
+import { buildJaraGroupConversationContext, isMessageDeletedForUser } from '@/lib/ai-input'
 
 // POST /api/jara/group — Jara responds in a group (requires consent + membership)
 export async function POST(req: NextRequest) {
   const me = await getSessionUser()
   if (!me) return errorJson('Unauthorized', 401)
   try { await assertJaraEnabled('group') } catch (e: any) { return errorJson(e?.status === 503 ? 'Jara AI is currently disabled by a Super Admin.' : (e?.message || 'Jara unavailable'), e?.status || 403) }
+  const limited = await rateLimit(`jara-group:${me.id}`, 15, 60).catch(() => null)
+  if (limited === null) return errorJson('Group AI request protection is temporarily unavailable', 503)
+  if (!limited.allowed) return errorJson('Rate limit exceeded', 429)
 
   let body: any
   try { body = await req.json() } catch { return errorJson('Invalid JSON', 400) }
 
-  const groupId: string = body.groupId
-  const message: string = body.message || body.content || ''
-  const mentionJara: boolean = body.mentionJara ?? (message.toLowerCase().includes('jara') || message.includes('@jara'))
+  const groupId = typeof body.groupId === 'string' ? body.groupId : ''
+  const messageId = typeof body.messageId === 'string' ? body.messageId : ''
 
   if (!groupId) return errorJson('groupId required', 400)
-  if (!message.trim()) return errorJson('message required', 400)
+  if (!messageId) return errorJson('messageId required', 400)
 
-  // Verify user is member
+  // Verify user is a member before looking up the group message.
   const membership = await (db as any).groupMember.findUnique({
     where: { groupId_userId: { groupId, userId: me.id } },
   }).catch(() => null)
   if (!membership) return errorJson('Not a member of this group', 403)
+
+  // Use the persisted message, not caller-supplied text, as the triggering turn.
+  // This prevents a client from bypassing delete-for-me by resubmitting hidden content.
+  const trigger = await (db as any).message.findUnique({ where: { id: messageId } }).catch(() => null)
+  if (!trigger || trigger.groupId !== groupId || isMessageDeletedForUser(trigger, me.id)) {
+    return errorJson('Message not found', 404)
+  }
+  const message = typeof trigger.content === 'string' ? trigger.content : ''
+  if (!message.trim()) return errorJson('message required', 400)
+  if (message.length > 4000) return errorJson('Message is too long', 413)
+  const mentionJara = /(?:^|\W)@?jara\b/i.test(message) || message.includes('জারা')
 
   // Check Jara consent for this group
   const consent = await (db as any).jaraGroupConsent.findUnique({ where: { groupId } }).catch(() => null)
@@ -46,25 +62,37 @@ export async function POST(req: NextRequest) {
   }
 
   // Fetch recent group messages for context
+  const now = new Date()
   const recentMessages = await (db as any).message.findMany({
-    where: { groupId },
+    where: {
+      AND: [
+        { groupId },
+        { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+        { OR: [{ scheduledFor: null }, { scheduledFor: { lte: now } }] },
+      ],
+    },
     orderBy: { createdAt: 'desc' },
     take: 20,
   }).catch(() => [])
-  const context = recentMessages.reverse().map((m: any) => `${m.senderId === JARA_ID ? 'Jara' : m.senderId === me.id ? 'User' : 'Member'}: ${m.content}`).join('\n')
-
   const group = await (db as any).group.findUnique({ where: { id: groupId } }).catch(() => null)
+  const providerContext = buildJaraGroupConversationContext(
+    recentMessages.reverse(),
+    me.id,
+    JARA_ID,
+    String(group?.name || 'Group'),
+    message,
+  )
 
-  let reply = ''
-  if (isAIConfigured()) {
-    try {
-      reply = await aiChat(
-        [{ role: 'user', content: `Group "${group?.name || groupId}" context:\n${context}\n\nLatest message: ${message}\n\nRespond as Jara to the group. Keep it friendly, concise (2-3 sentences), and in the user's language.` }],
-        `You are Jara, AI assistant in FriendConnect group "${group?.name || 'Group'}". Be helpful, friendly, and concise. You are clearly AI.`
-      )
-    } catch { reply = fallbackGroup(message) }
-  } else {
-    reply = fallbackGroup(message)
+  if (!isAIConfigured()) return errorJson('Jara language model is not configured', 503)
+
+  let reply: string
+  try {
+    reply = await aiChat(
+      [{ role: 'user', content: providerContext }],
+      buildJaraSystemPrompt({}, 'group')
+    )
+  } catch {
+    return errorJson('Jara language model is temporarily unavailable', 502)
   }
 
   // Persist Jara group message
@@ -79,10 +107,4 @@ export async function POST(req: NextRequest) {
   })
 
   return json({ reply, message: { id: msg.id, content: reply, groupId, senderId: JARA_ID, createdAt: msg.createdAt } })
-}
-
-function fallbackGroup(msg: string): string {
-  if (/hello|hi/i.test(msg)) return "Hello everyone! I'm Jara — happy to be here! How can I help the group today? 😊"
-  if (/summarize/i.test(msg)) return "This group has been chatting about various topics. Let me know what you'd like summarized!"
-  return `Thanks for mentioning me! I'm Jara — your group AI assistant. You said: "${msg.slice(0, 80)}" — how can I help?`
 }

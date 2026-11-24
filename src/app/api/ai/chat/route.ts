@@ -2,25 +2,42 @@ import { NextRequest } from "next/server"
 import { getSessionUser } from "@/lib/session"
 import { errorJson, json } from "@/lib/serialize"
 import { aiChat, isAIConfigured } from "@/lib/ai"
+import { normalizeChatInput } from "@/lib/ai-input"
 import { rateLimit } from "@/lib/cache"
+
+const AI_ASSISTANT_PROMPT =
+  "You are FriendConnect's AI assistant. Be accurate, natural, and concise for simple questions. " +
+  "For complex requests, explain important assumptions, ask only for essential missing details, and distinguish suggestions from actions. " +
+  "You are an AI, not a human. Never claim that you used a tool or completed an action unless the application confirms it. " +
+  "You have no tools in this chat endpoint and cannot perform external actions."
 
 export async function POST(req: NextRequest) {
   const me = await getSessionUser()
   if (!me) return errorJson("Unauthorized", 401)
 
-  // Rate limit: 20 AI requests per minute per user
-  const limited = await rateLimit(`ai-chat:${me.id}`, 20, 60).catch(() => ({ allowed: true, remaining: 20 }))
-  if (limited && !limited.allowed) return errorJson("Rate limit exceeded", 429)
+  const limited = await rateLimit(`ai-chat:${me.id}`, 20, 60).catch(() => null)
+  if (limited === null) return errorJson("AI request protection is temporarily unavailable", 503)
+  if (!limited.allowed) return errorJson("Rate limit exceeded", 429)
 
-  const { messages, systemPrompt } = await req.json()
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return errorJson("Messages required", 400)
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return errorJson("Invalid JSON", 400)
+  }
+  const parsed = normalizeChatInput((body as { messages?: unknown } | null)?.messages)
+  if (!parsed.ok) {
+    const status = parsed.error === 'message_too_long' || parsed.error === 'conversation_too_long' ? 413 : 400
+    return errorJson("Invalid or oversized conversation", status)
   }
 
-  if (!isAIConfigured()) {
-    return errorJson("AI not configured — set ZAI_API_KEY or OPENAI_API_KEY", 503)
-  }
+  if (!isAIConfigured()) return errorJson("AI is not configured", 503)
 
-  const response = await aiChat(messages, systemPrompt)
-  return json({ response })
+  try {
+    // The system prompt is server-owned. Ignore any client-supplied prompt.
+    const response = await aiChat(parsed.messages, AI_ASSISTANT_PROMPT)
+    return json({ response })
+  } catch {
+    return errorJson("The configured AI provider is unavailable", 502)
+  }
 }

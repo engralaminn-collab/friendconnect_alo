@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { isMessageDeletedForUser } from '@/lib/ai-input'
 
 // GET /api/messages/search?q=QUERY — global search across all my 1:1 + group conversations
 export async function GET(req: NextRequest) {
@@ -50,9 +51,8 @@ export async function GET(req: NextRequest) {
     for (const m of directMessages) {
       const peer = m.senderId === me.id ? m.receiver : m.sender
       if (!peer) continue
-      // skip if deleted for me
-      const deletedForList = m.deletedFor ? m.deletedFor.split(',').filter(Boolean) : []
-      if (deletedForList.includes(me.id)) continue
+      // Honor per-user deletion visibility, including legacy rows.
+      if (isMessageDeletedForUser(m, me.id)) continue
       results.push({
         messageId: m.id,
         content: m.content,
@@ -68,8 +68,7 @@ export async function GET(req: NextRequest) {
       })
     }
     for (const m of groupMessages) {
-      const deletedForList = m.deletedFor ? m.deletedFor.split(',').filter(Boolean) : []
-      if (deletedForList.includes(me.id)) continue
+      if (isMessageDeletedForUser(m, me.id)) continue
       results.push({
         messageId: m.id,
         content: m.content,

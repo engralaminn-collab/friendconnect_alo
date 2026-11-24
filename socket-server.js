@@ -24,6 +24,13 @@ try {
 const http = require('http')
 const { Server } = require('socket.io')
 const { prisma } = require('./src/lib/db-runtime.js')
+const {
+  createHandshakeMiddleware,
+  isSessionActive,
+  isMessageParticipant,
+  canInteract,
+  eventRateLimit,
+} = require('./src/lib/socket-security.cjs')
 
 const PORT = Number(process.env.SOCKET_PORT || 3003)
 const APP_ORIGIN = process.env.APP_ORIGIN || process.env.NEXTAUTH_URL || true
@@ -49,12 +56,14 @@ const io = new Server(server, {
   pingInterval: 20000,
 })
 
+let rateRedis = null
 if (process.env.REDIS_URL) {
   try {
     const { createAdapter } = require('@socket.io/redis-adapter')
     const { Redis } = require('ioredis')
     const pub = new Redis(process.env.REDIS_URL)
     const sub = pub.duplicate()
+    rateRedis = pub.duplicate()
     io.adapter(createAdapter(pub, sub))
     console.log('[socket] redis adapter enabled')
   } catch (e) {
@@ -65,58 +74,134 @@ if (process.env.REDIS_URL) {
 const onlineUsers = new Map()
 const socketUserMap = new Map()
 const inCall = new Set()
+const localRateBuckets = new Map()
 
-function cookieToken(cookieHeader) {
-  if (!cookieHeader) return null
-  const parts = cookieHeader.split(';')
-  for (const p of parts) {
-    const [k, ...rest] = p.trim().split('=')
-    if (k === 'fc_session') return decodeURIComponent(rest.join('='))
+async function allowLimit(key, max, windowSeconds) {
+  if (rateRedis) {
+    try {
+      const count = await rateRedis.incr(key)
+      if (count === 1) await rateRedis.expire(key, windowSeconds)
+      return count <= max
+    } catch (e) {
+      console.warn('[socket] shared rate-limit store unavailable; using process-local limit')
+    }
   }
-  return null
+  // Local counters support the current single-process PM2 deployment. When
+  // scaling to multiple socket-server instances, configure REDIS_URL so limits
+  // are shared and presence/socket rooms use the Redis adapter.
+  const now = Date.now()
+  const previous = localRateBuckets.get(key)
+  const bucket = !previous || previous.expires <= now
+    ? { count: 0, expires: now + windowSeconds * 1000 }
+    : previous
+  bucket.count += 1
+  localRateBuckets.set(key, bucket)
+  if (localRateBuckets.size > 10000) {
+    for (const [bucketKey, value] of localRateBuckets) {
+      if (value.expires <= now) localRateBuckets.delete(bucketKey)
+    }
+  }
+  return bucket.count <= max
 }
 
-async function userFromToken(token) {
-  if (!token || typeof token !== 'string' || token.length < 16) return null
-  const session = await prisma.session.findUnique({
-    where: { token },
-    include: { user: { include: { profile: true } } },
-  })
-  if (!session || session.expiresAt.getTime() < Date.now()) return null
-  return session.user
+async function allowSocketEvent(userId, event) {
+  const policy = eventRateLimit(event)
+  if (!policy) return true
+  return allowLimit(`fc:socket-rate:${userId}:${event}`, policy.max, policy.windowSeconds)
 }
 
 function socketsOf(userId) {
   return onlineUsers.get(userId) || new Set()
 }
 
-function emitToUser(userId, event, payload) {
-  for (const sid of socketsOf(userId)) io.to(sid).emit(event, payload)
-}
-
-function onlineList() {
-  return Array.from(onlineUsers.keys())
-}
-
-function broadcastOnline() {
-  io.emit('online:update', onlineList())
-  io.emit('onlineUsers', onlineList())
-}
-
-io.use(async (socket, next) => {
+async function isUserOnline(userId) {
   try {
-    const token = socket.handshake.auth?.token || cookieToken(socket.handshake.headers.cookie)
-    if (token) {
-      const user = await userFromToken(token)
-      if (user) socket.data.pendingUser = user
-    }
-    next()
-  } catch (e) {
-    next()
+    const sockets = await io.in(`user:${userId}`).fetchSockets()
+    return sockets.length > 0
+  } catch {
+    return socketsOf(userId).size > 0
   }
+}
+
+function emitToUser(userId, event, payload) {
+  io.to(`user:${userId}`).emit(event, payload)
+}
+
+async function broadcastPresenceFor(userId, online) {
+  const friendships = await prisma.friendship.findMany({
+    where: {
+      status: 'ACCEPTED',
+      OR: [{ requesterId: userId }, { receiverId: userId }],
+    },
+  }).catch(() => [])
+  const friendIds = friendships.map((f) => f.requesterId === userId ? f.receiverId : f.requesterId)
+  for (const friendId of friendIds) {
+    const blocked = await prisma.block.findFirst({
+      where: { OR: [{ fromId: userId, toId: friendId }, { fromId: friendId, toId: userId }] },
+      select: { id: true },
+    }).catch(() => ({ id: 'blocked' }))
+    if (blocked) continue
+    const profile = await prisma.profile.findUnique({ where: { userId }, select: { profileVisibility: true } }).catch(() => null)
+    if (!profile || profile.profileVisibility === 'PRIVATE') continue
+    emitToUser(friendId, 'presence', { userId, online: !!online })
+    await sendPresenceSnapshot(friendId)
+  }
+}
+
+async function sendPresenceSnapshot(userId) {
+  const friendships = await prisma.friendship.findMany({
+    where: {
+      status: 'ACCEPTED',
+      OR: [{ requesterId: userId }, { receiverId: userId }],
+    },
+  }).catch(() => [])
+  const friendIds = friendships.map((f) => f.requesterId === userId ? f.receiverId : f.requesterId)
+  const visible = []
+  for (const friendId of friendIds) {
+    if (!(await isUserOnline(friendId))) continue
+    const [blocked, profile] = await Promise.all([
+      prisma.block.findFirst({
+        where: { OR: [{ fromId: userId, toId: friendId }, { fromId: friendId, toId: userId }] },
+        select: { id: true },
+      }).catch(() => ({ id: 'blocked' })),
+      prisma.profile.findUnique({ where: { userId: friendId }, select: { profileVisibility: true } }).catch(() => null),
+    ])
+    if (!blocked && profile && profile.profileVisibility !== 'PRIVATE') visible.push(friendId)
+  }
+  emitToUser(userId, 'online:update', visible)
+  emitToUser(userId, 'onlineUsers', visible)
+  for (const friendId of visible) emitToUser(userId, 'presence', { userId: friendId, online: true })
+}
+
+const authenticateSocket = createHandshakeMiddleware(prisma)
+io.use(async (socket, next) => {
+  const remote = String(socket.handshake.address || 'unknown').slice(0, 128)
+  const allowed = await allowLimit(`fc:socket-auth:${remote}`, 60, 60)
+  if (!allowed) return next(new Error('rate_limited'))
+  return authenticateSocket(socket, next)
 })
 
 io.on('connection', (socket) => {
+  socket.use(async (packet, next) => {
+    try {
+      if (!(await isSessionActive(prisma, socket.data.authenticatedSessionToken))) {
+        socket.disconnect(true)
+        return next(new Error('unauthorized'))
+      }
+      if (Buffer.byteLength(JSON.stringify(packet), 'utf8') > 64 * 1024) {
+        return next(new Error('payload_too_large'))
+      }
+      const userId = socket.data.userId
+      if (userId && !(await allowSocketEvent(userId, String(packet[0] || '')))) {
+        return next(new Error('rate_limited'))
+      }
+      return next()
+    } catch {
+      socket.disconnect(true)
+      return next(new Error('unauthorized'))
+    }
+  })
+
   const bindUser = async (user) => {
     if (!user) return false
     socket.data.userId = user.id
@@ -126,8 +211,8 @@ io.on('connection', (socket) => {
     onlineUsers.get(user.id).add(socket.id)
     socket.join(`user:${user.id}`)
     socket.emit('auth:ok', { userId: user.id })
-    broadcastOnline()
-    io.emit('presence', { userId: user.id, online: true })
+    await sendPresenceSnapshot(user.id)
+    if (onlineUsers.get(user.id).size === 1) await broadcastPresenceFor(user.id, true)
     await prisma.profile.updateMany({ where: { userId: user.id }, data: { lastSeen: new Date() } }).catch(() => {})
     return true
   }
@@ -136,58 +221,61 @@ io.on('connection', (socket) => {
     bindUser(socket.data.pendingUser)
   }
 
-  socket.on('auth', async (payload, ack) => {
-    try {
-      let user = null
-      if (typeof payload === 'string') user = await userFromToken(payload)
-      if (!user && socket.data.pendingUser) user = socket.data.pendingUser
-      if (!user) {
-        socket.emit('auth:error', { error: 'Unauthorized' })
-        if (typeof ack === 'function') ack({ ok: false })
-        return
-      }
-      await bindUser(user)
-      if (typeof ack === 'function') ack({ ok: true, userId: user.id })
-    } catch (e) {
+  socket.on('auth', async (_payload, ack) => {
+    // Authentication is completed and bound during the handshake. The legacy
+    // event remains as an acknowledgement only; it cannot switch identities.
+    const active = await isSessionActive(prisma, socket.data.authenticatedSessionToken)
+    if (!active || !socket.data.userId) {
       socket.emit('auth:error', { error: 'Unauthorized' })
       if (typeof ack === 'function') ack({ ok: false })
+      socket.disconnect(true)
+      return
     }
+    if (typeof ack === 'function') ack({ ok: true, userId: socket.data.userId })
   })
+
+  const sessionTimer = setInterval(async () => {
+    if (!(await isSessionActive(prisma, socket.data.authenticatedSessionToken))) socket.disconnect(true)
+  }, 30_000)
+  sessionTimer.unref?.()
 
   const requireAuth = () => socket.data.userId
 
   socket.on('message:send', async (data, ack) => {
     const senderId = requireAuth()
-    if (!senderId || !data?.receiverId) {
+    if (!senderId || !data?.receiverId || typeof data.receiverId !== 'string') {
       if (typeof ack === 'function') ack({ ok: false, error: 'Unauthorized' })
       return
     }
+    const content = String(data.content || data.message || '')
+    if (content.length > 10000) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Message too long' })
+      return
+    }
     try {
-      const blocked = await prisma.friendship.findFirst({
-        where: {
-          status: 'BLOCKED',
-          OR: [
-            { requesterId: senderId, receiverId: data.receiverId },
-            { requesterId: data.receiverId, receiverId: senderId },
-          ],
-        },
-      })
-      if (blocked) {
-        if (typeof ack === 'function') ack({ ok: false, error: 'Blocked' })
+      if (!(await canInteract(prisma, senderId, data.receiverId, 'messagePermission'))) {
+        if (typeof ack === 'function') ack({ ok: false, error: 'Not permitted to message this user' })
         return
+      }
+      if (data.fileUrl) {
+        const ownedFile = await prisma.file.findFirst({ where: { url: String(data.fileUrl), ownerId: senderId }, select: { id: true } }).catch(() => null)
+        if (!ownedFile) {
+          if (typeof ack === 'function') ack({ ok: false, error: 'Attachment is not owned by sender' })
+          return
+        }
       }
       const msg = await prisma.message.create({
         data: {
           senderId,
           receiverId: data.receiverId,
-          content: String(data.content || data.message || ''),
+          content,
           type: data.type || 'text',
           fileUrl: data.fileUrl || null,
           fileName: data.fileName || null,
           fileSize: data.fileSize || null,
           mimeType: data.mimeType || null,
           replyToId: data.replyToId || null,
-          status: socketsOf(data.receiverId).size ? 'DELIVERED' : 'SENT',
+          status: await isUserOnline(data.receiverId) ? 'DELIVERED' : 'SENT',
         },
       })
       const payload = {
@@ -220,8 +308,13 @@ io.on('connection', (socket) => {
 
   socket.on('group:message:send', async (data, ack) => {
     const senderId = requireAuth()
-    if (!senderId || !data?.groupId) {
+    if (!senderId || typeof data?.groupId !== 'string') {
       if (typeof ack === 'function') ack({ ok: false })
+      return
+    }
+    const groupContent = String(data.content || data.message || '')
+    if (groupContent.length > 10000) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Message too long' })
       return
     }
     try {
@@ -232,11 +325,18 @@ io.on('connection', (socket) => {
         if (typeof ack === 'function') ack({ ok: false, error: 'Not a member' })
         return
       }
+      if (data.fileUrl) {
+        const ownedFile = await prisma.file.findFirst({ where: { url: String(data.fileUrl), ownerId: senderId }, select: { id: true } }).catch(() => null)
+        if (!ownedFile) {
+          if (typeof ack === 'function') ack({ ok: false, error: 'Attachment is not owned by sender' })
+          return
+        }
+      }
       const msg = await prisma.message.create({
         data: {
           senderId,
           groupId: data.groupId,
-          content: String(data.content || data.message || ''),
+          content: groupContent,
           type: data.type || 'text',
           fileUrl: data.fileUrl || null,
           fileName: data.fileName || null,
@@ -273,34 +373,44 @@ io.on('connection', (socket) => {
     }
   })
 
-  socket.on('message:seen', async ({ messageId }) => {
+  socket.on('message:seen', async ({ messageId } = {}) => {
     const me = requireAuth()
-    if (!me || !messageId) return
-    const msg = await prisma.message.update({
-      where: { id: messageId },
+    if (!me || typeof messageId !== 'string') return
+    const msg = await prisma.message.findUnique({ where: { id: messageId } }).catch(() => null)
+    // A read receipt can only be issued by the direct-message recipient.
+    if (!msg || msg.groupId || msg.receiverId !== me || !(await isMessageParticipant(prisma, me, msg))) return
+    const profile = await prisma.profile.findUnique({ where: { userId: me }, select: { readReceipts: true } }).catch(() => null)
+    if (profile?.readReceipts === false) return
+    const updated = await prisma.message.updateMany({
+      where: { id: messageId, receiverId: me },
       data: { status: 'SEEN', seenAt: new Date() },
-    }).catch(() => null)
-    if (msg) emitToUser(msg.senderId, 'message:status', { id: msg.id, status: 'SEEN' })
+    }).catch(() => ({ count: 0 }))
+    if (updated.count) emitToUser(msg.senderId, 'message:status', { id: msg.id, status: 'SEEN' })
   })
 
-  socket.on('typing', ({ receiverId, isTyping }) => {
+  socket.on('typing', async ({ receiverId, isTyping } = {}) => {
     const me = requireAuth()
-    if (!me || !receiverId) return
+    if (!me || typeof receiverId !== 'string') return
+    if (!(await canInteract(prisma, me, receiverId, 'messagePermission'))) return
     emitToUser(receiverId, 'typing:indicator', { userId: me, isTyping: !!isTyping })
   })
 
-  socket.on('group:typing', async ({ groupId, isTyping }) => {
+  socket.on('group:typing', async ({ groupId, isTyping } = {}) => {
     const me = requireAuth()
-    if (!me || !groupId) return
+    if (!me || typeof groupId !== 'string') return
+    const membership = await prisma.groupMember.findUnique({ where: { groupId_userId: { groupId, userId: me } } }).catch(() => null)
+    if (!membership) return
     const members = await prisma.groupMember.findMany({ where: { groupId } }).catch(() => [])
     for (const m of members) {
       if (m.userId !== me) emitToUser(m.userId, 'group:typing:indicator', { userId: me, groupId, isTyping: !!isTyping })
     }
   })
 
-  socket.on('reaction:add', async ({ messageId, emoji }) => {
+  socket.on('reaction:add', async ({ messageId, emoji } = {}) => {
     const me = requireAuth()
-    if (!me || !messageId || !emoji) return
+    if (!me || typeof messageId !== 'string' || typeof emoji !== 'string' || !emoji || emoji.length > 32) return
+    const message = await prisma.message.findUnique({ where: { id: messageId } }).catch(() => null)
+    if (!(await isMessageParticipant(prisma, me, message))) return
     await prisma.messageReaction.upsert({
       where: { messageId_userId_emoji: { messageId, userId: me, emoji } },
       update: {},
@@ -317,9 +427,11 @@ io.on('connection', (socket) => {
     }
   })
 
-  socket.on('reaction:remove', async ({ messageId, emoji }) => {
+  socket.on('reaction:remove', async ({ messageId, emoji } = {}) => {
     const me = requireAuth()
-    if (!me || !messageId) return
+    if (!me || typeof messageId !== 'string' || typeof emoji !== 'string') return
+    const message = await prisma.message.findUnique({ where: { id: messageId } }).catch(() => null)
+    if (!(await isMessageParticipant(prisma, me, message))) return
     await prisma.messageReaction.deleteMany({ where: { messageId, userId: me, emoji } }).catch(() => {})
     const msg = await prisma.message.findUnique({ where: { id: messageId } })
     const payload = { messageId, userId: me, emoji, op: 'remove' }
@@ -369,95 +481,125 @@ io.on('connection', (socket) => {
     if (typeof ack === 'function') ack({ ok: true, message: payload })
   })
 
-  function relayCall(event, payload, extraEvents) {
-    const me = requireAuth()
-    const target = payload?.targetUserId || payload?.receiverId
-    if (!me || !target) return
-    const body = { ...payload, from: me, senderId: me, callerId: payload.callerId || me }
-    emitToUser(target, event, body)
-    if (extraEvents) extraEvents.forEach((ev) => emitToUser(target, ev, body))
+  function callTarget(payload) {
+    return payload?.targetUserId || payload?.receiverId || payload?.toUserId || null
   }
 
-  socket.on('call:invite', async (payload) => {
+  async function relayCall(event, payload = {}, extraEvents = []) {
     const me = requireAuth()
-    const target = payload?.targetUserId
-    if (!me || !target) return
-    if (inCall.has(target) && !socketsOf(target).size) {
-      socket.emit('call:busy', { targetUserId: target })
+    const target = callTarget(payload)
+    const callId = payload?.callId
+    if (!me || typeof target !== 'string' || typeof callId !== 'string') return false
+    const call = await prisma.call.findUnique({ where: { id: callId } }).catch(() => null)
+    if (!call || !['ringing', 'connected'].includes(call.status)) return false
+    const isCaller = call.callerId === me && call.receiverId === target
+    const isCallee = call.receiverId === me && call.callerId === target
+    if (!isCaller && !isCallee) return false
+    // Re-check current block and call-visibility policy on every signaling event.
+    if (!(await canInteract(prisma, me, target, 'callPermission'))) return false
+
+    if (event === 'call:accepted') {
+      if (!isCallee || call.status !== 'ringing') return false
+      await prisma.call.update({ where: { id: callId }, data: { status: 'connected', answeredAt: new Date() } }).catch(() => {})
+      inCall.add(me)
+      inCall.add(target)
+    } else if (['call:rejected', 'call:busy', 'call:ended', 'call:failed', 'call:cancelled'].includes(event)) {
+      if ((event === 'call:cancelled' || event === 'call:ended' && call.status === 'ringing') && !isCaller) return false
+      if ((event === 'call:rejected' || event === 'call:busy') && !isCallee) return false
+      const status = event === 'call:failed' ? 'failed' : event === 'call:cancelled' ? 'cancelled' : event === 'call:busy' ? 'busy' : event === 'call:rejected' ? 'declined' : 'ended'
+      await prisma.call.update({ where: { id: callId }, data: { status, endedAt: new Date() } }).catch(() => {})
+      inCall.delete(me)
+      inCall.delete(target)
+    } else if (event === 'call:ringing' && isCallee && call.status === 'ringing') {
+      // Acknowledgement that the target's client received the invite.
+    } else if (call.status !== 'connected' && !(event === 'call:offer' && isCaller)) {
+      // The caller may send the SDP offer while ringing. All further traffic
+      // requires acceptance and is constrained to the same two participants.
+      return false
+    }
+
+    const body = {
+      ...payload,
+      from: me,
+      fromUserId: me,
+      senderId: me,
+      callerId: call.callerId,
+      targetUserId: target,
+      toUserId: target,
+      callId,
+    }
+    emitToUser(target, event, body)
+    for (const alias of extraEvents) emitToUser(target, alias, body)
+    return true
+  }
+
+  socket.on('call:invite', async (payload = {}, ack) => {
+    const me = requireAuth()
+    const target = callTarget(payload)
+    const type = payload.type === 'video' || payload.callType === 'video' ? 'video' : 'audio'
+    if (!me || typeof target !== 'string') {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Unauthorized' })
       return
     }
-    if (!socketsOf(target).size) {
+    if (!(await canInteract(prisma, me, target, 'callPermission'))) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Call not permitted' })
+      return
+    }
+    const activeCall = await prisma.call.findFirst({
+      where: {
+        status: { in: ['ringing', 'connected'] },
+        OR: [{ callerId: me }, { receiverId: me }, { callerId: target }, { receiverId: target }],
+      },
+      select: { id: true },
+    }).catch(() => null)
+    if (activeCall || inCall.has(me) || inCall.has(target)) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Busy' })
+      return
+    }
+    if (!(await isUserOnline(target))) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Unavailable' })
       socket.emit('call:unavailable', { targetUserId: target })
+      return
+    }
+    const call = await prisma.call.create({
+      data: { callerId: me, receiverId: target, type, status: 'ringing' },
+    }).catch(() => null)
+    if (!call) {
+      if (typeof ack === 'function') ack({ ok: false, error: 'Unable to start call' })
       return
     }
     inCall.add(me)
     const user = socket.data.user
     emitToUser(target, 'call:incoming', {
       callerId: me,
-      type: payload.type || 'audio',
+      fromUserId: me,
+      targetUserId: target,
+      callId: call.id,
+      type,
+      callType: type,
       name: user?.name,
       photoUrl: user?.profile?.photoUrl || null,
     })
-    await prisma.call.create({
-      data: { callerId: me, receiverId: target, type: payload.type || 'audio', status: 'ringing' },
-    }).catch(() => {})
+    if (typeof ack === 'function') ack({ ok: true, callId: call.id })
   })
 
-  socket.on('call:ringing', (p) => relayCall('call:ringing', p))
-  socket.on('call:accepted', (p) => {
-    const me = requireAuth()
-    if (me) inCall.add(me)
-    relayCall('call:accepted', p, ['call:accepted'])
-  })
-  socket.on('call:rejected', (p) => {
-    const me = requireAuth()
-    if (me) inCall.delete(me)
-    if (p?.targetUserId) inCall.delete(p.targetUserId)
-    relayCall('call:rejected', p, ['call:ended'])
-  })
-  socket.on('call:busy', (p) => relayCall('call:busy', p))
-  socket.on('call:offer', (p) => {
-    relayCall('call:offer', { ...p, sdp: p.sdp || p.offer })
-  })
-  socket.on('call:answer', (p) => {
-    relayCall('call:answer', { ...p, sdp: p.sdp || p.answer })
-    relayCall('call:sdp', { kind: 'answer', sdp: p.sdp || p.answer, from: requireAuth() })
-  })
-  socket.on('call:ice', (p) => {
-    relayCall('call:ice', p)
-    relayCall('call:ice-candidate', p)
-  })
-  socket.on('call:connected', (p) => relayCall('call:connected', p))
-  socket.on('call:failed', (p) => {
-    const me = requireAuth()
-    if (me) inCall.delete(me)
-    if (p?.targetUserId) inCall.delete(p.targetUserId)
-    relayCall('call:failed', p, ['call:ended'])
-  })
-  socket.on('call:ended', (p) => {
-    const me = requireAuth()
-    if (me) inCall.delete(me)
-    if (p?.targetUserId) inCall.delete(p.targetUserId)
-    relayCall('call:ended', p)
-  })
-  socket.on('call:end', (p) => {
-    const me = requireAuth()
-    if (me) inCall.delete(me)
-    relayCall('call:ended', p)
-  })
-  socket.on('call:reject', (p) => {
-    const me = requireAuth()
-    if (me) inCall.delete(me)
-    relayCall('call:rejected', p, ['call:ended'])
-  })
-  socket.on('call:cancelled', (p) => {
-    const me = requireAuth()
-    if (me) inCall.delete(me)
-    if (p?.targetUserId) inCall.delete(p.targetUserId)
-    relayCall('call:ended', { ...p, reason: 'cancelled' })
-  })
+  socket.on('call:ringing', (p = {}) => { relayCall('call:ringing', p).catch(() => {}) })
+  socket.on('call:accepted', (p = {}) => { relayCall('call:accepted', p).catch(() => {}) })
+  socket.on('call:rejected', (p = {}) => { relayCall('call:rejected', p).catch(() => {}) })
+  socket.on('call:busy', (p = {}) => { relayCall('call:busy', p).catch(() => {}) })
+  socket.on('call:offer', (p = {}) => { relayCall('call:offer', { ...p, sdp: p.sdp || p.offer }).catch(() => {}) })
+  socket.on('call:answer', (p = {}) => { relayCall('call:answer', { ...p, sdp: p.sdp || p.answer }, ['call:accepted']).catch(() => {}) })
+  socket.on('call:ice', (p = {}) => { relayCall('call:ice', p, ['call:ice-candidate']).catch(() => {}) })
+  socket.on('call:ice-candidate', (p = {}) => { relayCall('call:ice-candidate', p, ['call:ice']).catch(() => {}) })
+  socket.on('call:connected', (p = {}) => { relayCall('call:connected', p).catch(() => {}) })
+  socket.on('call:failed', (p = {}) => { relayCall('call:failed', p, ['call:ended']).catch(() => {}) })
+  socket.on('call:ended', (p = {}) => { relayCall('call:ended', p).catch(() => {}) })
+  socket.on('call:end', (p = {}) => { relayCall('call:ended', p).catch(() => {}) })
+  socket.on('call:reject', (p = {}) => { relayCall('call:rejected', p, ['call:ended']).catch(() => {}) })
+  socket.on('call:cancelled', (p = {}) => { relayCall('call:cancelled', p, ['call:ended']).catch(() => {}) })
 
   socket.on('disconnect', async () => {
+    clearInterval(sessionTimer)
     const userId = socketUserMap.get(socket.id)
     socketUserMap.delete(socket.id)
     if (userId && onlineUsers.has(userId)) {
@@ -466,10 +608,11 @@ io.on('connection', (socket) => {
       if (set.size === 0) {
         onlineUsers.delete(userId)
         inCall.delete(userId)
-        io.emit('presence', { userId, online: false })
-        await prisma.profile.updateMany({ where: { userId }, data: { lastSeen: new Date() } }).catch(() => {})
+        if (!(await isUserOnline(userId))) {
+          await broadcastPresenceFor(userId, false)
+          await prisma.profile.updateMany({ where: { userId }, data: { lastSeen: new Date() } }).catch(() => {})
+        }
       }
-      broadcastOnline()
     }
   })
 })

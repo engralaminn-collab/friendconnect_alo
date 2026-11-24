@@ -3,15 +3,21 @@
   "version": "0.2.1",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3000 2>&1 | tee dev.log",
+    "dev": "next dev -p 3000",
+    "dev:all": "node scripts/dev-all.cjs",
     "build": "next build && cp -r .next/static .next/standalone/.next/ && cp -r public .next/standalone/",
-    "start": "NODE_ENV=production bun .next/standalone/server.js 2>&1 | tee server.log",
+    "start": "NODE_ENV=production node .next/standalone/server.js",
     "lint": "eslint .",
-    "db:push": "prisma db push --accept-data-loss",
+    "db:push": "prisma db push",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate dev",
     "db:reset": "prisma migrate reset",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "npm run test:unit && npm run test:ai:evaluation-schema && npm run build && npm run test:integration",
+    "test:unit": "tsx --test tests/ai/*.test.ts tests/jara/*.test.ts tests/security/*.test.ts tests/security/*.test.cjs",
+    "test:ai:evaluation-schema": "tsx --test tests/ai/evaluation-scenarios.test.ts",
+    "ai:evaluate": "tsx scripts/ai-evaluate.ts",
+    "test:integration": "node --test tests/integration/*.test.cjs"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.700.0",
@@ -52,6 +58,7 @@
     "@radix-ui/react-toggle-group": "^1.1.10",
     "@radix-ui/react-tooltip": "^1.2.7",
     "@reactuses/core": "^6.0.5",
+    "@socket.io/redis-adapter": "^8.3.0",
     "@tanstack/react-query": "^5.82.0",
     "@tanstack/react-table": "^8.21.3",
     "@types/bcryptjs": "^3.0.0",
@@ -105,6 +112,7 @@
     "eslint": "^9",
     "eslint-config-next": "^16.1.1",
     "tailwindcss": "^4",
+    "tsx": "^4.23.15",
     "tw-animate-css": "^1.3.5",
     "typescript": "^5"
   }

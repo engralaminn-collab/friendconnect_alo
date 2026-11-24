@@ -3,11 +3,12 @@ import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
 import { db } from '@/lib/db'
 import { aiChat, isAIConfigured } from '@/lib/ai'
+import { normalizeChatInput, buildJaraConversationContext } from '@/lib/ai-input'
+import { buildJaraSystemPrompt } from '@/lib/jara-prompt'
 import { rateLimit } from '@/lib/cache'
 import { JARA_ID, parseInstructionToPatch, hashConfig, proposalExpiresAt, JARA_DEFAULT_CONFIG } from '@/lib/jara'
 import { getRendererCapability } from '@/lib/jara-renderer'
 import { assertJaraEnabled, applyJaraConfigPatch, isSuperAdmin as isSuperAdminRole, writeJaraAudit, requestMeta } from '@/lib/jara-admin'
-import { createHash } from 'crypto'
 
 // POST /api/jara/chat — chat with Jara (text)
 // Handles both normal conversation and Super Admin configuration instructions
@@ -15,8 +16,9 @@ export async function POST(req: NextRequest) {
   const me = await getSessionUser()
   if (!me) return errorJson('Unauthorized', 401)
 
-  const limited = await rateLimit(`jara-chat:${me.id}`, 30, 60).catch(() => false)
-  if (limited === false) return errorJson('Rate limit exceeded', 429)
+  const limited = await rateLimit(`jara-chat:${me.id}`, 30, 60).catch(() => null)
+  if (limited === null) return errorJson('Jara request protection is temporarily unavailable', 503)
+  if (!limited.allowed) return errorJson('Rate limit exceeded', 429)
 
   try {
     await assertJaraEnabled('chat')
@@ -28,13 +30,18 @@ export async function POST(req: NextRequest) {
   let body: any
   try { body = await req.json() } catch { return errorJson('Invalid JSON', 400) }
 
-  const messages: { role: string; content: string }[] = body.messages || []
-  const singleMessage: string | undefined = body.message // alt single message
-  const chatMessages = messages.length ? messages : (singleMessage ? [{ role: 'user', content: singleMessage }] : [])
-
-  if (!chatMessages.length) return errorJson('Messages required', 400)
-
-  const lastUserMsg = [...chatMessages].reverse().find(m => m.role === 'user')?.content || ''
+  const suppliedMessages = Array.isArray(body.messages)
+    ? body.messages
+    : typeof body.message === 'string'
+      ? [{ role: 'user', content: body.message }]
+      : null
+  const parsedMessages = normalizeChatInput(suppliedMessages)
+  if (!parsedMessages.ok) {
+    const status = parsedMessages.error === 'message_too_long' || parsedMessages.error === 'conversation_too_long' ? 413 : 400
+    return errorJson('Invalid or oversized conversation', status)
+  }
+  const chatMessages = parsedMessages.messages
+  const lastUserMsg = chatMessages[chatMessages.length - 1].content
   const isSuperAdmin = isSuperAdminRole(me)
 
   // Persist user message as Message with Jara as receiver (for history)
@@ -186,36 +193,32 @@ export async function POST(req: NextRequest) {
   } catch {}
   if (!jaraConfig) jaraConfig = { ...JARA_DEFAULT_CONFIG, version: 1 }
 
-  const personalityPrompt =
-    jaraConfig.personality === 'professional' ? 'You are professional, concise, and courteous.'
-    : jaraConfig.personality === 'playful' ? 'You are playful, warm, and light-hearted.'
-    : jaraConfig.personality === 'formal' ? 'You are formal, respectful, and precise.'
-    : 'You are friendly, warm, and conversational.'
+  const systemPrompt = buildJaraSystemPrompt(jaraConfig, 'chat')
 
-  const lang = jaraConfig.voiceLanguage || 'bn'
-  const langInstruction =
-    lang === 'bn' ? 'You can speak Bangla fluently, including conversational Bangla and Banglish. Detect the user language and respond in the same language (Bangla, English, or mixed).'
-    : lang === 'en' ? 'Respond in English.'
-    : 'Detect user language (Bangla, English, Banglish) and respond accordingly. You are comfortable mixing Bangla and English.'
+  if (!isAIConfigured()) return errorJson('Jara language model is not configured', 503)
 
-  const systemPrompt =
-    `You are Jara, a friendly AI assistant inside FriendConnect. You have a distinct visual identity (face=${jaraConfig.face}, background=${jaraConfig.background}, theme=${jaraConfig.theme}). ` +
-    `${personalityPrompt} ` +
-    `${langInstruction} ` +
-    `You must clearly identify yourself as AI — never pretend to be human. Keep responses ${jaraConfig.responseLength === 'short' ? 'short (1-2 sentences)' : jaraConfig.responseLength === 'long' ? 'detailed' : 'concise but helpful (2-4 sentences)'}. ` +
-    `You are helpful, kind, and remember context within the conversation. If the user speaks Bangla, respond in Bangla. If Banglish, respond in Banglish. If English, respond in English. ` +
-    `Only an authenticated Super Admin can change your configuration through server-authorized functions. If a user asks to change your appearance/voice/settings, explain that Super Admin can instruct you directly in chat and you will apply authorized routine changes after server confirmation. Never claim a config change succeeded unless the server confirmed it.`
+  const now = new Date()
+  const persistedRows = await db.message.findMany({
+    where: {
+      AND: [
+        { OR: [{ senderId: me.id, receiverId: JARA_ID }, { senderId: JARA_ID, receiverId: me.id }] },
+        { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+        { OR: [{ scheduledFor: null }, { scheduledFor: { lte: now } }] },
+      ],
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 24,
+    select: { senderId: true, receiverId: true, content: true, deletedFor: true, expiresAt: true, scheduledFor: true },
+  }).catch(() => [])
+  const serverContext = buildJaraConversationContext(persistedRows, me.id, JARA_ID, lastUserMsg)
 
-  // Try AI provider, fallback to echo-style friendly response
-  let aiResponse = ''
-  if (isAIConfigured()) {
-    try {
-      aiResponse = await aiChat(chatMessages as any, systemPrompt)
-    } catch (e: any) {
-      aiResponse = fallbackReply(lastUserMsg, jaraConfig, e?.message)
-    }
-  } else {
-    aiResponse = fallbackReply(lastUserMsg, jaraConfig, 'AI provider not configured')
+  let aiResponse: string
+  try {
+    // The browser history is never forwarded to the provider; context comes
+    // from this authenticated user's persisted Jara direct-message thread.
+    aiResponse = await aiChat(serverContext, systemPrompt)
+  } catch {
+    return errorJson('Jara language model is temporarily unavailable', 502)
   }
 
   // Save assistant message
@@ -232,28 +235,4 @@ export async function POST(req: NextRequest) {
   } catch {}
 
   return json({ response: aiResponse, kind: 'chat', config: { face: jaraConfig.face, background: jaraConfig.background, theme: jaraConfig.theme, version: jaraConfig.version } })
-}
-
-function fallbackReply(userMsg: string, cfg: any, reason: string): string {
-  const lower = userMsg.toLowerCase()
-  // Bangla detection simple
-  const isBangla = /[\u0980-\u09FF]/.test(userMsg) || lower.includes('kemon') || lower.includes('valo') || lower.includes('tumi') || lower.includes('ami') || lower.includes('kotha') || lower.includes('bangla')
-  if (isBangla) {
-    if (lower.includes('kemon acho') || lower.includes('kemon aso')) return 'আমি ভালো আছি, ধন্যবাদ! 😊 আমি Jara — তোমার AI বন্ধু। তুমি কেমন আছো? আমি বাংলায়, ইংরেজিতে বা Banglish-এ কথা বলতে পারি।'
-    if (lower.includes('tumi ke')) return 'আমি Jara — FriendConnect-এর AI assistant। আমি তোমাকে সাহায্য করতে এখানে আছি! 🤖'
-    if (lower.includes('valo')) return 'খুব ভালো! তোমাকে সাহায্য করতে পেরে ভালো লাগছে। আর কী জানতে চাও?'
-    return 'হ্যালো! আমি Jara — তোমার বন্ধু AI। তুমি বাংলায়, ইংরেজিতে বা Banglish-এ যেভাবে খুশি কথা বলতে পারো। কীভাবে সাহায্য করতে পারি? 😊'
-  }
-  // Greeting
-  if (lower.includes('hello') || lower.includes('hi ') || lower.trim() === 'hi' || lower.includes('hey')) {
-    return "Hello! I'm Jara — your friendly AI assistant on FriendConnect. 🤖 How can I help you today? I can chat in English, Bangla, or Banglish!"
-  }
-  if (lower.includes('who are you') || lower.includes('what are you')) {
-    return "I'm Jara — an AI assistant built into FriendConnect. I can chat, help you, and join group conversations when invited. How can I assist? 😊"
-  }
-  if (lower.includes('help')) {
-    return "Of course! I can answer questions, summarize chats, translate, or just have a friendly conversation. What do you need help with?"
-  }
-  // Default friendly echo with context
-  return `Thanks for your message! I'm Jara — your AI friend here on FriendConnect. You said: "${userMsg.slice(0, 120)}" — I'd love to help with that! ${reason.includes('not configured') ? '(AI model is in fallback mode — connect an Ollama or API key for smarter replies.)' : ''}`
 }

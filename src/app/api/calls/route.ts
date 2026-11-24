@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { canInteract } from '@/lib/socket-security.cjs'
 
 export async function GET() {
   try {
@@ -41,7 +42,16 @@ export async function POST(req: NextRequest) {
     if (action === 'start') {
       const receiverId = String(body.receiverId || '')
       const type = body.type === 'video' ? 'video' : 'audio'
-      if (!receiverId) return errorJson('receiverId required', 400)
+      if (!receiverId || receiverId === me.id) return errorJson('Valid receiverId required', 400)
+      if (!(await canInteract(db, me.id, receiverId, 'callPermission'))) return errorJson('Call not permitted', 403)
+      const busy = await db.call.findFirst({
+        where: {
+          status: { in: ['ringing', 'connected'] },
+          OR: [{ callerId: me.id }, { receiverId: me.id }, { callerId: receiverId }, { receiverId }],
+        },
+        select: { id: true },
+      })
+      if (busy) return errorJson('One participant is already in a call', 409)
       const call = await db.call.create({
         data: { callerId: me.id, receiverId, type, status: 'ringing' },
       })
@@ -59,9 +69,12 @@ export async function POST(req: NextRequest) {
     if (action === 'end') {
       const callId = String(body.callId || '')
       const status = String(body.status || 'ended')
-      const duration = body.duration ? Number(body.duration) : null
+      const duration = body.duration == null ? null : Number(body.duration)
+      if (!callId || !['ended', 'failed', 'declined', 'cancelled', 'busy'].includes(status)) return errorJson('Invalid call update', 400)
+      if (duration !== null && (!Number.isFinite(duration) || duration < 0 || duration > 24 * 60 * 60)) return errorJson('Invalid call duration', 400)
       const call = await db.call.findUnique({ where: { id: callId } })
       if (!call) return errorJson('Call not found', 404)
+      if (call.callerId !== me.id && call.receiverId !== me.id) return errorJson('Forbidden', 403)
       await db.call.update({
         where: { id: callId },
         data: { status, endedAt: new Date(), duration: duration ?? undefined },

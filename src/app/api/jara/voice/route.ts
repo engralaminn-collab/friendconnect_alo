@@ -1,54 +1,94 @@
 import { NextRequest } from 'next/server'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { db } from '@/lib/db'
 import { aiChat, isAIConfigured } from '@/lib/ai'
+import { buildJaraConversationContext } from '@/lib/ai-input'
 import { assertJaraEnabled } from '@/lib/jara-admin'
+import { rateLimit } from '@/lib/cache'
+import { buildJaraSystemPrompt } from '@/lib/jara-prompt'
+import { JARA_ID, JARA_DEFAULT_CONFIG } from '@/lib/jara'
 
-// POST /api/jara/voice — transcribe (if audio provided) + generate Jara reply
-// In this self-hosted browser-based architecture, STT happens client-side (Web Speech API / Whisper.cpp)
-// and TTS happens client-side (Web Speech API / Piper). This endpoint is the LLM bridge.
+// Speech recognition and speech synthesis run in the browser; this endpoint is
+// the authenticated text-model bridge and does not claim server-side voice.
 export async function POST(req: NextRequest) {
   const me = await getSessionUser()
   if (!me) return errorJson('Unauthorized', 401)
-  try { await assertJaraEnabled('voice') } catch (e: any) { return errorJson(e?.status === 503 ? 'Jara AI is currently disabled by a Super Admin.' : (e?.message || 'Jara unavailable'), e?.status || 403) }
+  try {
+    await assertJaraEnabled('voice')
+  } catch (e: any) {
+    return errorJson(e?.status === 503 ? 'Jara AI is currently disabled by a Super Admin.' : (e?.message || 'Jara unavailable'), e?.status || 403)
+  }
+
+  const limited = await rateLimit(`jara-voice:${me.id}`, 10, 60).catch(() => null)
+  if (limited === null) return errorJson('Voice request protection is temporarily unavailable', 503)
+  if (!limited.allowed) return errorJson('Rate limit exceeded', 429)
 
   let body: any
   try { body = await req.json() } catch { return errorJson('Invalid JSON', 400) }
 
-  const transcript: string = body.transcript || body.text || ''
-  const history: { role: string; content: string }[] = body.history || []
-
+  const transcript = typeof body.transcript === 'string' ? body.transcript : typeof body.text === 'string' ? body.text : ''
   if (!transcript.trim()) return errorJson('transcript required', 400)
+  if (transcript.length > 4000) return errorJson('Transcript is too long', 413)
 
-  // Build prompt with voice context
-  const systemPrompt =
-    `You are Jara — a warm, human-like AI companion on FriendConnect. You are currently in a voice call. ` +
-    `Respond naturally, conversationally, with appropriate length for speech (2-4 sentences usually). ` +
-    `You can understand Bangla, English, and Banglish — detect the user's language and reply in the same language. ` +
-    `If the user speaks Bangla, reply in Bangla. Be helpful, friendly, and remember you are AI — never claim to be human. ` +
-    `This is a voice transcription, so it may have minor errors — interpret generously.`
+  // Browser-provided history is intentionally ignored. Reconstruct context from
+  // this authenticated user's visible persisted Jara DM, just like text chat.
+  // Speech transcripts remain ordinary chat history; this does not enable memory.
+  if (!isAIConfigured()) return errorJson('Jara language model is not configured', 503)
 
-  const messages = [...history.slice(-10), { role: 'user', content: transcript }]
+  const transcriptText = transcript.trim()
+  try {
+    await (db as any).message.create({
+      data: {
+        senderId: me.id,
+        receiverId: JARA_ID,
+        content: transcriptText.slice(0, 5000),
+        type: 'text',
+        status: 'SENT',
+      },
+    })
+  } catch {
+    // Match Jara text chat behavior: still answer if history persistence is unavailable.
+  }
 
-  let reply = ''
-  if (isAIConfigured()) {
+  const now = new Date()
+  const persistedRows = await db.message.findMany({
+    where: {
+      AND: [
+        { OR: [{ senderId: me.id, receiverId: JARA_ID }, { senderId: JARA_ID, receiverId: me.id }] },
+        { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+        { OR: [{ scheduledFor: null }, { scheduledFor: { lte: now } }] },
+      ],
+    },
+    orderBy: { createdAt: 'desc' },
+    take: 24,
+    select: { senderId: true, receiverId: true, content: true, deletedFor: true, expiresAt: true, scheduledFor: true },
+  }).catch(() => [])
+  const context = buildJaraConversationContext(persistedRows, me.id, JARA_ID, transcriptText)
+
+  let jaraConfig: any = null
+  try {
+    jaraConfig = await (db as any).jaraConfig.findFirst({ where: { isLive: true }, orderBy: { version: 'desc' } })
+  } catch {}
+  if (!jaraConfig) jaraConfig = { ...JARA_DEFAULT_CONFIG, version: 1 }
+
+  const systemPrompt = `${buildJaraSystemPrompt(jaraConfig, 'voice')} Treat the speech transcript as potentially imperfect; if an unclear word changes the meaning, ask a short clarification.`
+
+  try {
+    const reply = await aiChat(context, systemPrompt)
     try {
-      reply = await aiChat(messages as any, systemPrompt)
-    } catch (e: any) {
-      reply = fallbackVoice(transcript)
-    }
-  } else {
-    reply = fallbackVoice(transcript)
+      await (db as any).message.create({
+        data: {
+          senderId: JARA_ID,
+          receiverId: me.id,
+          content: String(reply).slice(0, 5000),
+          type: 'text',
+          status: 'SENT',
+        },
+      })
+    } catch {}
+    return json({ reply, transcript: transcriptText })
+  } catch {
+    return errorJson('Jara language model is temporarily unavailable', 502)
   }
-
-  return json({ reply, transcript })
-}
-
-function fallbackVoice(transcript: string): string {
-  const lower = transcript.toLowerCase()
-  if (/[\u0980-\u09FF]/.test(transcript) || lower.includes('kemon') || lower.includes('valo')) {
-    return 'ধন্যবাদ! আমি তোমার কথা শুনতে পাচ্ছি। তুমি খুব সুন্দর করে বলেছো! আর কী বলতে চাও?'
-  }
-  if (lower.includes('hello') || lower.includes('hi')) return "Hello! I can hear you clearly. How can I help you today?"
-  return `I heard you say: "${transcript.slice(0, 100)}". I'm Jara, your AI friend — nice to talk with you!`
 }

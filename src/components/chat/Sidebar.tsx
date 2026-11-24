@@ -377,7 +377,12 @@ export function Sidebar({
         <Button
           variant="ghost"
           size="icon"
-          onClick={() => signOut({ callbackUrl: "/" })}
+          onClick={async () => {
+            // Revoke the DB-backed registry session before clearing NextAuth's
+            // browser cookie so open realtime sockets become unauthorized too.
+            await fetch('/api/auth/logout', { method: 'POST' }).catch(() => {})
+            await signOut({ callbackUrl: "/" })
+          }}
           title="Sign out"
         >
           <LogOut className="w-5 h-5" />
