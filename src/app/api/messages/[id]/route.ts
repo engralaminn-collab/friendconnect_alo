@@ -2,28 +2,49 @@ import { NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/session"
 import { db } from "@/lib/db"
 import { revokeMessageGrants } from "@/lib/file-access"
+import { emitRealtimeToUsers } from "@/lib/realtime-emit"
+
+async function recipientsForMessage(msg: { senderId: string; receiverId?: string | null; groupId?: string | null; conversationId?: string | null }) {
+  if (msg.conversationId) {
+    const members = await db.conversationMember.findMany({
+      where: { conversationId: msg.conversationId },
+      select: { userId: true },
+    })
+    return members.map((m) => m.userId)
+  }
+  if (msg.groupId) {
+    const members = await db.groupMember.findMany({
+      where: { groupId: msg.groupId },
+      select: { userId: true },
+    })
+    return members.map((m) => m.userId)
+  }
+  return [msg.senderId, msg.receiverId].filter((v): v is string => typeof v === "string" && v.length > 0)
+}
 
 // Edit a message
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const me = await getCurrentUser()
   if (!me) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-  const msg = await db.message.findUnique({ where: { id: (await params).id }, select: { id: true, senderId: true, conversationId: true } })
+  const messageId = (await params).id
+  const msg = await db.message.findUnique({ where: { id: messageId }, select: { id: true, senderId: true, receiverId: true, groupId: true, conversationId: true } })
   if (!msg) return NextResponse.json({ error: "Not found" }, { status: 404 })
   if (msg.senderId !== me.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   const { content } = await req.json().catch(() => ({}))
   if (!content || !content.trim()) return NextResponse.json({ error: "Empty" }, { status: 400 })
   const updated = await db.message.update({
-    where: { id: (await params).id },
-    data: { content: content.trim(), editedAt: new Date() },
+    where: { id: messageId },
+    data: { content: content.trim(), edited: true, editedAt: new Date() },
     include: {
       sender: { select: { id: true, username: true, name: true, avatarUrl: true } },
       attachments: true,
       reactions: { include: { user: { select: { id: true, username: true } } } },
-      // NOTE: there is no per-message read receipt relation. `reads` was selected
-      // here against a `MessageRead` model that exists in no schema and is never
-      // written, so it could only fail or return undefined. Read state is tracked
-      // with `Message.status`/`seenAt` (per conversation) instead.
     },
+  })
+  const recipients = await recipientsForMessage(msg)
+  await emitRealtimeToUsers(recipients, "message:updated", {
+    ...updated,
+    conversationId: msg.conversationId ?? null,
   })
   return NextResponse.json({ message: updated })
 }
@@ -32,8 +53,9 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
 export async function DELETE(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const me = await getCurrentUser()
   if (!me) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+  const messageId = (await params).id
   const msg = await db.message.findUnique({
-    where: { id: (await params).id },
+    where: { id: messageId },
     select: { id: true, senderId: true, receiverId: true, groupId: true, conversationId: true, deletedFor: true },
   })
   if (!msg) return NextResponse.json({ error: "Not found" }, { status: 404 })
@@ -48,15 +70,23 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
   }
   if (!isParticipant) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
 
-  if (scope === "all") {
+  if (scope === "all" || scope === "everyone") {
     if (msg.senderId !== me.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
     await db.message.update({
-      where: { id: (await params).id },
+      where: { id: messageId },
       data: { deletedFor: "everyone", content: "", fileUrl: null, fileName: null, fileSize: null, mimeType: null },
     })
     // Withdraw the attachment: delete only the grants this message created so
     // the same upload stays reachable from any other thread that shares it.
-    await revokeMessageGrants({ id: (await params).id })
+    await revokeMessageGrants({ id: messageId })
+    const recipients = await recipientsForMessage(msg)
+    await emitRealtimeToUsers(recipients, "message:deleted", {
+      id: messageId,
+      messageId,
+      conversationId: msg.conversationId ?? null,
+      deletedFor: "everyone",
+      deletedForAll: true,
+    })
     return NextResponse.json({ ok: true, deletedForAll: true })
   }
 
@@ -64,7 +94,14 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
   if (raw !== "everyone") {
     const existing = raw === "me" ? [msg.senderId] : raw.split(",").map((value) => value.trim()).filter(Boolean)
     if (!existing.includes(me.id)) existing.push(me.id)
-    await db.message.update({ where: { id: (await params).id }, data: { deletedFor: existing.join(",") } })
+    await db.message.update({ where: { id: messageId }, data: { deletedFor: existing.join(",") } })
   }
+  await emitRealtimeToUsers([me.id], "message:deleted", {
+    id: messageId,
+    messageId,
+    conversationId: msg.conversationId ?? null,
+    deletedFor: "me",
+    deletedForAll: false,
+  })
   return NextResponse.json({ ok: true, scope: "self" })
 }

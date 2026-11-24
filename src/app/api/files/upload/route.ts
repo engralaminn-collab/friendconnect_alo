@@ -24,6 +24,7 @@ const EXT_FOR_MIME: Record<string, string> = {
 export async function POST(req: NextRequest) {
   let diskPath: string | null = null
   let createdFileId: string | null = null
+  let createdAttachmentId: string | null = null
   let usageIncremented = false
   let ownerId: string | null = null
   let finalSize = 0
@@ -84,6 +85,17 @@ export async function POST(req: NextRequest) {
     })
     createdFileId = fileRecord.id
 
+    const attachmentRecord = await db.attachment.create({
+      data: {
+        ownerId: me.id,
+        filename: originalName,
+        mimeType: finalMime,
+        size: finalSize,
+        url: fileRecord.url,
+      },
+    })
+    createdAttachmentId = attachmentRecord.id
+
     // Finding #10: record the owner's download grant at upload time. Deriving it
     // later meant every download scanned the Message table.
     await grantFileAccess(fileRecord.url, me.id, 'owner')
@@ -91,10 +103,20 @@ export async function POST(req: NextRequest) {
     await db.user.update({ where: { id: me.id }, data: { fileUsedBytes: { increment: finalSize } } })
     usageIncremented = true
     logger.info('file uploaded', { userId: me.id, fileId: id, size: finalSize, mime: finalMime })
-    return json({ file: { id, url: fileRecord.url, name: originalName, mimeType: finalMime, size: finalSize } })
+    return json({
+      file: { id, url: fileRecord.url, name: originalName, mimeType: finalMime, size: finalSize },
+      attachment: {
+        id: attachmentRecord.id,
+        url: attachmentRecord.url,
+        filename: attachmentRecord.filename,
+        mimeType: attachmentRecord.mimeType,
+        size: attachmentRecord.size,
+      },
+    })
   } catch (error) {
     // Roll back every completed stage: failed DB writes must not leave an
     // orphaned storage object or a dangling File row.
+    if (createdAttachmentId) await db.attachment.delete({ where: { id: createdAttachmentId } }).catch(() => {})
     if (createdFileId) await db.file.delete({ where: { id: createdFileId } }).catch(() => {})
     if (usageIncremented && ownerId) {
       await db.user.update({ where: { id: ownerId }, data: { fileUsedBytes: { decrement: finalSize } } }).catch(() => {})

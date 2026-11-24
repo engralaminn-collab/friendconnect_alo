@@ -7,9 +7,13 @@ let socket: Socket | null = null
 export function getSocket(token?: string): Socket {
   if (socket) return socket
   if (!token) throw new Error("token required to init socket")
-  socket = io("/?XTransformPort=3003", {
-    path: "/",
+  const socketUrl =
+    process.env.NEXT_PUBLIC_SOCKET_URL ||
+    (typeof window !== "undefined" ? window.location.origin : "")
+  socket = io(socketUrl, {
+    path: "/socket.io/",
     transports: ["polling", "websocket"],
+    withCredentials: true,
     auth: { token },
     reconnection: true,
     reconnectionAttempts: Infinity,

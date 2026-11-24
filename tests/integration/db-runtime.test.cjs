@@ -351,3 +351,55 @@ test('$transaction replays nested creates with the ids the callback already saw'
   // The committed member must be the row the callback was handed, not a new one.
   assert.equal(members[0].id, staged.members[0].id)
 })
+
+test('create, update, upsert, and delete honor args.select without leaking sensitive fields', async (t) => {
+  const { prisma } = await freshRuntime(t, 'select-mutations')
+
+  const created = await prisma.user.create({
+    data: {
+      email: 'sel@x.i',
+      username: 'seluser',
+      name: 'Sel',
+      passwordHash: 'secret-hash',
+      twoFactorSecret: 'secret-totp',
+    },
+    select: { id: true, username: true, name: true },
+  })
+  assert.deepEqual(Object.keys(created).sort(), ['id', 'name', 'username'])
+  assert.equal('passwordHash' in created, false)
+  assert.equal('twoFactorSecret' in created, false)
+
+  const updated = await prisma.user.update({
+    where: { id: created.id },
+    data: { name: 'Sel Updated' },
+    select: { id: true, name: true },
+  })
+  assert.deepEqual(Object.keys(updated).sort(), ['id', 'name'])
+  assert.equal(updated.name, 'Sel Updated')
+  assert.equal('passwordHash' in updated, false)
+
+  const upsertedExisting = await prisma.user.upsert({
+    where: { id: created.id },
+    update: { name: 'Sel Upserted' },
+    create: { email: 'never@x.i', username: 'never', name: 'Never', passwordHash: 'x' },
+    select: { id: true, name: true },
+  })
+  assert.deepEqual(Object.keys(upsertedExisting).sort(), ['id', 'name'])
+  assert.equal(upsertedExisting.name, 'Sel Upserted')
+
+  const upsertedNew = await prisma.user.upsert({
+    where: { email: 'sel2@x.i' },
+    update: { name: 'Nope' },
+    create: { email: 'sel2@x.i', username: 'sel2', name: 'Sel2', passwordHash: 'secret-hash-2' },
+    select: { id: true, username: true },
+  })
+  assert.deepEqual(Object.keys(upsertedNew).sort(), ['id', 'username'])
+  assert.equal('passwordHash' in upsertedNew, false)
+
+  const deleted = await prisma.user.delete({
+    where: { id: upsertedNew.id },
+    select: { id: true, username: true },
+  })
+  assert.deepEqual(Object.keys(deleted).sort(), ['id', 'username'])
+  assert.equal('passwordHash' in deleted, false)
+})

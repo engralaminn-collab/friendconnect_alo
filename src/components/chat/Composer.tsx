@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { EmojiPicker } from "@/components/chat/EmojiPicker"
 import { Paperclip, Send, Smile, X, ImageIcon, Mic } from "lucide-react"
+import { toast } from "sonner"
 import type { MessageData } from "./MessageItem"
 
 // Emoji picker now uses the comprehensive EmojiPicker component (1440 emojis)
@@ -96,20 +97,21 @@ export function Composer({
       for (const file of files) {
         const fd = new FormData()
         fd.append("file", file)
-        const r = await fetch("/api/upload", { method: "POST", body: fd })
+        const r = await fetch("/api/files/upload", { method: "POST", body: fd })
         const body = await r.json()
         if (!r.ok) throw new Error(body?.error || "Upload failed")
+        const att = body.attachment || body.file
         uploaded.push({
-          id: body.attachment.id,
-          url: body.attachment.url,
-          mime: body.attachment.mimeType,
-          filename: body.attachment.filename,
+          id: att.id,
+          url: att.url,
+          mime: att.mimeType,
+          filename: att.filename || att.name,
         })
       }
       setPendingAttachments((prev) => [...prev, ...uploaded.map((u) => u.id)])
       setPendingPreviews((prev) => [...prev, ...uploaded.map((u) => ({ id: u.id, url: u.url, mime: u.mime }))])
     } catch (err: any) {
-      alert(err.message || "Upload failed")
+      toast.error(err.message || "Upload failed")
     } finally {
       setUploading(false)
       if (fileRef.current) fileRef.current.value = ""

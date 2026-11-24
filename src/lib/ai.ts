@@ -257,16 +257,19 @@ export async function aiTranslate(text: string, targetLang: string): Promise<str
   )
 }
 
-export async function aiModerate(text: string): Promise<{ flagged: boolean; reason?: string }> {
+export async function aiModerate(text: string): Promise<{ flagged: boolean; reason?: string; parseError?: boolean }> {
   const result = await aiChat(
     [{ role: "user", content: `Analyze this message for spam, abuse, harassment, or inappropriate content. Reply JSON: {"flagged": true/false, "reason": "short reason or null"}\n\nMessage: "${text}"` }],
     "You are a content moderation AI. Respond only with valid JSON."
   )
   try {
     const parsed = JSON.parse(result.trim().replace(/^```json?\n?/, "").replace(/```$/, ""))
-    return { flagged: !!parsed.flagged, reason: parsed.reason || undefined }
+    if (typeof parsed?.flagged !== "boolean") {
+      return { flagged: false, parseError: true, reason: "Moderation model returned unexpected JSON structure" }
+    }
+    return { flagged: parsed.flagged, reason: parsed.reason || undefined }
   } catch {
-    return { flagged: false }
+    return { flagged: false, parseError: true, reason: "Moderation model returned non-JSON output" }
   }
 }
 

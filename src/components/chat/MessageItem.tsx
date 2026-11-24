@@ -20,9 +20,14 @@ export interface MessageData {
   conversationId: string
   senderId: string
   content: string
+  status?: string
   createdAt: string
   editedAt?: string | null
+  deletedFor?: string | null
   deletedForAll?: boolean
+  fileUrl?: string | null
+  fileName?: string | null
+  mimeType?: string | null
   sender: { id: string; username: string; name: string; avatarUrl?: string | null }
   attachments?: { id: string; filename: string; mimeType: string; url: string; thumbUrl?: string | null }[]
   reactions?: { id: string; emoji: string; userId: string; user: { id: string; username: string } }[]
@@ -66,9 +71,15 @@ export function MessageItem({
     if (r.userId === currentUserId) reactionsByEmoji[r.emoji].mine = true
   }
 
-  const readByOther = (message.reads || []).some((r) => r.userId !== currentUserId)
+  const readByOther = message.status === "SEEN" || (message.reads || []).some((r) => r.userId !== currentUserId)
+  const effectiveAttachments =
+    message.attachments && message.attachments.length > 0
+      ? message.attachments
+      : message.fileUrl
+        ? [{ id: `${message.id}-file`, filename: message.fileName || "attachment", mimeType: message.mimeType || "application/octet-stream", url: message.fileUrl }]
+        : []
 
-  if (message.deletedForAll) {
+  if (message.deletedForAll || message.deletedFor === "everyone") {
     return (
       <div className={`flex ${isMine ? "justify-end" : "justify-start"} px-2`}>
         <div className="text-xs text-muted-foreground italic px-3 py-2 rounded-lg bg-muted/50 max-w-[75%]">
@@ -122,9 +133,9 @@ export function MessageItem({
           }`}
         >
           {/* Attachments */}
-          {message.attachments && message.attachments.length > 0 && (
-            <div className={`mb-2 grid gap-1 ${message.attachments.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
-              {message.attachments.map((a) => (
+          {effectiveAttachments.length > 0 && (
+            <div className={`mb-2 grid gap-1 ${effectiveAttachments.length > 1 ? "grid-cols-2" : "grid-cols-1"}`}>
+              {effectiveAttachments.map((a) => (
                 <Attachment key={a.id} a={a} />
               ))}
             </div>

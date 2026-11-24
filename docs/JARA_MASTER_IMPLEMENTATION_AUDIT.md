@@ -81,3 +81,11 @@
 5. Add Jara-focused tests for parser/policy/presentation resolver.
 6. Produce required docs: license/compatibility, external requirements, deployment/rollback.
 7. Run and report all feasible checks honestly; mark blocked items as blocked.
+
+## 7. Addendum (2026-11-24 — Real Adapters, Messaging & Security Fixes)
+
+- **Multi-provider SMS (`src/lib/jara-sms.ts`, `src/lib/jara-sms-signature.ts`):** Implemented outbound dispatch and signature-verified inbound webhooks (`httpsms` HS256 JWT, `telnyx` Ed25519, `twilio` HMAC-SHA1) with E.164 validation, opt-out handling, country allowlisting, hourly rate limiting, and Super Admin `POST/PATCH /api/jara/sms/send`. Requires live provider credentials in `.env` to send/receive externally.
+- **Server Voice ASR/TTS (`src/lib/jara-voice.ts`, `/api/jara/voice`, `/api/ai/transcribe`, `JaraVoiceCall.tsx`):** Implemented OpenAI-compatible / Faster-Whisper ASR (`JARA_ASR_URL`, `FASTER_WHISPER_URL`) and Piper / OpenAI-compatible TTS (`JARA_TTS_URL`, `PIPER_TTS_URL`) with real `AudioContext` `AnalyserNode` lip-sync in `JaraVoiceCall.tsx`; honestly reports `browser_fallback` when server endpoints are unconfigured.
+- **GPU Avatar Renderer Adapter (`src/lib/jara-renderer.ts`, `/api/jara/renderer/{status,render}`):** Added Super Admin render dispatch and health probes for `JARA_GPU_WORKER_URL` (InfiniteTalk/LivePortrait/MuseTalk HTTP), `COMFYUI_API_URL`, and `RUNNINGHUB_API_KEY`; defaults honestly to `browser_fallback` when unconfigured.
+- **ClamAV Scanner (`src/lib/jara-scanner.ts`):** Implemented `clamd` `INSTREAM` TCP/Unix socket scanning (`JARA_MALWARE_SCAN=clamav` + `CLAMD_HOST`/`CLAMD_SOCKET`), reporting `not_configured` when absent.
+- **Messaging, Upload, Realtime & UI fixes:** Fixed `db-runtime.js` `select`/`include` projection on mutations, `Attachment` persistence + ownership verification on message send, `FileAccess` grants for `User.avatarUrl` + `conversationId` + `attachments[]`, Socket.IO `/socket.io/` path + `POST /internal/emit` REST->socket fanout, conversation `pinned`/`muted` preferences, starred messages (`GET /api/messages/starred`, `POST /api/messages/[id]/star`), `AuthScreen.tsx` optional 2FA, and PWA 192/512 PNG icons.

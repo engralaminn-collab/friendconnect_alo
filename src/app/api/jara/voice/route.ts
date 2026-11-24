@@ -8,9 +8,8 @@ import { assertJaraEnabled } from '@/lib/jara-admin'
 import { rateLimit } from '@/lib/cache'
 import { buildJaraSystemPrompt } from '@/lib/jara-prompt'
 import { JARA_ID, JARA_DEFAULT_CONFIG } from '@/lib/jara'
+import { getVoiceCapability, synthesizeSpeechServer, transcribeAudioServer } from '@/lib/jara-voice'
 
-// Speech recognition and speech synthesis run in the browser; this endpoint is
-// the authenticated text-model bridge and does not claim server-side voice.
 export async function POST(req: NextRequest) {
   const me = await getSessionUser()
   if (!me) return errorJson('Unauthorized', 401)
@@ -24,16 +23,35 @@ export async function POST(req: NextRequest) {
   if (limited === null) return errorJson('Voice request protection is temporarily unavailable', 503)
   if (!limited.allowed) return errorJson('Rate limit exceeded', 429)
 
-  let body: any
-  try { body = await req.json() } catch { return errorJson('Invalid JSON', 400) }
+  const cap = getVoiceCapability()
+  let transcript = ''
+  const contentType = (req.headers.get('content-type') || '').toLowerCase()
 
-  const transcript = typeof body.transcript === 'string' ? body.transcript : typeof body.text === 'string' ? body.text : ''
+  if (contentType.includes('multipart/form-data')) {
+    const form = await req.formData().catch(() => null)
+    if (!form) return errorJson('Invalid multipart form', 400)
+    const audio = form.get('audio')
+    if (audio instanceof File) {
+      if (!audio.type.startsWith('audio/')) return errorJson('Audio file required', 400)
+      if (audio.size > 25 * 1024 * 1024) return errorJson('Audio file too large (max 25MB)', 413)
+      const buf = Buffer.from(await audio.arrayBuffer())
+      const lang = typeof form.get('language') === 'string' ? String(form.get('language')) : undefined
+      const asr = await transcribeAudioServer(buf, audio.name || 'voice.webm', audio.type, lang)
+      if (!asr.ok) return errorJson(asr.error || 'Server ASR unavailable', asr.httpStatus || 503)
+      transcript = asr.text || ''
+    } else {
+      const t = form.get('transcript') || form.get('text')
+      if (typeof t === 'string') transcript = t
+    }
+  } else {
+    let body: any
+    try { body = await req.json() } catch { return errorJson('Invalid JSON', 400) }
+    transcript = typeof body.transcript === 'string' ? body.transcript : typeof body.text === 'string' ? body.text : ''
+  }
+
   if (!transcript.trim()) return errorJson('transcript required', 400)
   if (transcript.length > 4000) return errorJson('Transcript is too long', 413)
 
-  // Browser-provided history is intentionally ignored. Reconstruct context from
-  // this authenticated user's visible persisted Jara DM, just like text chat.
-  // Speech transcripts remain ordinary chat history; this does not enable memory.
   if (!isAIConfigured()) return errorJson('Jara language model is not configured', 503)
 
   const transcriptText = transcript.trim()
@@ -87,7 +105,29 @@ export async function POST(req: NextRequest) {
         },
       })
     } catch {}
-    return json({ reply, transcript: transcriptText })
+
+    let audioBase64: string | undefined
+    let audioMimeType: string | undefined
+    let ttsProvider: string | undefined
+    if (cap.tts.configured) {
+      const tts = await synthesizeSpeechServer(reply, {
+        language: jaraConfig.voiceLanguage,
+        voice: jaraConfig.voiceModel,
+        speed: Number(jaraConfig.speakingSpeed) || 1.0,
+      })
+      if (tts.ok && tts.audioBase64) {
+        audioBase64 = tts.audioBase64
+        audioMimeType = tts.mimeType
+        ttsProvider = tts.provider
+      }
+    }
+
+    return json({
+      reply,
+      transcript: transcriptText,
+      voiceMode: cap.mode,
+      ...(audioBase64 ? { audioBase64, audioMimeType, ttsProvider } : {}),
+    })
   } catch {
     return errorJson('Jara language model is temporarily unavailable', 502)
   }

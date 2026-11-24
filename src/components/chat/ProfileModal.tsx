@@ -42,7 +42,7 @@ export function ProfileModal({
 
   const loadStarred = useCallback(async () => {
     try {
-      const r = await fetch("/api/messages/star")
+      const r = await fetch("/api/messages/starred")
       const body = await r.json()
       setStarred(body.starred || [])
     } catch {
@@ -91,10 +91,10 @@ export function ProfileModal({
     const fd = new FormData()
     fd.append("file", file)
     try {
-      const r = await fetch("/api/upload", { method: "POST", body: fd })
+      const r = await fetch("/api/files/upload", { method: "POST", body: fd })
       const body = await r.json()
       if (!r.ok) throw new Error(body?.error || "Upload failed")
-      setAvatarUrl(body.attachment.url)
+      setAvatarUrl(body.attachment?.url || body.file?.url || "")
     } catch (e: any) {
       toast.error(e.message || "Upload failed")
     }
@@ -174,9 +174,10 @@ export function ProfileModal({
                 {starred.map((s) => (
                   <div key={s.id} className="text-xs p-2 bg-muted rounded-md">
                     <div className="text-muted-foreground">
-                      {s.message.sender.name} · {s.message.conversation.title || "Direct"}
+                      {s.senderName || s.message?.sender?.name || "User"} ·{" "}
+                      {s.createdAt ? new Date(s.createdAt).toLocaleDateString() : ""}
                     </div>
-                    <div className="truncate">{s.message.content}</div>
+                    <div className="truncate">{s.content || s.message?.content || "[attachment]"}</div>
                   </div>
                 ))}
               </div>

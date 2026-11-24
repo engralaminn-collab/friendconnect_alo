@@ -106,19 +106,38 @@ async function revokeMessageGrants(message, store = null) {
  * Called from the message-send paths (REST and socket).
  */
 async function grantMessageFileAccess(message, store = null) {
-  if (!message || !message.fileUrl) return
-  const db = resolveStore(store)
-  await grantFileAccess(message.fileUrl, message.senderId, 'message_sender', { messageId: message.id }, db)
-  if (message.receiverId) {
-    await grantFileAccess(message.fileUrl, message.receiverId, 'message_recipient', { messageId: message.id }, db)
+  if (!message) return
+  const urls = []
+  if (typeof message.fileUrl === 'string' && message.fileUrl) urls.push(message.fileUrl)
+  if (Array.isArray(message.attachments)) {
+    for (const att of message.attachments) {
+      if (att && typeof att.url === 'string' && att.url && !urls.includes(att.url)) urls.push(att.url)
+    }
   }
-  if (message.groupId) {
-    const members = await db.groupMember.findMany({
-      where: { groupId: message.groupId },
-      select: { userId: true },
-    })
-    for (const member of members) {
-      await grantFileAccess(message.fileUrl, member.userId, 'group_member', { messageId: message.id }, db)
+  if (!urls.length) return
+  const db = resolveStore(store)
+  for (const url of urls) {
+    await grantFileAccess(url, message.senderId, 'message_sender', { messageId: message.id }, db)
+    if (message.receiverId) {
+      await grantFileAccess(url, message.receiverId, 'message_recipient', { messageId: message.id }, db)
+    }
+    if (message.groupId) {
+      const members = await db.groupMember.findMany({
+        where: { groupId: message.groupId },
+        select: { userId: true },
+      })
+      for (const member of members) {
+        await grantFileAccess(url, member.userId, 'group_member', { messageId: message.id }, db)
+      }
+    }
+    if (message.conversationId && db.conversationMember && typeof db.conversationMember.findMany === 'function') {
+      const members = await db.conversationMember.findMany({
+        where: { conversationId: message.conversationId },
+        select: { userId: true },
+      })
+      for (const member of members) {
+        await grantFileAccess(url, member.userId, 'message_recipient', { messageId: message.id }, db)
+      }
     }
   }
 }
@@ -172,18 +191,37 @@ async function grantGroupFileAccess(fileUrl, groupId, store = null) {
 }
 
 /** True when the profile behind `url` is public to `userId`. */
-async function profileIsPublicTo(url, userId, db) {
-  const profile = await db.profile.findFirst({ where: { photoUrl: url } })
-  if (!profile) return false
-  if (profile.userId === userId) return true
+async function profileIsPublicTo(url, userId, db, fileOwnerId = null) {
+  let targetUserId = null
+  let visibility = 'PUBLIC'
+
+  const profile = db.profile && typeof db.profile.findFirst === 'function'
+    ? await db.profile.findFirst({ where: { photoUrl: url } })
+    : null
+  if (profile) {
+    targetUserId = profile.userId
+    visibility = profile.profileVisibility || 'PUBLIC'
+  } else if (db.user && typeof db.user.findFirst === 'function') {
+    const user = await db.user.findFirst({
+      where: { avatarUrl: url },
+      select: { id: true, profile: { select: { profileVisibility: true } } },
+    })
+    if (user) {
+      targetUserId = user.id
+      visibility = user.profile?.profileVisibility || 'PUBLIC'
+    }
+  }
+
+  if (!targetUserId) return false
+  if (fileOwnerId && targetUserId !== fileOwnerId) return false
+  if (targetUserId === userId) return true
 
   const blocked = await db.block.findFirst({
-    where: { OR: [{ fromId: userId, toId: profile.userId }, { fromId: profile.userId, toId: userId }] },
+    where: { OR: [{ fromId: userId, toId: targetUserId }, { fromId: targetUserId, toId: userId }] },
     select: { id: true },
   })
   if (blocked) return false
 
-  const visibility = profile.profileVisibility || 'PUBLIC'
   if (visibility === 'PUBLIC') return true
   if (visibility !== 'FRIENDS') return false
 
@@ -191,8 +229,8 @@ async function profileIsPublicTo(url, userId, db) {
     where: {
       status: 'ACCEPTED',
       OR: [
-        { requesterId: userId, receiverId: profile.userId },
-        { requesterId: profile.userId, receiverId: userId },
+        { requesterId: userId, receiverId: targetUserId },
+        { requesterId: targetUserId, receiverId: userId },
       ],
     },
     select: { id: true },
@@ -227,7 +265,7 @@ async function canDownloadFile(userId, file, store = null) {
   }
 
   // 3. public profile media
-  if (await profileIsPublicTo(file.url, userId, db)) {
+  if (await profileIsPublicTo(file.url, userId, db, file.ownerId || null)) {
     // Persist the decision so the next request never repeats the work.
     await grantFileAccess(file.url, userId, 'profile_public', {}, db)
     return true

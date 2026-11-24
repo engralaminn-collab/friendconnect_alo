@@ -55,6 +55,16 @@ export function JaraChat({ config, currentUser, pendingProposal, onProposalAppro
     } catch (e: any) { toast.error(e.message) }
   }
 
+  async function renderMeetingVideo(id: string) {
+    try {
+      const r = await fetch('/api/jara/renderer/render', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ meetingProfileId: id }) })
+      const d = await r.json()
+      if (!r.ok) throw new Error(d.error || 'Render dispatch failed')
+      toast.success(`Avatar video render queued (${d.backend}: ${d.jobId || d.status})`)
+      loadMeetings()
+    } catch (e: any) { toast.error(e.message) }
+  }
+
   async function uploadMeetingMedia(file: File, purpose: 'reference_image'|'reference_video'|'voice_sample', field: string) {
     setUploading(purpose)
     try {
@@ -86,11 +96,15 @@ export function JaraChat({ config, currentUser, pendingProposal, onProposalAppro
         const r = await fetch("/api/messages?userId=jara-ai-system-001")
         const data = await r.json()
         if (r.ok && data.messages?.length) {
-          const mapped: ChatMsg[] = data.messages.slice(-40).map((m: any) => ({
-            role: m.senderId === "jara-ai-system-001" ? "assistant" : "user",
-            content: m.content,
-            meta: m.metadata ? JSON.parse(m.metadata) : null,
-          }))
+          const mapped: ChatMsg[] = data.messages.slice(-40).map((m: any) => {
+            let meta = null
+            if (m.metadata) { try { meta = JSON.parse(m.metadata) } catch {} }
+            return {
+              role: m.senderId === "jara-ai-system-001" ? "assistant" : "user",
+              content: m.content,
+              meta,
+            }
+          })
           setMessages(prev => [prev[0], ...mapped])
           setHistoryMessages(mapped)
         }
@@ -363,7 +377,7 @@ export function JaraChat({ config, currentUser, pendingProposal, onProposalAppro
               <label className="space-y-1 col-span-2"><span className="text-xs">Presentation script</span><textarea className="w-full min-h-[70px] rounded-md border px-2 py-1 bg-background" value={meetingForm.script} onChange={e=>setMeetingForm((f:any)=>({...f,script:e.target.value}))} /></label>
             </div>
             <div className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-md p-2">
-              Renderer status: {statusSummary?.renderer?.label || 'Browser fallback'}. Real GPU avatar video track / lip-sync is not configured in this build. External meeting platforms marked "not configured" cannot be started. Uploaded media is stored with signature/hash checks; malware scanning is <strong>not configured</strong> unless a scanner runtime is integrated.
+              Renderer status: {statusSummary?.renderer?.label || 'Browser fallback'}. {statusSummary?.renderer?.audioDrivenLipSync ? 'External avatar renderer configured — you can dispatch render jobs below.' : 'Real GPU avatar video track / lip-sync is not configured in this environment.'} External meeting platforms marked &quot;not configured&quot; cannot be started. Uploaded media is stored with signature/hash checks and ClamAV INSTREAM scanning when configured.
             </div>
             <div className="border rounded-md p-2">
               <div className="text-xs font-semibold mb-2">Recent meeting profiles</div>
@@ -371,8 +385,11 @@ export function JaraChat({ config, currentUser, pendingProposal, onProposalAppro
                 {meetings.length === 0 && <div className="text-[11px] text-muted-foreground">No meeting profiles yet.</div>}
                 {meetings.slice(0,8).map((m:any)=>(
                   <div key={m.id} className="text-[11px] border rounded p-2 flex items-center justify-between gap-2">
-                    <div className="min-w-0"><div className="font-medium truncate">{m.title}</div><div className="text-muted-foreground truncate">{m.status} • {m.meetingType} • {m.voiceLanguage || 'n/a'} • {m.background || 'n/a'}</div></div>
+                    <div className="min-w-0"><div className="font-medium truncate">{m.title}</div><div className="text-muted-foreground truncate">{m.status} • {m.meetingType} • {m.voiceLanguage || 'n/a'} • {m.background || 'n/a'}{m.rendererStatus ? ` • ${m.rendererStatus}` : ''}</div></div>
                     <div className="flex gap-1 shrink-0">
+                      {statusSummary?.renderer?.audioDrivenLipSync && (
+                        <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={()=>renderMeetingVideo(m.id)}>Render</Button>
+                      )}
                       {m.status!=='cancelled' && m.status!=='completed' && <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={()=>updateMeeting(m.id,'cancel')}>Cancel</Button>}
                       {m.status==='draft' && <Button size="sm" variant="outline" className="h-6 px-2 text-[10px]" onClick={()=>updateMeeting(m.id,'approve')}>Approve</Button>}
                     </div>
