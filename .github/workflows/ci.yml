@@ -177,6 +177,10 @@ jobs:
         # Runs against the production build produced above, on a throwaway
         # database created by playwright.config.ts. Previously the specs existed
         # but were never executed (finding #13).
+        #
+        # The browser trace is uploaded on failure (next step). A Playwright
+        # failure here is usually a UI contract change rather than a flake: read
+        # the trace before retrying.
         run: npm run test:e2e
 
       - name: Upload Playwright report
@@ -184,7 +188,11 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: playwright-report
-          path: playwright-report/
+          # HTML report, plus raw traces/screenshots/video for the failing test
+          # (playwright.config.ts retains them only on failure).
+          path: |
+            playwright-report/
+            test-results/
           retention-days: 7
           if-no-files-found: ignore
 

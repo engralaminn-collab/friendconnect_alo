@@ -165,6 +165,7 @@ export function NewChatModal({
               {filteredFriends.map((f) => (
                 <button
                   key={f.id}
+                  data-testid="new-chat-friend"
                   onClick={() => handleCreateDirect(f.id)}
                   className="w-full flex items-center gap-2 px-2 py-2 hover:bg-muted rounded-md text-left"
                 >

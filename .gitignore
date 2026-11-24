@@ -84,3 +84,8 @@ server.log
 # NOTE: `.env.example` is intentionally NOT ignored — it documents every required
 # variable. The previous `/skills/!.env.example` line was a malformed rule that
 # did nothing (the `!` cannot un-ignore inside a pattern).
+
+# Playwright output (traces, screenshots, video)
+playwright-report/
+test-results/
+playwright/.cache/

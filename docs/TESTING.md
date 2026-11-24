@@ -80,11 +80,15 @@ Stated plainly, because a green suite that overstates itself is worse than a
 small honest one:
 
 - **E2E has not been executed in this development environment.** Playwright's
-  browser CDN (`cdn.playwright.dev`, `playwright.azureedge.net`) is not
-  reachable here and there is no system browser, so `npx playwright install
-  chromium` fails. The spec and config are real and CI runs them
-  (`.github/workflows/ci.yml`), but the claim "E2E passes" can only be made from
-  CI output.
+  browser CDN (`cdn.playwright.dev`, `playwright.azureedge.net`), the
+  Chrome-for-Testing host and puppeteer's download host are all unreachable here
+  and there is no system browser, so `npx playwright install chromium` fails. The
+  spec and config are real and CI runs them (`.github/workflows/ci.yml`), but the
+  claim "E2E passes" can only be made from CI output. Because a browser-level
+  assertion cannot be checked locally, the chat spec asserts against the real UI
+  contract (sidebar `new-chat` dialog, `chat-composer-input`, `chat-send`) and
+  never against deep links — the app has no URL routing, which is what made the
+  first rewrite of that spec unusable.
 - **The MySQL path is not exercised by automated tests.** CI validates the
   generated MySQL schema and migration (`prisma validate`,
   `prisma migrate diff --from-empty`) and the drift check, but no test runs the

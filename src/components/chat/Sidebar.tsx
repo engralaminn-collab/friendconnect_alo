@@ -371,6 +371,7 @@ export function Sidebar({
       {/* Bottom: new chat + signout */}
       <div className="border-t border-border p-2 flex items-center gap-1">
         <Button
+          data-testid="new-chat"
           className="flex-1 bg-emerald-500 hover:bg-emerald-600 text-white"
           onClick={onOpenNewChat}
         >
