@@ -37,679 +37,15 @@ function parseRow(model, row) {
   return out
 }
 
-const MODELS = {
-  user: {
-    table: 'User',
-    dates: ['createdAt', 'updatedAt', 'otpExpiry'],
-    bools: ['emailVerified', 'twoFactorEnabled'],
-    defaults: () => ({
-      id: cuid(),
-      createdAt: now(),
-      updatedAt: now(),
-      emailVerified: false,
-      twoFactorEnabled: false,
-      role: 'user',
-      fileQuotaBytes: 104857600,
-      fileUsedBytes: 0,
-    }),
-    relations: {
-      profile: { kind: 'one', model: 'profile', from: 'id', to: 'userId' },
-      sessions: { kind: 'many', model: 'session', from: 'id', to: 'userId' },
-    },
-  },
-  profile: {
-    table: 'Profile',
-    dates: ['lastSeen', 'updatedAt'],
-    bools: ['readReceipts'],
-    defaults: () => ({
-      id: cuid(),
-      profileVisibility: 'PUBLIC',
-      messagePermission: 'FRIENDS',
-      callPermission: 'FRIENDS',
-      readReceipts: true,
-      verified: 'unverified',
-      lastSeen: now(),
-      updatedAt: now(),
-    }),
-    relations: {
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-    },
-  },
-  session: {
-    table: 'Session',
-    dates: ['expiresAt', 'createdAt', 'lastActiveAt'],
-    defaults: () => ({ id: cuid(), createdAt: now(), lastActiveAt: now() }),
-    relations: {
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-    },
-  },
-  friendship: {
-    table: 'Friendship',
-    dates: ['createdAt', 'updatedAt'],
-    bools: ['isCloseFriend', 'storiesMuted'],
-    uniques: { requesterId_receiverId: ['requesterId', 'receiverId'] },
-    defaults: () => ({
-      id: cuid(),
-      status: 'PENDING',
-      isCloseFriend: false,
-      storiesMuted: false,
-      createdAt: now(),
-      updatedAt: now(),
-    }),
-    relations: {
-      requester: { kind: 'one', model: 'user', from: 'requesterId', to: 'id' },
-      receiver: { kind: 'one', model: 'user', from: 'receiverId', to: 'id' },
-    },
-  },
-  conversation: {
-    table: 'Conversation',
-    dates: ['createdAt', 'updatedAt'],
-    defaults: () => ({ id: cuid(), createdAt: now(), updatedAt: now(), type: 'direct' }),
-    relations: {
-      members: { kind: 'many', model: 'conversationMember', from: 'id', to: 'conversationId' },
-    },
-  },
-  conversationMember: {
-    table: 'ConversationMember',
-    dates: ['joinedAt', 'lastReadAt'],
-    bools: ['muted', 'pinned'],
-    uniques: { conversationId_userId: ['conversationId', 'userId'] },
-    defaults: () => ({ id: cuid(), joinedAt: now(), role: 'member', muted: false, pinned: false }),
-    relations: {
-      conversation: { kind: 'one', model: 'conversation', from: 'conversationId', to: 'id' },
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-    },
-  },
-  poll: {
-    table: 'Poll',
-    dates: ['createdAt', 'expiresAt'],
-    defaults: () => ({ id: cuid(), createdAt: now() }),
-    relations: {
-      votes: { kind: 'many', model: 'pollVote', from: 'id', to: 'pollId' },
-    },
-  },
-  pollVote: {
-    table: 'PollVote',
-    dates: ['createdAt'],
-    uniques: { pollId_userId: ['pollId', 'userId'] },
-    defaults: () => ({ id: cuid(), createdAt: now() }),
-    relations: {
-      poll: { kind: 'one', model: 'poll', from: 'pollId', to: 'id' },
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-    },
-  },
-  report: {
-    table: 'Report',
-    dates: ['createdAt'],
-    defaults: () => ({ id: cuid(), createdAt: now(), status: 'open' }),
-    relations: {
-      from: { kind: 'one', model: 'user', from: 'fromId', to: 'id' },
-      to: { kind: 'one', model: 'user', from: 'toId', to: 'id' },
-    },
-  },
-  starredMessage: {
-    table: 'StarredMessage',
-    dates: ['createdAt'],
-    uniques: { userId_messageId: ['userId', 'messageId'] },
-    defaults: () => ({ id: cuid(), createdAt: now() }),
-    relations: {
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-      message: { kind: 'one', model: 'message', from: 'messageId', to: 'id' },
-    },
-  },
-  verificationToken: {
-    table: 'VerificationToken',
-    dates: ['expires'],
-    defaults: () => ({ id: cuid() }),
-    relations: {},
-  },
-  block: {
-    table: 'Block',
-    dates: ['createdAt'],
-    uniques: { fromId_toId: ['fromId', 'toId'] },
-    defaults: () => ({ id: cuid(), createdAt: now() }),
-    relations: {
-      from: { kind: 'one', model: 'user', from: 'fromId', to: 'id' },
-      to: { kind: 'one', model: 'user', from: 'toId', to: 'id' },
-    },
-  },
-  friendRequest: {
-    table: 'FriendRequest',
-    dates: ['createdAt', 'updatedAt'],
-    uniques: { fromId_toId: ['fromId', 'toId'] },
-    defaults: () => ({ id: cuid(), status: 'pending', createdAt: now(), updatedAt: now() }),
-    relations: {
-      from: { kind: 'one', model: 'user', from: 'fromId', to: 'id' },
-      to: { kind: 'one', model: 'user', from: 'toId', to: 'id' },
-    },
-  },
-  post: {
-    table: 'Post',
-    dates: ['createdAt', 'updatedAt'],
-    defaults: () => ({ id: cuid(), visibility: 'friends', createdAt: now(), updatedAt: now() }),
-    relations: {
-      author: { kind: 'one', model: 'user', from: 'authorId', to: 'id' },
-      comments: { kind: 'many', model: 'postComment', from: 'id', to: 'postId' },
-      reactions: { kind: 'many', model: 'postReaction', from: 'id', to: 'postId' },
-    },
-  },
-  postComment: {
-    table: 'PostComment',
-    dates: ['createdAt'],
-    defaults: () => ({ id: cuid(), createdAt: now() }),
-    relations: {
-      post: { kind: 'one', model: 'post', from: 'postId', to: 'id' },
-      author: { kind: 'one', model: 'user', from: 'authorId', to: 'id' },
-    },
-  },
-  postReaction: {
-    table: 'PostReaction',
-    dates: ['createdAt'],
-    uniques: { postId_userId_emoji: ['postId', 'userId', 'emoji'] },
-    defaults: () => ({ id: cuid(), createdAt: now() }),
-    relations: {
-      post: { kind: 'one', model: 'post', from: 'postId', to: 'id' },
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-    },
-  },
-  message: {
-    table: 'Message',
-    dates: ['createdAt', 'seenAt', 'expiresAt', 'editedAt', 'scheduledFor'],
-    bools: ['edited'],
-    defaults: () => ({
-      id: cuid(),
-      type: 'text',
-      status: 'SENT',
-      createdAt: now(),
-      deletedFor: '',
-      edited: false,
-    }),
-    relations: {
-      sender: { kind: 'one', model: 'user', from: 'senderId', to: 'id' },
-      receiver: { kind: 'one', model: 'user', from: 'receiverId', to: 'id' },
-      group: { kind: 'one', model: 'group', from: 'groupId', to: 'id' },
-      reactions: { kind: 'many', model: 'messageReaction', from: 'id', to: 'messageId' },
-      starredBy: { kind: 'many', model: 'messageStar', from: 'id', to: 'messageId' },
-      reminders: { kind: 'many', model: 'messageReminder', from: 'id', to: 'messageId' },
-    },
-  },
-  group: {
-    table: 'Group',
-    dates: ['createdAt', 'updatedAt'],
-    defaults: () => ({ id: cuid(), createdAt: now(), updatedAt: now() }),
-    relations: {
-      owner: { kind: 'one', model: 'user', from: 'createdBy', to: 'id' },
-      members: { kind: 'many', model: 'groupMember', from: 'id', to: 'groupId' },
-      messages: { kind: 'many', model: 'message', from: 'id', to: 'groupId' },
-    },
-  },
-  groupMember: {
-    table: 'GroupMember',
-    dates: ['joinedAt'],
-    uniques: { groupId_userId: ['groupId', 'userId'] },
-    defaults: () => ({ id: cuid(), role: 'MEMBER', joinedAt: now() }),
-    relations: {
-      group: { kind: 'one', model: 'group', from: 'groupId', to: 'id' },
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-    },
-  },
-  call: {
-    table: 'Call',
-    dates: ['startedAt', 'endedAt', 'answeredAt'],
-    defaults: () => ({ id: cuid(), type: 'audio', status: 'ringing', startedAt: now() }),
-    relations: {
-      caller: { kind: 'one', model: 'user', from: 'callerId', to: 'id' },
-      receiver: { kind: 'one', model: 'user', from: 'receiverId', to: 'id' },
-    },
-  },
-  notification: {
-    table: 'Notification',
-    dates: ['createdAt'],
-    bools: ['read'],
-    defaults: () => ({ id: cuid(), read: false, createdAt: now() }),
-    relations: {
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-    },
-  },
-  file: {
-    table: 'File',
-    dates: ['createdAt'],
-    defaults: () => ({ id: cuid(), createdAt: now() }),
-    relations: {
-      owner: { kind: 'one', model: 'user', from: 'ownerId', to: 'id' },
-    },
-  },
-  messageReaction: {
-    table: 'MessageReaction',
-    dates: ['createdAt'],
-    uniques: { messageId_userId_emoji: ['messageId', 'userId', 'emoji'] },
-    defaults: () => ({ id: cuid(), createdAt: now() }),
-    relations: {
-      message: { kind: 'one', model: 'message', from: 'messageId', to: 'id' },
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-    },
-  },
-  chatPreference: {
-    table: 'ChatPreference',
-    dates: ['updatedAt'],
-    bools: ['pinned', 'muted', 'archived'],
-    uniques: { userId_peerId: ['userId', 'peerId'] },
-    defaults: () => ({
-      id: cuid(),
-      pinned: false,
-      muted: false,
-      disappearing: 'OFF',
-      archived: false,
-      updatedAt: now(),
-    }),
-    relations: {
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-    },
-  },
-  story: {
-    table: 'Story',
-    dates: ['createdAt', 'expiresAt'],
-    bools: ['isHighlight'],
-    defaults: () => ({ id: cuid(), type: 'text', createdAt: now(), isHighlight: false }),
-    relations: {
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-      views: { kind: 'many', model: 'storyView', from: 'id', to: 'storyId' },
-      replies: { kind: 'many', model: 'storyReply', from: 'id', to: 'storyId' },
-      reactions: { kind: 'many', model: 'storyReaction', from: 'id', to: 'storyId' },
-    },
-  },
-  storyView: {
-    table: 'StoryView',
-    dates: ['viewedAt'],
-    uniques: { storyId_userId: ['storyId', 'userId'] },
-    defaults: () => ({ id: cuid(), viewedAt: now() }),
-    relations: {
-      story: { kind: 'one', model: 'story', from: 'storyId', to: 'id' },
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-    },
-  },
-  messageStar: {
-    table: 'MessageStar',
-    dates: ['createdAt'],
-    uniques: { messageId_userId: ['messageId', 'userId'] },
-    defaults: () => ({ id: cuid(), createdAt: now() }),
-    relations: {
-      message: { kind: 'one', model: 'message', from: 'messageId', to: 'id' },
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-    },
-  },
-  storyReply: {
-    table: 'StoryReply',
-    dates: ['createdAt'],
-    defaults: () => ({ id: cuid(), createdAt: now() }),
-    relations: {
-      story: { kind: 'one', model: 'story', from: 'storyId', to: 'id' },
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-    },
-  },
-  messageDraft: {
-    table: 'MessageDraft',
-    dates: ['updatedAt'],
-    bools: ['isGroup'],
-    uniques: { userId_peerId_isGroup: ['userId', 'peerId', 'isGroup'] },
-    defaults: () => ({ id: cuid(), isGroup: false, updatedAt: now() }),
-    relations: {
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-    },
-  },
-  storyReaction: {
-    table: 'StoryReaction',
-    dates: ['createdAt'],
-    uniques: { storyId_userId: ['storyId', 'userId'] },
-    defaults: () => ({ id: cuid(), createdAt: now() }),
-    relations: {
-      story: { kind: 'one', model: 'story', from: 'storyId', to: 'id' },
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-    },
-  },
-  broadcastList: {
-    table: 'BroadcastList',
-    dates: ['createdAt', 'updatedAt'],
-    defaults: () => ({ id: cuid(), createdAt: now(), updatedAt: now() }),
-    relations: {
-      owner: { kind: 'one', model: 'user', from: 'ownerId', to: 'id' },
-      members: { kind: 'many', model: 'broadcastMember', from: 'id', to: 'broadcastId' },
-    },
-  },
-  broadcastMember: {
-    table: 'BroadcastMember',
-    dates: ['createdAt'],
-    uniques: { broadcastId_recipientId: ['broadcastId', 'recipientId'] },
-    defaults: () => ({ id: cuid(), createdAt: now() }),
-    relations: {
-      broadcast: { kind: 'one', model: 'broadcastList', from: 'broadcastId', to: 'id' },
-      recipient: { kind: 'one', model: 'user', from: 'recipientId', to: 'id' },
-    },
-  },
-  messageReminder: {
-    table: 'MessageReminder',
-    dates: ['remindAt', 'createdAt'],
-    bools: ['notified'],
-    defaults: () => ({ id: cuid(), createdAt: now(), notified: false }),
-    relations: {
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-      message: { kind: 'one', model: 'message', from: 'messageId', to: 'id' },
-    },
-  },
-  auditLog: {
-    table: 'AuditLog',
-    dates: ['createdAt'],
-    defaults: () => ({ id: cuid(), createdAt: now() }),
-    relations: {
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-    },
-  },
-  pushSubscription: {
-    table: 'PushSubscription',
-    dates: ['createdAt', 'updatedAt'],
-    defaults: () => ({ id: cuid(), createdAt: now(), updatedAt: now() }),
-    relations: {
-      user: { kind: 'one', model: 'user', from: 'userId', to: 'id' },
-    },
-  },
-  jaraConfig: {
-    table: 'JaraConfig',
-    dates: ['createdAt', 'updatedAt'],
-    bools: ['memoryEnabled', 'isLive'],
-    defaults: () => ({
-      id: cuid(),
-      version: 1,
-      face: 'friendly',
-      avatar: 'default',
-      background: 'gradient-emerald',
-      theme: 'light',
-      voiceModel: 'default',
-      voiceLanguage: 'bn',
-      speakingSpeed: 1.0,
-      pitch: 1.0,
-      personality: 'friendly',
-      responseLength: 'medium',
-      communicationStyle: 'conversational',
-      llmProvider: 'ollama',
-      llmModel: 'llama3.2',
-      sttModel: 'whisper',
-      ttsModel: 'default',
-      memoryEnabled: true,
-      isLive: false,
-      createdAt: now(),
-      updatedAt: now(),
-    }),
-  },
-  jaraProposal: {
-    table: 'JaraProposal',
-    dates: ['createdAt', 'expiresAt', 'approvedAt', 'appliedAt'],
-    defaults: () => ({
-      id: cuid(),
-      status: 'pending',
-      createdAt: now(),
-      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-    }),
-    relations: {
-      auditLogs: { kind: 'many', model: 'jaraAuditLog', from: 'id', to: 'proposalId' },
-    },
-  },
-  jaraAuditLog: {
-    table: 'JaraAuditLog',
-    dates: ['createdAt'],
-    defaults: () => ({ id: cuid(), createdAt: now() }),
-    relations: {
-      proposal: { kind: 'one', model: 'jaraProposal', from: 'proposalId', to: 'id' },
-    },
-  },
-  jaraMemory: {
-    table: 'JaraMemory',
-    dates: ['createdAt', 'updatedAt'],
-    uniques: { userId_key: ['userId', 'key'] },
-    defaults: () => ({ id: cuid(), createdAt: now(), updatedAt: now() }),
-  },
-  jaraGroupConsent: {
-    table: 'JaraGroupConsent',
-    dates: ['createdAt', 'updatedAt', 'consentedAt'],
-    bools: ['enabled', 'listenEnabled'],
-    uniques: { groupId: ['groupId'] },
-    defaults: () => ({ id: cuid(), enabled: false, listenEnabled: false, createdAt: now(), updatedAt: now() }),
-  },
-}
+// Model/table/relation metadata is generated from prisma/schema.prisma.
+// See scripts/generate-schema-metadata.mjs — do not hand-edit.
+const { MODELS, EXPECTED_COLUMNS } = require('./schema-metadata.cjs')
+// SQLite DDL is generated from prisma/schema.prisma.
+// See scripts/generate-sqlite-ddl.mjs — do not hand-edit.
+const { INIT_SQL } = require('./sqlite-ddl.cjs')
+// Additive upgrades for databases created by older releases.
+const { runAdditiveMigrations, findMissingColumns } = require('./db-migrations.cjs')
 
-const INIT_SQL = `
-CREATE TABLE IF NOT EXISTS "User" (
-  id TEXT PRIMARY KEY, email TEXT UNIQUE NOT NULL, phone TEXT UNIQUE, username TEXT UNIQUE NOT NULL,
-  passwordHash TEXT NOT NULL, name TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
-  emailVerified INTEGER NOT NULL DEFAULT 0, twoFactorSecret TEXT, twoFactorEnabled INTEGER NOT NULL DEFAULT 0,
-  twoFactorBackup TEXT, role TEXT NOT NULL DEFAULT 'user', fileQuotaBytes INTEGER NOT NULL DEFAULT 104857600,
-  fileUsedBytes INTEGER NOT NULL DEFAULT 0, otpCode TEXT, otpExpiry TEXT, bio TEXT, status TEXT DEFAULT '', avatarUrl TEXT, lastSeenAt TEXT
-);
-CREATE TABLE IF NOT EXISTS "Profile" (
-  id TEXT PRIMARY KEY, userId TEXT UNIQUE NOT NULL, photoUrl TEXT, bio TEXT, phone TEXT, location TEXT,
-  birthday TEXT, education TEXT, work TEXT, profileVisibility TEXT NOT NULL DEFAULT 'PUBLIC',
-  messagePermission TEXT NOT NULL DEFAULT 'FRIENDS', callPermission TEXT NOT NULL DEFAULT 'FRIENDS',
-  readReceipts INTEGER NOT NULL DEFAULT 1, photoFilter TEXT, verified TEXT NOT NULL DEFAULT 'unverified',
-  lastSeen TEXT NOT NULL, updatedAt TEXT NOT NULL,
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "Session" (
-  id TEXT PRIMARY KEY, userId TEXT NOT NULL, token TEXT UNIQUE NOT NULL, expiresAt TEXT NOT NULL,
-  createdAt TEXT NOT NULL, userAgent TEXT, deviceName TEXT, ipAddress TEXT, lastActiveAt TEXT NOT NULL,
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "Friendship" (
-  id TEXT PRIMARY KEY, requesterId TEXT NOT NULL, receiverId TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'PENDING',
-  blockerId TEXT, isCloseFriend INTEGER NOT NULL DEFAULT 0, storiesMuted INTEGER NOT NULL DEFAULT 0,
-  createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
-  UNIQUE (requesterId, receiverId),
-  FOREIGN KEY (requesterId) REFERENCES "User"(id) ON DELETE CASCADE,
-  FOREIGN KEY (receiverId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "Group" (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, description TEXT, photoUrl TEXT, createdBy TEXT NOT NULL,
-  createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
-  FOREIGN KEY (createdBy) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "GroupMember" (
-  id TEXT PRIMARY KEY, groupId TEXT NOT NULL, userId TEXT NOT NULL, role TEXT NOT NULL DEFAULT 'MEMBER',
-  joinedAt TEXT NOT NULL, UNIQUE (groupId, userId),
-  FOREIGN KEY (groupId) REFERENCES "Group"(id) ON DELETE CASCADE,
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "Message" (
-  id TEXT PRIMARY KEY, senderId TEXT NOT NULL, receiverId TEXT, groupId TEXT, content TEXT NOT NULL,
-  type TEXT NOT NULL DEFAULT 'text', fileUrl TEXT, fileName TEXT, fileSize INTEGER, mimeType TEXT,
-  status TEXT NOT NULL DEFAULT 'SENT', createdAt TEXT NOT NULL, seenAt TEXT, deletedFor TEXT NOT NULL DEFAULT '',
-  forwardedFrom TEXT, expiresAt TEXT, editedAt TEXT, edited INTEGER NOT NULL DEFAULT 0, pinnedBy TEXT,
-  replyToId TEXT, scheduledFor TEXT,
-  FOREIGN KEY (senderId) REFERENCES "User"(id) ON DELETE CASCADE,
-  FOREIGN KEY (receiverId) REFERENCES "User"(id) ON DELETE CASCADE,
-  FOREIGN KEY (groupId) REFERENCES "Group"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "Call" (
-  id TEXT PRIMARY KEY, callerId TEXT NOT NULL, receiverId TEXT, groupId TEXT, type TEXT NOT NULL DEFAULT 'audio',
-  status TEXT NOT NULL DEFAULT 'ringing', startedAt TEXT NOT NULL, endedAt TEXT, duration INTEGER,
-  answeredAt TEXT, failureReason TEXT, connectionType TEXT,
-  FOREIGN KEY (callerId) REFERENCES "User"(id) ON DELETE CASCADE,
-  FOREIGN KEY (receiverId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "Notification" (
-  id TEXT PRIMARY KEY, userId TEXT NOT NULL, type TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL,
-  data TEXT, read INTEGER NOT NULL DEFAULT 0, createdAt TEXT NOT NULL,
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "File" (
-  id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, name TEXT NOT NULL, mimeType TEXT NOT NULL, size INTEGER NOT NULL,
-  url TEXT NOT NULL, createdAt TEXT NOT NULL,
-  FOREIGN KEY (ownerId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "MessageReaction" (
-  id TEXT PRIMARY KEY, messageId TEXT NOT NULL, userId TEXT NOT NULL, emoji TEXT NOT NULL, createdAt TEXT NOT NULL,
-  UNIQUE (messageId, userId, emoji),
-  FOREIGN KEY (messageId) REFERENCES "Message"(id) ON DELETE CASCADE,
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "ChatPreference" (
-  id TEXT PRIMARY KEY, userId TEXT NOT NULL, peerId TEXT NOT NULL, pinned INTEGER NOT NULL DEFAULT 0,
-  muted INTEGER NOT NULL DEFAULT 0, disappearing TEXT NOT NULL DEFAULT 'OFF', wallpaper TEXT,
-  archived INTEGER NOT NULL DEFAULT 0, folder TEXT, updatedAt TEXT NOT NULL,
-  UNIQUE (userId, peerId),
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "Story" (
-  id TEXT PRIMARY KEY, userId TEXT NOT NULL, type TEXT NOT NULL DEFAULT 'text', content TEXT NOT NULL,
-  bg TEXT, createdAt TEXT NOT NULL, expiresAt TEXT NOT NULL, isHighlight INTEGER NOT NULL DEFAULT 0,
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "StoryView" (
-  id TEXT PRIMARY KEY, storyId TEXT NOT NULL, userId TEXT NOT NULL, viewedAt TEXT NOT NULL,
-  UNIQUE (storyId, userId),
-  FOREIGN KEY (storyId) REFERENCES "Story"(id) ON DELETE CASCADE,
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "MessageStar" (
-  id TEXT PRIMARY KEY, messageId TEXT NOT NULL, userId TEXT NOT NULL, createdAt TEXT NOT NULL,
-  UNIQUE (messageId, userId),
-  FOREIGN KEY (messageId) REFERENCES "Message"(id) ON DELETE CASCADE,
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "StoryReply" (
-  id TEXT PRIMARY KEY, storyId TEXT NOT NULL, userId TEXT NOT NULL, content TEXT NOT NULL, createdAt TEXT NOT NULL,
-  FOREIGN KEY (storyId) REFERENCES "Story"(id) ON DELETE CASCADE,
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "MessageDraft" (
-  id TEXT PRIMARY KEY, userId TEXT NOT NULL, peerId TEXT NOT NULL, isGroup INTEGER NOT NULL DEFAULT 0,
-  content TEXT NOT NULL, updatedAt TEXT NOT NULL, UNIQUE (userId, peerId, isGroup),
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "StoryReaction" (
-  id TEXT PRIMARY KEY, storyId TEXT NOT NULL, userId TEXT NOT NULL, emoji TEXT NOT NULL, createdAt TEXT NOT NULL,
-  UNIQUE (storyId, userId),
-  FOREIGN KEY (storyId) REFERENCES "Story"(id) ON DELETE CASCADE,
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "BroadcastList" (
-  id TEXT PRIMARY KEY, ownerId TEXT NOT NULL, name TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
-  FOREIGN KEY (ownerId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "BroadcastMember" (
-  id TEXT PRIMARY KEY, broadcastId TEXT NOT NULL, recipientId TEXT NOT NULL, createdAt TEXT NOT NULL,
-  UNIQUE (broadcastId, recipientId),
-  FOREIGN KEY (broadcastId) REFERENCES "BroadcastList"(id) ON DELETE CASCADE,
-  FOREIGN KEY (recipientId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "MessageReminder" (
-  id TEXT PRIMARY KEY, userId TEXT NOT NULL, messageId TEXT NOT NULL, remindAt TEXT NOT NULL,
-  createdAt TEXT NOT NULL, notified INTEGER NOT NULL DEFAULT 0,
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE,
-  FOREIGN KEY (messageId) REFERENCES "Message"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "AuditLog" (
-  id TEXT PRIMARY KEY, userId TEXT, action TEXT NOT NULL, resource TEXT, ip TEXT, userAgent TEXT,
-  meta TEXT, createdAt TEXT NOT NULL,
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE SET NULL
-);
-CREATE TABLE IF NOT EXISTS "PushSubscription" (
-  id TEXT PRIMARY KEY, userId TEXT NOT NULL, endpoint TEXT UNIQUE NOT NULL, p256dh TEXT NOT NULL,
-  auth TEXT NOT NULL, userAgent TEXT, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "JaraConfig" (
-  id TEXT PRIMARY KEY, version INTEGER UNIQUE NOT NULL, face TEXT NOT NULL DEFAULT 'friendly', avatar TEXT NOT NULL DEFAULT 'default', avatarUrl TEXT, background TEXT NOT NULL DEFAULT 'gradient-emerald', backgroundUrl TEXT, theme TEXT NOT NULL DEFAULT 'light', colors TEXT, animation TEXT, clothing TEXT, voiceModel TEXT NOT NULL DEFAULT 'default', voiceLanguage TEXT NOT NULL DEFAULT 'bn', voiceAccent TEXT, speakingSpeed REAL NOT NULL DEFAULT 1.0, pitch REAL NOT NULL DEFAULT 1.0, personality TEXT NOT NULL DEFAULT 'friendly', responseLength TEXT NOT NULL DEFAULT 'medium', communicationStyle TEXT NOT NULL DEFAULT 'conversational', llmProvider TEXT NOT NULL DEFAULT 'ollama', llmModel TEXT NOT NULL DEFAULT 'llama3.2', sttModel TEXT NOT NULL DEFAULT 'whisper', ttsModel TEXT NOT NULL DEFAULT 'default', memoryEnabled INTEGER NOT NULL DEFAULT 1, isLive INTEGER NOT NULL DEFAULT 0, createdBy TEXT, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS "JaraProposal" (
-  id TEXT PRIMARY KEY, version INTEGER NOT NULL, previousVersion INTEGER, configJson TEXT NOT NULL, configHash TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending', createdBy TEXT NOT NULL, createdAt TEXT NOT NULL, expiresAt TEXT NOT NULL, approvedBy TEXT, approvedAt TEXT, appliedAt TEXT, changeSummary TEXT,
-  FOREIGN KEY (createdBy) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "JaraAuditLog" (
-  id TEXT PRIMARY KEY, proposalId TEXT, version INTEGER, action TEXT NOT NULL, actorId TEXT, actorRole TEXT, detail TEXT, ip TEXT, userAgent TEXT, createdAt TEXT NOT NULL,
-  FOREIGN KEY (proposalId) REFERENCES "JaraProposal"(id) ON DELETE SET NULL
-);
-CREATE TABLE IF NOT EXISTS "JaraMemory" (
-  id TEXT PRIMARY KEY, userId TEXT NOT NULL, key TEXT NOT NULL, value TEXT NOT NULL, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
-  UNIQUE (userId, key),
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "JaraGroupConsent" (
-  id TEXT PRIMARY KEY, groupId TEXT UNIQUE NOT NULL, enabled INTEGER NOT NULL DEFAULT 0, listenEnabled INTEGER NOT NULL DEFAULT 0, consentedBy TEXT, consentedAt TEXT, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
-  FOREIGN KEY (groupId) REFERENCES "Group"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "Conversation" (
-  id TEXT PRIMARY KEY, type TEXT NOT NULL DEFAULT 'direct', title TEXT, avatarUrl TEXT,
-  description TEXT, ownerId TEXT, createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS "ConversationMember" (
-  id TEXT PRIMARY KEY, conversationId TEXT NOT NULL, userId TEXT NOT NULL,
-  role TEXT NOT NULL DEFAULT 'member', joinedAt TEXT NOT NULL, lastReadAt TEXT,
-  muted INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0,
-  UNIQUE (conversationId, userId),
-  FOREIGN KEY (conversationId) REFERENCES "Conversation"(id) ON DELETE CASCADE,
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "Poll" (
-  id TEXT PRIMARY KEY, messageId TEXT NOT NULL, question TEXT NOT NULL,
-  options TEXT NOT NULL, expiresAt TEXT, createdAt TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS "PollVote" (
-  id TEXT PRIMARY KEY, pollId TEXT NOT NULL, userId TEXT NOT NULL,
-  optionIdx INTEGER NOT NULL, createdAt TEXT NOT NULL,
-  UNIQUE (pollId, userId),
-  FOREIGN KEY (pollId) REFERENCES "Poll"(id) ON DELETE CASCADE,
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "Report" (
-  id TEXT PRIMARY KEY, fromId TEXT NOT NULL, toId TEXT NOT NULL, reason TEXT NOT NULL,
-  detail TEXT, status TEXT NOT NULL DEFAULT 'open', createdAt TEXT NOT NULL,
-  FOREIGN KEY (fromId) REFERENCES "User"(id) ON DELETE CASCADE,
-  FOREIGN KEY (toId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "StarredMessage" (
-  id TEXT PRIMARY KEY, userId TEXT NOT NULL, messageId TEXT NOT NULL, createdAt TEXT NOT NULL,
-  UNIQUE (userId, messageId),
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE,
-  FOREIGN KEY (messageId) REFERENCES "Message"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "VerificationToken" (
-  id TEXT PRIMARY KEY, identifier TEXT NOT NULL, token TEXT NOT NULL UNIQUE, expires TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS "Block" (
-  id TEXT PRIMARY KEY, fromId TEXT NOT NULL, toId TEXT NOT NULL, createdAt TEXT NOT NULL,
-  UNIQUE (fromId, toId),
-  FOREIGN KEY (fromId) REFERENCES "User"(id) ON DELETE CASCADE,
-  FOREIGN KEY (toId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "FriendRequest" (
-  id TEXT PRIMARY KEY, fromId TEXT NOT NULL, toId TEXT NOT NULL, message TEXT, status TEXT NOT NULL DEFAULT 'pending',
-  createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
-  UNIQUE (fromId, toId),
-  FOREIGN KEY (fromId) REFERENCES "User"(id) ON DELETE CASCADE,
-  FOREIGN KEY (toId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "Post" (
-  id TEXT PRIMARY KEY, authorId TEXT NOT NULL, content TEXT NOT NULL, mediaUrl TEXT, visibility TEXT NOT NULL DEFAULT 'friends',
-  createdAt TEXT NOT NULL, updatedAt TEXT NOT NULL,
-  FOREIGN KEY (authorId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "PostComment" (
-  id TEXT PRIMARY KEY, postId TEXT NOT NULL, authorId TEXT NOT NULL, content TEXT NOT NULL, createdAt TEXT NOT NULL,
-  FOREIGN KEY (postId) REFERENCES "Post"(id) ON DELETE CASCADE,
-  FOREIGN KEY (authorId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE TABLE IF NOT EXISTS "PostReaction" (
-  id TEXT PRIMARY KEY, postId TEXT NOT NULL, userId TEXT NOT NULL, emoji TEXT NOT NULL, createdAt TEXT NOT NULL,
-  UNIQUE (postId, userId, emoji),
-  FOREIGN KEY (postId) REFERENCES "Post"(id) ON DELETE CASCADE,
-  FOREIGN KEY (userId) REFERENCES "User"(id) ON DELETE CASCADE
-);
-CREATE INDEX IF NOT EXISTS Call_callerId_idx ON "Call"(callerId);
-CREATE INDEX IF NOT EXISTS Call_receiverId_idx ON "Call"(receiverId);
-CREATE INDEX IF NOT EXISTS Story_userId_idx ON "Story"(userId);
-CREATE INDEX IF NOT EXISTS AuditLog_userId_idx ON "AuditLog"(userId);
-CREATE INDEX IF NOT EXISTS AuditLog_action_idx ON "AuditLog"(action);
-CREATE INDEX IF NOT EXISTS JaraProposal_status_idx ON "JaraProposal"(status);
-CREATE INDEX IF NOT EXISTS JaraAuditLog_action_idx ON "JaraAuditLog"(action);
-`
 
 /**
  * Project root used to resolve relative paths (DATABASE_URL=file:./db/…, UPLOAD_DIR=./upload).
@@ -740,44 +76,70 @@ function resolveDbPath() {
 
 let sqlite
 let jaraSeeded = false
-function ensureJaraSeed(db) {
+let seedPromise = Promise.resolve()
+/**
+ * Seed the built-in Jara identity.
+ *
+ * Runs through the delegate layer rather than raw SQL so column defaults come
+ * from the schema. Writing raw INSERTs here is what let the seed drift: it was
+ * supplying `Profile.updatedAt` (not a column) and omitting `JaraConfig`
+ * governance columns that are NOT NULL.
+ */
+async function ensureJaraSeed() {
   if (jaraSeeded) return
   jaraSeeded = true
   try {
-    // Ensure User extra columns exist (for existing DBs created before this patch)
-    try { db.exec('ALTER TABLE "User" ADD COLUMN bio TEXT'); } catch {}
-    try { db.exec('ALTER TABLE "User" ADD COLUMN status TEXT DEFAULT \'\''); } catch {}
-    try { db.exec('ALTER TABLE "User" ADD COLUMN avatarUrl TEXT'); } catch {}
-    try { db.exec('ALTER TABLE "User" ADD COLUMN lastSeenAt TEXT'); } catch {}
-    // Add missing Message columns needed by Jara (metadata) and general app
-    try { db.exec('ALTER TABLE "Message" ADD COLUMN metadata TEXT'); } catch {}
-    try { db.exec('ALTER TABLE "Message" ADD COLUMN conversationId TEXT'); } catch {}
+    const prisma = sqlitePrisma
     const jaraId = 'jara-ai-system-001'
-    const exists = db.prepare('SELECT id FROM "User" WHERE id = ?').get(jaraId)
-    if (!exists) {
-      const nowStr = new Date().toISOString()
-      db.prepare(`INSERT INTO "User" (id, email, username, passwordHash, name, createdAt, updatedAt, emailVerified, role, bio, status, avatarUrl, lastSeenAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        jaraId, 'jara@friendconnect.local', 'jara', '__JARA_SYSTEM__', 'Jara', nowStr, nowStr, 1, 'jara', 'I am Jara — your friendly AI assistant. 🤖 I can chat in English, Bangla, and Banglish!', 'AI Assistant • Online', '/jara-avatar.svg', nowStr
-      )
-      db.prepare(`INSERT INTO "Profile" (id, userId, bio, profileVisibility, messagePermission, callPermission, readReceipts, verified, lastSeen, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-        'profile-jara-001', jaraId, 'AI Assistant — I am Jara, here to help you!', 'PUBLIC', 'EVERYONE', 'EVERYONE', 1, 'verified', nowStr, nowStr
-      )
+
+    const existing = await prisma.user.findUnique({ where: { id: jaraId } })
+    if (!existing) {
+      await prisma.user.create({
+        data: {
+          id: jaraId,
+          email: 'jara@friendconnect.local',
+          username: 'jara',
+          passwordHash: '__JARA_SYSTEM__', // never a valid bcrypt hash: no password login
+          name: 'Jara',
+          role: 'jara',
+          bio: 'I am Jara — your friendly AI assistant. 🤖 I can chat in English, Bangla, and Banglish!',
+          status: 'AI Assistant • Online',
+          avatarUrl: '/jara-avatar.svg',
+          emailVerified: true,
+        },
+      })
+      await prisma.profile.create({
+        data: {
+          id: 'profile-jara-001',
+          userId: jaraId,
+          bio: 'AI Assistant — I am Jara, here to help you!',
+          profileVisibility: 'PUBLIC',
+          messagePermission: 'EVERYONE',
+          callPermission: 'EVERYONE',
+          verified: 'verified',
+        },
+      })
     }
-    const liveExists = db.prepare('SELECT id FROM "JaraConfig" WHERE isLive = 1').get()
-    if (!liveExists) {
-      const hasAny = db.prepare('SELECT id FROM "JaraConfig" LIMIT 1').get()
-      if (!hasAny) {
-        const nowStr = new Date().toISOString()
-        const cfgId = 'cfg-' + Date.now().toString(36) + Math.random().toString(36).slice(2,8)
-        db.prepare(`INSERT INTO "JaraConfig" (id, version, face, avatar, background, theme, colors, voiceModel, voiceLanguage, speakingSpeed, pitch, personality, responseLength, communicationStyle, llmProvider, llmModel, sttModel, ttsModel, memoryEnabled, isLive, createdAt, updatedAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-          cfgId, 1, 'friendly', 'default', 'gradient-emerald', 'light', JSON.stringify({ primary: '#10b981', accent: '#0ea5e9' }), 'default', 'bn', 1.0, 1.0, 'friendly', 'medium', 'conversational', 'ollama', 'llama3.2', 'whisper', 'default', 1, 1, nowStr, nowStr
-        )
+
+    const live = await prisma.jaraConfig.findFirst({ where: { isLive: true } })
+    if (!live) {
+      const any = await prisma.jaraConfig.findFirst({})
+      if (!any) {
+        await prisma.jaraConfig.create({
+          data: {
+            version: 1,
+            colors: JSON.stringify({ primary: '#10b981', accent: '#0ea5e9' }),
+            isLive: true,
+            createdBy: jaraId,
+          },
+        })
       } else {
-        db.prepare('UPDATE "JaraConfig" SET isLive = 1 WHERE version = (SELECT MIN(version) FROM "JaraConfig")').run()
+        await prisma.jaraConfig.updateMany({ where: {}, data: { isLive: false } })
+        await prisma.jaraConfig.update({ where: { id: any.id }, data: { isLive: true } })
       }
     }
   } catch (e) {
-    console.warn('[jara] seed failed', e.message)
+    console.warn('[jara] seed failed:', e.message)
   }
 }
 
@@ -789,41 +151,25 @@ function getSqlite() {
   sqlite.pragma('foreign_keys = ON')
   sqlite.pragma('journal_mode = WAL')
   sqlite.exec(INIT_SQL)
-  ensureColumns(sqlite)
-  // seed Jara synchronously where possible (async seed will run on first delegate call too)
-  try { ensureJaraSeed(sqlite) } catch (e) { console.warn('[jara] seed warn', e.message) }
-  return sqlite
-}
+  runAdditiveMigrations(sqlite, { log: (m) => console.log(m) })
 
-function tableCols(db, table) {
-  return db.prepare(`PRAGMA table_info("${table}")`).all().map((c) => c.name)
-}
-
-function addCol(db, table, def) {
-  const [name] = def.split(' ')
-  const cols = tableCols(db, table)
-  if (!cols.includes(name)) {
-    db.exec(`ALTER TABLE "${table}" ADD COLUMN ${def}`)
+  // Fail loudly rather than serving requests against a half-migrated database.
+  // A missing column turns into a 500 on whichever route touches it, which is
+  // much harder to diagnose than refusing to boot.
+  const missing = findMissingColumns(sqlite, EXPECTED_COLUMNS)
+  if (missing.length) {
+    throw new Error(
+      `[db] SQLite schema is incomplete after migrations (${missing.length} missing). ` +
+        `Missing: ${missing.slice(0, 12).join(', ')}${missing.length > 12 ? ', …' : ''}. ` +
+        `Restore from backup or recreate the database with a fresh DATABASE_URL.`,
+    )
   }
-}
-
-function ensureColumns(db) {
-  addCol(db, 'User', 'phone TEXT')
-  // The Session table was created without `sessionToken`, but both the schema
-  // and session.ts write it. Additive and nullable, so existing rows survive.
-  addCol(db, 'Session', 'sessionToken TEXT')
-  addCol(db, 'Call', 'answeredAt TEXT')
-  addCol(db, 'Call', 'failureReason TEXT')
-  addCol(db, 'Call', 'connectionType TEXT')
-  addCol(db, 'Friendship', 'isCloseFriend INTEGER NOT NULL DEFAULT 0')
-  addCol(db, 'Friendship', 'storiesMuted INTEGER NOT NULL DEFAULT 0')
-  addCol(db, 'Message', 'edited INTEGER NOT NULL DEFAULT 0')
-  addCol(db, 'Message', 'editedAt TEXT')
-  addCol(db, 'Message', 'pinnedBy TEXT')
-  addCol(db, 'Message', 'replyToId TEXT')
-  addCol(db, 'Message', 'scheduledFor TEXT')
-  addCol(db, 'ChatPreference', 'folder TEXT')
-  addCol(db, 'Story', 'isHighlight INTEGER NOT NULL DEFAULT 0')
+  // Seed asynchronously; the promise is stored so tests can await it and so a
+  // failure is reported once instead of on every request.
+  seedPromise = ensureJaraSeed().catch((e) => {
+    console.warn('[jara] seed failed:', e.message)
+  })
+  return sqlite
 }
 
 function encodeVal(model, key, v) {
@@ -1028,6 +374,228 @@ function orderSql(orderBy) {
   return bits.length ? ` ORDER BY ${bits.join(', ')}` : ''
 }
 
+/**
+ * Build `SET` fragments for an update payload, matching Prisma's operators.
+ * `@updatedAt` columns are bumped only when the caller did not set them.
+ */
+function buildUpdateSets(model, data) {
+  const patch = { ...(data || {}) }
+  if (model.dates?.includes('updatedAt') && patch.updatedAt === undefined) {
+    patch.updatedAt = now()
+  }
+  const sets = []
+  const params = []
+  for (const [k, v] of Object.entries(patch)) {
+    if (v && typeof v === 'object' && !(v instanceof Date) && !Array.isArray(v)) {
+      if ('increment' in v) {
+        sets.push(`"${k}" = "${k}" + ?`)
+        params.push(Number(v.increment))
+        continue
+      }
+      if ('decrement' in v) {
+        sets.push(`"${k}" = "${k}" - ?`)
+        params.push(Number(v.decrement))
+        continue
+      }
+      if ('multiply' in v) {
+        sets.push(`"${k}" = "${k}" * ?`)
+        params.push(Number(v.multiply))
+        continue
+      }
+      if ('set' in v) {
+        sets.push(`"${k}" = ?`)
+        params.push(encodeVal(model, k, v.set))
+        continue
+      }
+    }
+    sets.push(`"${k}" = ?`)
+    params.push(encodeVal(model, k, v))
+  }
+  if (!sets.length) throw new Error('No update values supplied')
+  return { sets, params }
+}
+
+/**
+ * Transaction support.
+ *
+ * `better-sqlite3` is synchronous, so the async callback Prisma accepts cannot
+ * be wrapped in a plain BEGIN/COMMIT: awaiting inside an open write transaction
+ * lets other connections interleave and deadlocks the single writer.
+ *
+ * Instead the callback runs against a *staging* client that records every
+ * write. On success the recorded operations are replayed inside one synchronous
+ * `db.transaction(...)`, which is atomic. On throw the staging area is discarded
+ * and nothing is committed. Reads inside the callback see the staged state for
+ * records the callback itself created, which is what the call sites need
+ * (create-then-read-the-id).
+ */
+function createStagingClient(operations) {
+  const client = {}
+
+  function record(method, args) {
+    // Flattened so replay reads `operation.data`, `operation.where`, ...
+    operations.push({ method, ...args })
+  }
+
+  for (const key of Object.keys(MODELS)) {
+    const live = delegates[key]
+    client[key] = {
+      async create(args = {}) {
+        // Materialise the row now (so the callback can reference its id) and
+        // replay the same insert inside the real transaction.
+        const data = { ...(MODELS[key].defaults ? MODELS[key].defaults() : {}), ...(args.data || {}) }
+        const snapshot = await live.findUnique({ where: { id: data.id } })
+        if (snapshot) throw new Error(`Duplicate id ${data.id}`)
+        record('create', { key, data, include: args.include })
+        const shape = structuredCloneSafe(data)
+        for (const [field, value] of Object.entries(MODELS[key].relations || {})) {
+          if (value.kind === 'many' && shape[field] === undefined) shape[field] = []
+        }
+        return shape
+      },
+      async createMany(args = {}) {
+        const rows = Array.isArray(args.data) ? args.data : [args.data]
+        const prepared = rows.map((row) => ({
+          ...(MODELS[key].defaults ? MODELS[key].defaults() : {}),
+          ...row,
+        }))
+        record('createMany', { key, prepared })
+        return { count: prepared.length }
+      },
+      async update(args = {}) {
+        record('update', { key, where: args.where, data: args.data })
+        return live.findFirst({ where: args.where })
+      },
+      async updateMany(args = {}) {
+        record('updateMany', { key, where: args.where, data: args.data })
+        return { count: 0 }
+      },
+      async delete(args = {}) {
+        record('delete', { key, where: args.where })
+        return null
+      },
+      async deleteMany(args = {}) {
+        record('deleteMany', { key, where: args.where })
+        return { count: 0 }
+      },
+      async upsert(args = {}) {
+        record('upsert', { key, where: args.where, create: args.create, update: args.update })
+        return { ...(MODELS[key].defaults ? MODELS[key].defaults() : {}), ...(args.create || {}) }
+      },
+      async findUnique(args = {}) {
+        return live.findUnique(args)
+      },
+      async findFirst(args = {}) {
+        return live.findFirst(args)
+      },
+      async findMany(args = {}) {
+        return live.findMany(args)
+      },
+      async count(args = {}) {
+        return live.count(args)
+      },
+    }
+  }
+
+  client.$queryRaw = taggedRaw
+  return client
+}
+
+/** Structured clone that tolerates Date instances. */
+function structuredCloneSafe(value) {
+  const out = {}
+  for (const [k, v] of Object.entries(value)) {
+    out[k] = v instanceof Date ? new Date(v.getTime()) : v
+  }
+  return out
+}
+
+async function runTransaction(fn, options) {
+  // Array form: `$transaction([p1, p2])` — already-executed promises, so the
+  // work has happened; just resolve them in order.
+  if (Array.isArray(fn)) {
+    const results = []
+    for (const op of fn) results.push(await op)
+    return results
+  }
+  if (typeof fn !== 'function') {
+    throw new Error('$transaction expects a callback or an array of operations')
+  }
+
+  const operations = []
+  const staging = createStagingClient(operations)
+  const result = await fn(staging)
+
+  const db = getSqlite()
+  const replay = db.transaction(() => {
+    for (const operation of operations) {
+      const model = MODELS[operation.key]
+      const live = delegates[operation.key]
+      if (operation.method === 'create') {
+        insertRow(db, model, operation.data)
+      } else if (operation.method === 'createMany') {
+        for (const row of operation.prepared) insertRow(db, model, row)
+      } else if (operation.method === 'update') {
+        const w = cond(model, operation.where)
+        const { sets, params } = buildUpdateSets(model, operation.data)
+        db.prepare(`UPDATE "${model.table}" SET ${sets.join(', ')} WHERE ${w.sql}`).run(...params, ...w.params)
+      } else if (operation.method === 'updateMany') {
+        const w = cond(model, operation.where)
+        const { sets, params } = buildUpdateSets(model, operation.data)
+        db.prepare(`UPDATE "${model.table}" SET ${sets.join(', ')} WHERE ${w.sql}`).run(...params, ...w.params)
+      } else if (operation.method === 'delete') {
+        const w = cond(model, operation.where)
+        db.prepare(`DELETE FROM "${model.table}" WHERE ${w.sql}`).run(...w.params)
+      } else if (operation.method === 'deleteMany') {
+        const w = cond(model, operation.where)
+        db.prepare(`DELETE FROM "${model.table}" WHERE ${w.sql}`).run(...w.params)
+      } else if (operation.method === 'upsert') {
+        const existing = db
+          .prepare(`SELECT id FROM "${model.table}" WHERE ${cond(model, operation.where).sql} LIMIT 1`)
+          .get(...cond(model, operation.where).params)
+        if (existing) {
+          const w = cond(model, operation.where)
+          const { sets, params } = buildUpdateSets(model, operation.update)
+          db.prepare(`UPDATE "${model.table}" SET ${sets.join(', ')} WHERE ${w.sql}`).run(...params, ...w.params)
+        } else {
+          const data = { ...(model.defaults ? model.defaults() : {}), ...(operation.create || {}) }
+          insertRow(db, model, data)
+        }
+      }
+      void live
+    }
+  })
+  replay()
+
+  // Return the durable rows so callers get real ids/timestamps.
+  if (result && typeof result === 'object') {
+    const resolved = {}
+    for (const [name, value] of Object.entries(result)) {
+      if (value && typeof value === 'object' && typeof value.id === 'string') {
+        const modelName = Object.keys(MODELS).find((key) => {
+          const row = db.prepare(`SELECT * FROM "${MODELS[key].table}" WHERE id = ?`).get(value.id)
+          return Boolean(row)
+        })
+        resolved[name] = modelName
+          ? await delegates[modelName].findUnique({ where: { id: value.id } })
+          : value
+      } else {
+        resolved[name] = value
+      }
+    }
+    return resolved
+  }
+  return result
+}
+
+function insertRow(db, model, data) {
+  const keys = Object.keys(data).filter((k) => data[k] !== undefined)
+  if (!keys.length) throw new Error(`Refusing to insert an empty row into ${model.table}`)
+  const vals = keys.map((k) => encodeVal(model, k, data[k]))
+  const sql = `INSERT INTO "${model.table}" (${keys.map((k) => `"${k}"`).join(',')}) VALUES (${keys.map(() => '?').join(',')})`
+  db.prepare(sql).run(...vals)
+}
+
 function delegate(name) {
   const model = MODELS[name]
   if (!model) throw new Error(`Unknown model ${name}`)
@@ -1096,53 +664,112 @@ function delegate(name) {
       const row = db.prepare(`SELECT COUNT(*) AS c FROM "${model.table}" WHERE ${w.sql}`).get(...w.params)
       return Number(row?.c || 0)
     },
+    /**
+     * Prisma's `groupBy`. Used by poll results
+     * (`groupBy({ by: ['optionIdx'], _count: true })`).
+     */
+    async groupBy(args = {}) {
+      const db = getSqlite()
+      const by = Array.isArray(args.by) ? args.by : [args.by].filter(Boolean)
+      if (!by.length) throw new Error('groupBy requires `by`')
+      const w = cond(model, args.where)
+      const select = by.map((col) => `"${col}"`).join(', ')
+      const aggregates = []
+      if (args._count) {
+        if (args._count === true) aggregates.push('COUNT(*) AS "_count"')
+        else
+          for (const col of Object.keys(args._count)) {
+            aggregates.push(`COUNT("${col}") AS "_count_${col}"`)
+          }
+      }
+      for (const agg of ['_sum', '_avg', '_min', '_max']) {
+        if (!args[agg]) continue
+        for (const col of Object.keys(args[agg])) {
+          const fn = agg.slice(1).toUpperCase()
+          aggregates.push(`${fn}("${col}") AS "${agg}_${col}"`)
+        }
+      }
+      const sql =
+        `SELECT ${select}${aggregates.length ? ', ' + aggregates.join(', ') : ''} ` +
+        `FROM "${model.table}" WHERE ${w.sql} GROUP BY ${select}${orderSql(args.orderBy)}`
+      const rows = db.prepare(sql).all(...w.params)
+
+      return rows.map((row) => {
+        const out = {}
+        for (const col of by) out[col] = row[col]
+        if (args._count) {
+          if (args._count === true) out._count = Number(row._count || 0)
+          else {
+            out._count = {}
+            for (const col of Object.keys(args._count)) {
+              out._count[col] = Number(row[`_count_${col}`] || 0)
+            }
+          }
+        }
+        for (const agg of ['_sum', '_avg', '_min', '_max']) {
+          if (!args[agg]) continue
+          out[agg] = {}
+          for (const col of Object.keys(args[agg])) out[agg][col] = row[`${agg}_${col}`]
+        }
+        return out
+      })
+    },
+
+    /** Prisma's `aggregate` — the scalar summary without grouping. */
+    async aggregate(args = {}) {
+      const db = getSqlite()
+      const w = cond(model, args.where)
+      const parts = []
+      if (args._count) parts.push('COUNT(*) AS "_count"')
+      for (const agg of ['_sum', '_avg', '_min', '_max']) {
+        if (!args[agg]) continue
+        for (const col of Object.keys(args[agg])) {
+          parts.push(`${agg.slice(1).toUpperCase()}("${col}") AS "${agg}_${col}"`)
+        }
+      }
+      if (!parts.length) parts.push('COUNT(*) AS "_count"')
+      const row = db.prepare(`SELECT ${parts.join(', ')} FROM "${model.table}" WHERE ${w.sql}`).get(...w.params) || {}
+      const out = {}
+      if (args._count) out._count = Number(row._count || 0)
+      for (const agg of ['_sum', '_avg', '_min', '_max']) {
+        if (!args[agg]) continue
+        out[agg] = {}
+        for (const col of Object.keys(args[agg])) out[agg][col] = row[`${agg}_${col}`]
+      }
+      return out
+    },
+
+    /** Prisma's `findMany` + `distinct`. */
+    async findFirstOrThrow(args = {}) {
+      const found = await this.findFirst(args)
+      if (!found) throw new Error(`No ${model.model} found`)
+      return found
+    },
+    async findUniqueOrThrow(args = {}) {
+      const found = await this.findUnique(args)
+      if (!found) throw new Error(`No ${model.model} found`)
+      return found
+    },
     async create(args = {}) {
       const db = getSqlite()
       const data = { ...(model.defaults ? model.defaults() : {}), ...(args.data || {}) }
       if (model.dates?.includes('updatedAt')) data.updatedAt = now()
-      const keys = Object.keys(data).filter((k) => data[k] !== undefined)
-      const vals = keys.map((k) => encodeVal(model, k, data[k]))
-      const sql = `INSERT INTO "${model.table}" (${keys.map((k) => `"${k}"`).join(',')}) VALUES (${keys.map(() => '?').join(',')})`
-      db.prepare(sql).run(...vals)
+      insertRow(db, model, data)
       return this.findUnique({ where: { id: data.id }, include: args.include })
     },
     async update(args = {}) {
       const db = getSqlite()
       const existing = await this.findFirst({ where: args.where })
       if (!existing) throw new Error('Record to update not found')
-      const patch = { ...(args.data || {}) }
-      if (model.dates?.includes('updatedAt')) patch.updatedAt = now()
-      const sets = []
-      const params = []
-      for (const [k, v] of Object.entries(patch)) {
-        if (v && typeof v === 'object' && !(v instanceof Date) && 'increment' in v) {
-          sets.push(`"${k}" = "${k}" + ?`)
-          params.push(Number(v.increment))
-        } else {
-          sets.push(`"${k}" = ?`)
-          params.push(encodeVal(model, k, v))
-        }
-      }
       const w = cond(model, args.where)
+      const { sets, params } = buildUpdateSets(model, args.data)
       db.prepare(`UPDATE "${model.table}" SET ${sets.join(', ')} WHERE ${w.sql}`).run(...params, ...w.params)
       return this.findFirst({ where: args.where, include: args.include })
     },
     async updateMany(args = {}) {
       const db = getSqlite()
-      const patch = { ...(args.data || {}) }
-      if (model.dates?.includes('updatedAt')) patch.updatedAt = now()
-      const sets = []
-      const params = []
-      for (const [k, v] of Object.entries(patch)) {
-        if (v && typeof v === 'object' && !(v instanceof Date) && 'increment' in v) {
-          sets.push(`"${k}" = "${k}" + ?`)
-          params.push(Number(v.increment))
-        } else {
-          sets.push(`"${k}" = ?`)
-          params.push(encodeVal(model, k, v))
-        }
-      }
       const w = cond(model, args.where)
+      const { sets, params } = buildUpdateSets(model, args.data)
       const res = db.prepare(`UPDATE "${model.table}" SET ${sets.join(', ')} WHERE ${w.sql}`).run(...params, ...w.params)
       return { count: res.changes }
     },
@@ -1180,48 +807,21 @@ function taggedRaw(strings, ...values) {
   }
 }
 
+/**
+ * Delegate registry, derived from the generated model metadata so a model added
+ * to the schema can never again be missing from the runtime (which is how
+ * Attachment, FileAccess and the eleven Jara tables ended up as `undefined`).
+ */
+const delegates = {}
+for (const key of Object.keys(MODELS)) {
+  delegates[key] = delegate(key)
+}
+
 const sqlitePrisma = {
-  user: delegate('user'),
-  profile: delegate('profile'),
-  session: delegate('session'),
-  friendship: delegate('friendship'),
-  block: delegate('block'),
-  conversation: delegate('conversation'),
-  conversationMember: delegate('conversationMember'),
-  poll: delegate('poll'),
-  pollVote: delegate('pollVote'),
-  report: delegate('report'),
-  starredMessage: delegate('starredMessage'),
-  verificationToken: delegate('verificationToken'),
-  friendRequest: delegate('friendRequest'),
-  post: delegate('post'),
-  postComment: delegate('postComment'),
-  postReaction: delegate('postReaction'),
-  message: delegate('message'),
-  group: delegate('group'),
-  groupMember: delegate('groupMember'),
-  call: delegate('call'),
-  notification: delegate('notification'),
-  file: delegate('file'),
-  messageReaction: delegate('messageReaction'),
-  chatPreference: delegate('chatPreference'),
-  story: delegate('story'),
-  storyView: delegate('storyView'),
-  messageStar: delegate('messageStar'),
-  storyReply: delegate('storyReply'),
-  messageDraft: delegate('messageDraft'),
-  storyReaction: delegate('storyReaction'),
-  broadcastList: delegate('broadcastList'),
-  broadcastMember: delegate('broadcastMember'),
-  messageReminder: delegate('messageReminder'),
-  auditLog: delegate('auditLog'),
-  pushSubscription: delegate('pushSubscription'),
-  jaraConfig: delegate('jaraConfig'),
-  jaraProposal: delegate('jaraProposal'),
-  jaraAuditLog: delegate('jaraAuditLog'),
-  jaraMemory: delegate('jaraMemory'),
-  jaraGroupConsent: delegate('jaraGroupConsent'),
+  ...delegates,
   $queryRaw: taggedRaw,
+  $executeRaw: taggedRaw,
+  $transaction: runTransaction,
   $disconnect: async () => {},
 }
 

@@ -1,17 +1,17 @@
-// PrismaClient requires `prisma generate` which needs network to download engines.
-// In this repo the live database path is SQLite via src/lib/db-runtime.js (better-sqlite3).
-// Fall back to that runtime when the generated client is not present, so `next build`
-// can collect routes without downloading Prisma engines.
-let _db: any
-try {
-  // Try real Prisma client first (MySQL production)
-  const { PrismaClient } = require('@prisma/client')
-  const globalForPrisma = globalThis as unknown as { prisma: any }
-  _db = globalForPrisma.prisma ?? new PrismaClient({ log: ['query'] as any })
-  if (process.env.NODE_ENV !== 'production') (globalThis as any).prisma = _db
-} catch {
-  // Fallback: SQLite runtime (no engine download needed); require is intentional
-  const runtime = require('./db-runtime.js')
-  _db = runtime.prisma
-}
-export const db = _db as any
+/**
+ * The single database handle used by the application.
+ *
+ * Backend selection (and the refusal to silently degrade) lives in
+ * `src/lib/db-backend.ts`. Read that file before changing anything here.
+ *
+ * The handle is lazy: it connects on the first query, not at import time, so
+ * `next build` does not need a reachable database.
+ *
+ * It is intentionally typed loosely: the runtime delegates are generated from
+ * the Prisma schema, so the authoritative shape is `prisma/schema.prisma`.
+ */
+import { createLazyClient, getBackendInfo } from './db-backend'
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export const db = createLazyClient() as any
+export { getBackendInfo }

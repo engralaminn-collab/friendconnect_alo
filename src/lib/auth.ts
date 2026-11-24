@@ -39,7 +39,12 @@ async function ensureSessionRow(userId: string, userAgent: string): Promise<stri
   await db.session.create({
     data: {
       userId,
+      // `Session.token` and `Session.sessionToken` both exist: the first is what
+      // the realtime server authenticates against, the second is the legacy
+      // column NextAuth-era rows were keyed by. Both are NOT NULL in the
+      // canonical schema, so they must be written together.
       token,
+      sessionToken: token,
       expiresAt,
       userAgent,
       lastActiveAt: new Date(),
