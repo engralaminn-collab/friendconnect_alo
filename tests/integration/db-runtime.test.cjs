@@ -351,3 +351,66 @@ test('$transaction replays nested creates with the ids the callback already saw'
   // The committed member must be the row the callback was handed, not a new one.
   assert.equal(members[0].id, staged.members[0].id)
 })
+
+test('relation filters in `where` are applied, not silently dropped', async (t) => {
+  // Regression, and the most serious bug this suite has found: `cond()` had no
+  // relation support. `members: { some: { userId } }` reached `pushFilter()`, which
+  // recognised no operator and emitted nothing, so the condition left the WHERE
+  // clause and the query matched every row. Anything written as a relation filter
+  // was therefore a no-op — including membership checks, which is how an unrelated
+  // user could read a two-person conversation through `GET /api/messages`.
+  const { prisma } = await freshRuntime(t, 'relations')
+
+  for (const id of ['rel-alice', 'rel-bob', 'rel-carol']) {
+    await prisma.user.create({ data: { id, email: `${id}@x.invalid`, username: id, name: id, passwordHash: 'h' } })
+  }
+  const conversation = await prisma.conversation.create({
+    data: { type: 'direct', members: { create: [{ userId: 'rel-alice' }, { userId: 'rel-bob' }] } },
+  })
+  // An unrelated direct conversation, so "matches everything" is distinguishable
+  // from "matches the one we asked for".
+  const other = await prisma.conversation.create({
+    data: { type: 'direct', members: { create: [{ userId: 'rel-bob' }, { userId: 'rel-carol' }] } },
+  })
+
+  const forCarol = await prisma.conversation.findMany({
+    where: { members: { some: { userId: 'rel-carol' } } },
+    select: { id: true },
+  })
+  assert.deepEqual(forCarol.map((row) => row.id), [other.id], 'some() must filter by the member id')
+
+  const forNobody = await prisma.conversation.findMany({
+    where: { members: { some: { userId: 'rel-nobody' } } },
+    select: { id: true },
+  })
+  assert.deepEqual(forNobody, [], 'a non-member matches nothing')
+
+  const bothMembers = await prisma.conversation.findMany({
+    where: {
+      type: 'direct',
+      AND: [{ members: { some: { userId: 'rel-alice' } } }, { members: { some: { userId: 'rel-carol' } } }],
+    },
+    select: { id: true },
+  })
+  assert.deepEqual(bothMembers, [], 'two `some` filters must both hold, not be ORed')
+
+  const shared = await prisma.conversation.findMany({
+    where: { AND: [{ members: { some: { userId: 'rel-alice' } } }, { members: { some: { userId: 'rel-bob' } } }] },
+    select: { id: true },
+  })
+  assert.deepEqual(shared.map((row) => row.id), [conversation.id], 'the shared conversation matches both')
+
+  const none = await prisma.conversation.findMany({
+    where: { members: { none: { userId: 'rel-alice' } } },
+    select: { id: true },
+  })
+  assert.deepEqual(none.map((row) => row.id), [other.id], 'none() excludes conversations containing the user')
+
+  // An unknown field must throw: a silently ignored condition is a security bug
+  // that looks like a passing test.
+  await assert.rejects(
+    () => prisma.conversation.findMany({ where: { notAColumn: 'x' } }),
+    /Unknown filter field/,
+    'an unknown filter field must be rejected',
+  )
+})

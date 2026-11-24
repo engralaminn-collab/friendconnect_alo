@@ -459,6 +459,35 @@ test('security: block enforcement, reactions, reset flow, 2FA and file access', 
   assert.equal(disableWithBackup.status, 200, JSON.stringify(disableWithBackup.body))
   assert.equal(disableWithBackup.body.enabled, false)
 
+  // ===== a conversation thread is readable by its two members only =====
+  // Regression: conversation messages carry `conversationId` and (for a direct
+  // chat) `receiverId`; `GET /api/messages?userId=` filtered on sender/receiver
+  // only, so those messages were invisible even to the participants. Including the
+  // shared direct conversation fixed that — but the first version of the fix did
+  // not check the *reader's* membership, which let a third party read another
+  // pair's thread through it.
+  await a('/api/friends', { method: 'POST', body: JSON.stringify({ action: 'unblock', targetId: bobId }) }).catch(() => {})
+  const conversationResponse = await a('/api/conversations', {
+    method: 'POST',
+    body: JSON.stringify({ type: 'direct', memberIds: [bobId] }),
+  })
+  const conversationId = conversationResponse.body?.conversation?.id
+  assert.ok(conversationId, `conversation must be created: ${JSON.stringify(conversationResponse.body)}`)
+
+  const conversationMessage = await a(`/api/conversations/${conversationId}/messages`, {
+    method: 'POST',
+    body: JSON.stringify({ content: 'only for bob' }),
+  })
+  assert.equal(conversationMessage.status, 201, JSON.stringify(conversationMessage.body))
+
+  const bobThread = await b(`/api/messages?userId=${aliceId}`)
+  const bobContents = (bobThread.body?.messages || []).map((m) => m.content)
+  assert.ok(bobContents.includes('only for bob'), `the peer must read the thread: ${JSON.stringify(bobContents)}`)
+
+  const carolThread = await c(`/api/messages?userId=${aliceId}`)
+  const carolContents = (carolThread.body?.messages || []).map((m) => m.content)
+  assert.ok(!carolContents.includes('only for bob'), `a third party must not read the thread: ${JSON.stringify(carolContents)}`)
+
   // ===== no response leaks database or stack internals =====
   const leaked = await a('/api/messages', {
     method: 'POST',
