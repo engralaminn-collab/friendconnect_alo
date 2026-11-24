@@ -208,7 +208,7 @@ jobs:
 
       - name: Upload Playwright report
         if: failure()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           # HTML report, plus raw traces/screenshots/video for the failing test
@@ -222,7 +222,7 @@ jobs:
 
       - name: Upload production build artifact
         if: success()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: friendconnect-next-standalone-${{ github.sha }}
           path: .next/standalone/

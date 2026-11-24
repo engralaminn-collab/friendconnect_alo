@@ -79,8 +79,20 @@ test.describe('one-to-one messaging', () => {
       bobPage.getByTestId('chat-messages').getByText('hello from the e2e suite'),
     ).toBeVisible({ timeout: 30_000 })
 
-    // The REST contract agrees.
-    const thread = await bobPage.request.get(`/api/messages?userId=${alice.id}`)
+    // The REST contract agrees. The composer writes through the conversation
+    // endpoint, which stores messages with a `conversationId` and no
+    // `receiverId`; the legacy `/api/messages?userId=` thread endpoint only sees
+    // receiver-addressed messages and therefore cannot read this thread. Read it
+    // the same way the UI does.
+    const listed = await bobPage.request.get('/api/conversations')
+    expect(listed.status()).toBe(200)
+    const conversations = (await listed.json()).conversations as Array<{
+      id: string
+      otherUser?: { id: string } | null
+    }>
+    const direct = conversations.find((c) => c.otherUser?.id === alice.id)
+    expect(direct, 'bob must see the direct conversation with alice').toBeTruthy()
+    const thread = await bobPage.request.get(`/api/conversations/${direct!.id}/messages`)
     expect(thread.status()).toBe(200)
     const messages = (await thread.json()).messages as Array<{ content: string; senderId: string }>
     const delivered = messages.find((message) => message.content === 'hello from the e2e suite')
