@@ -81,25 +81,17 @@ async function canInteract(prisma, fromId, toId, permission) {
   })
   if (blocked) return false
 
-  // A BLOCKED friendship row can outlive the Block row if data was written by an
-  // older release; treat it as a block too.
-  const blockedFriendship = await prisma.friendship.findFirst({
+  // One lookup covers both states. A BLOCKED friendship row can outlive the
+  // Block row if data was written by an older release, so it must be treated as
+  // a block; a single query keeps the two answers consistent.
+  const relationship = await prisma.friendship.findFirst({
     where: {
-      status: 'BLOCKED',
       OR: [{ requesterId: fromId, receiverId: toId }, { requesterId: toId, receiverId: fromId }],
     },
-    select: { id: true },
+    select: { id: true, status: true },
   })
-  if (blockedFriendship) return false
-
-  const friendship = await prisma.friendship.findFirst({
-    where: {
-      status: 'ACCEPTED',
-      OR: [{ requesterId: fromId, receiverId: toId }, { requesterId: toId, receiverId: fromId }],
-    },
-    select: { id: true },
-  })
-  if (friendship) return true
+  if (relationship?.status === 'BLOCKED') return false
+  if (relationship?.status === 'ACCEPTED') return true
 
   // Not friends: the recipient's profile decides. Defaults are FRIENDS, so a
   // missing profile is a refusal, not an allow.

@@ -106,6 +106,44 @@ export async function grantMessageFileAccess(
   }
 }
 
+/**
+ * Grant story-viewing access for a media URL to accepted, unblocked, unmuted
+ * friends at the moment the story is created.
+ *
+ * Stories put their media URL in `Story.content` (or `mediaUrl`). Rather than
+ * resolving that union on every download, the audience is materialised as
+ * grants when the story is posted, and revoked when it expires or is deleted.
+ */
+export async function grantStoryFileAccess(
+  story: { userId: string; content?: string | null; mediaUrl?: string | null; expiresAt?: Date | null },
+  store: Store = db,
+): Promise<void> {
+  const url = story.mediaUrl || (typeof story.content === 'string' && story.content.startsWith('/api/files/') ? story.content : null)
+  if (!url) return
+
+  // The author always sees their own story.
+  await grantFileAccess(url, story.userId, 'story_viewer', { expiresAt: story.expiresAt ?? null }, store)
+
+  const friendships = await store.friendship.findMany({
+    where: {
+      status: 'ACCEPTED',
+      storiesMuted: false,
+      OR: [{ requesterId: story.userId }, { receiverId: story.userId }],
+    },
+    select: { requesterId: true, receiverId: true },
+  })
+
+  for (const friendship of friendships) {
+    const friendId = friendship.requesterId === story.userId ? friendship.receiverId : friendship.requesterId
+    const blocked = await store.block.findFirst({
+      where: { OR: [{ fromId: friendId, toId: story.userId }, { fromId: story.userId, toId: friendId }] },
+      select: { id: true },
+    })
+    if (blocked) continue
+    await grantFileAccess(url, friendId, 'story_viewer', { expiresAt: story.expiresAt ?? null }, store)
+  }
+}
+
 /** Grant access to current members of a group (used when a file is attached). */
 export async function grantGroupFileAccess(fileUrl: string, groupId: string, store: Store = db): Promise<void> {
   const members = await store.groupMember.findMany({ where: { groupId }, select: { userId: true } })
@@ -200,4 +238,46 @@ export async function canDownloadFile(
   }
 
   return false
+}
+
+/**
+ * Rebuild `FileAccess` grants for data written before the table existed.
+ *
+ * Migration v2 backfills what it can in SQL. This routine covers the rest —
+ * attachments whose message row arrived after the migration, and grants lost to
+ * a concurrent write — and is safe to run more than once. It is O(files), not
+ * O(messages), so it is cheap enough to call on boot.
+ */
+export async function backfillFileAccess(
+  store: Store = db,
+  options: { limit?: number } = {},
+): Promise<{ files: number; grants: number }> {
+  const limit = options.limit ?? 5000
+  const files = await store.file.findMany({ take: limit, select: { url: true, ownerId: true } })
+  let grants = 0
+
+  for (const file of files) {
+    const existing = await store.fileAccess.findFirst({
+      where: { fileUrl: file.url, userId: file.ownerId },
+      select: { id: true },
+    })
+    if (!existing) {
+      await grantFileAccess(file.url, file.ownerId, 'owner', {}, store)
+      grants += 1
+    }
+
+    // Re-derive participant grants from the messages that carry this file.
+    // `fileUrl` is indexed, so this is a lookup rather than a scan.
+    const messages = await store.message.findMany({
+      where: { fileUrl: file.url },
+      select: { id: true, senderId: true, receiverId: true, groupId: true },
+      take: 50,
+    })
+    for (const message of messages) {
+      await grantMessageFileAccess(message, store)
+      grants += 1
+    }
+  }
+
+  return { files: files.length, grants }
 }

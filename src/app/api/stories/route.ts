@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
 import { handleRouteError } from '@/lib/api-errors'
+import { grantStoryFileAccess } from '@/lib/file-access'
 
 export async function GET() {
   try {
@@ -86,6 +87,13 @@ export async function POST(req: NextRequest) {
         expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
       },
     })
+
+    // Finding #10: materialise the story's audience as file grants now, instead
+    // of resolving "is this URL in a story I can see?" on every download.
+    await grantStoryFileAccess(story).catch((error: unknown) => {
+      console.warn('[stories] could not record media grants', (error as Error)?.message)
+    })
+
     return json({ story: { id: story.id, type: story.type } })
   } catch (error) {
     return handleRouteError(error, '/api/stories')
