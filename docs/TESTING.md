@@ -80,7 +80,8 @@ only place the client and server halves are exercised together.
 Stated plainly, because a green suite that overstates itself is worse than a
 small honest one:
 
-- **E2E has not been executed in this development environment.** Playwright's
+- **E2E has not been executed in this development environment** (it has passed in
+  CI — see the results table). Playwright's
   browser CDN (`cdn.playwright.dev`, `playwright.azureedge.net`), the
   Chrome-for-Testing host and puppeteer's download host are all unreachable here
   and there is no system browser, so `npx playwright install chromium` fails. The
@@ -115,9 +116,9 @@ Last full local run on this branch:
 | `npm run lint` | 0 errors, 0 warnings |
 | `npm run schema:check` | PASS (variants, metadata, DDL, MySQL migration, drift) |
 | `npm run test:unit` + `test:security` | 69/69 pass (the security suite includes `schema-variants.test.cjs`, which also needs `node --test` for the plain-`.cjs` case files) |
-| `npm run test:integration` | 19/19 pass |
+| `npm run test:integration` | 20/20 pass |
 | `npm run build` | clean |
-| `npm run test:e2e` | **not run here** — browsers unavailable; executed by CI |
+| `npm run test:e2e` | **not run locally** — browsers unavailable here; **passed in CI** (`run 45443423939`, step 21 `Playwright end-to-end tests: success`) |
 
 Integration tests need a fresh standalone build; each run logs the additive
 migrations it applied, which is expected on a new database file.
