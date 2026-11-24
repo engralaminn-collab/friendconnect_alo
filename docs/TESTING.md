@@ -49,6 +49,7 @@ One file per finding class, written to fail if the vulnerability returns:
 | `session-registry.test.cjs` | revoked/expired/ambiguous sessions resolve to `null` rather than inheriting another device's row |
 | `upload-security.test.cjs` | magic-byte detection, allow-list enforcement, SVG/script payloads rejected, download headers |
 | `file-access.test.ts` | grant model: owner/participant/group/story/profile resolution, expiry, idempotency, public-decision caching, and that the `.cjs` core used by the socket server issues the same grants as the app facade |
+| `schema-variants.test.cjs` | the generated MySQL schema stays valid without needing Prisma's engine: no TEXT column is indexed or unique, indexed strings stay bounded, every variant keeps the canonical models and relation names, the migration indexes only bounded columns, and the generator refuses to emit a wide-text indexed column |
 
 ### `tests/integration/*.test.cjs` — integration
 
@@ -108,7 +109,7 @@ Last full local run on this branch:
 | `npm run typecheck` | 0 errors |
 | `npm run lint` | 0 errors, 0 warnings |
 | `npm run schema:check` | PASS (variants, metadata, DDL, MySQL migration, drift) |
-| `npm run test:unit` + `test:security` | 63/63 pass |
+| `npm run test:unit` + `test:security` | 69/69 pass (the security suite includes `schema-variants.test.cjs`, which also needs `node --test` for the plain-`.cjs` case files) |
 | `npm run test:integration` | 18/18 pass |
 | `npm run build` | clean |
 | `npm run test:e2e` | **not run here** — browsers unavailable; executed by CI |

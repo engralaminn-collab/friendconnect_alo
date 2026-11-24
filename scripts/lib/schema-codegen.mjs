@@ -52,17 +52,10 @@ export const WIDE_TEXT = new Set([
   'AuditLog.detail',
   'AuditLog.meta',
   'AuditLog.userAgent',
-  'Attachment.url',
-  'Attachment.thumbUrl',
-  'File.url',
-  'File.thumbUrl',
-  'File.filename',
-  'FileAccess.fileUrl',
   'Session.userAgent',
   'PushSubscription.keys',
   'Conversation.avatarUrl',
   'Conversation.description',
-  'MessageReaction.emoji',
   'JaraConfig.colors',
   'JaraConfig.animation',
   'JaraConfig.clothing',
@@ -96,8 +89,56 @@ export const WIDE_TEXT = new Set([
   'JaraMeetingIntegration.configJson',
 ])
 
-/** `Model.field` pairs that are indexed/compared and should stay bounded. */
-const NARROW_STRING = new Set(['User.email', 'User.username', 'Session.token'])
+/**
+ * `Model.field` pairs that are indexed/compared and must stay bounded
+ * (VARCHAR(191)). MySQL cannot use a TEXT column in a unique constraint or a
+ * plain index without a prefix length, so anything in a `@@unique`/`@@index`
+ * belongs here — never in `WIDE_TEXT`.
+ */
+const NARROW_STRING = new Set([
+  'User.email',
+  'User.username',
+  'Session.token',
+  // Machine-generated identifiers and short display values. They are all
+  // bounded by construction (a file URL is `/api/files/<48 hex>`), and they
+  // are indexed, so they must not widen to TEXT.
+  'File.url',
+  'File.thumbUrl',
+  'File.filename',
+  'FileAccess.fileUrl',
+  'Attachment.url',
+  'Attachment.thumbUrl',
+  'MessageReaction.emoji',
+])
+
+/**
+ * Fails the build if a wide column is also indexed.
+ *
+ * This is the guard for a real CI failure: `File.url` was in `WIDE_TEXT` while
+ * the canonical schema declares it `@unique`, so the generated MySQL schema was
+ * rejected by `prisma validate` ("Native type `Text` cannot be unique in MySQL")
+ * even though every other check passed. Catching it here means the generator
+ * refuses to emit an invalid variant instead of CI discovering it later.
+ */
+function assertWideTextIsNotIndexed(canonicalSource) {
+  const { blocks } = modelBlocks(canonicalSource)
+  const offenders = []
+  for (const block of blocks) {
+    const indexed = new Set()
+    for (const match of block.text.matchAll(/@@(?:unique|index)\(\[([^\]]+)\]/g)) {
+      for (const field of match[1].split(',')) indexed.add(field.trim())
+    }
+    for (const field of indexed) {
+      if (WIDE_TEXT.has(`${block.name}.${field}`)) offenders.push(`${block.name}.${field}`)
+    }
+  }
+  if (offenders.length) {
+    throw new Error(
+      `WIDE_TEXT contains indexed columns, which MySQL cannot index without a prefix length: ${offenders.join(', ')}. ` +
+        'Move them to NARROW_STRING (VARCHAR(191)) instead.',
+    )
+  }
+}
 
 const HEADER = (provider, note) => `// ============================================================================
 // GENERATED FILE — DO NOT EDIT BY HAND.
@@ -154,6 +195,7 @@ function withNativeTypes(modelName, line) {
 }
 
 export function generateVariants(canonicalSource) {
+  assertWideTextIsNotIndexed(canonicalSource)
   const { blocks } = modelBlocks(canonicalSource)
 
   // --- SQLite: identical models, no native types (SQLite rejects them) ------

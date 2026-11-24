@@ -283,6 +283,7 @@ covered by a test:
 | Runtime ignored Prisma nested writes | `POST /api/conversations` — every conversation and group chat — 500ed on the built-in backend | nested `create`/`createMany`/`connect` supported, materialised then committed in one transaction; unsupported ops throw |
 | Socket path never granted file access | attachment sent over the socket 403ed when the recipient opened it | grant logic moved to `file-access.cjs`, shared by both processes |
 | Poll message used `messageType` | poll creation always 500ed | uses `type` |
+| Generated MySQL schema widened indexed columns to `TEXT` | `prisma validate` rejected the variant in CI ("Native type `Text` cannot be unique in MySQL"), and the MySQL migration could not be applied | indexed columns kept at `VARCHAR(191)`; the generator now fails if a `WIDE_TEXT` column is indexed, and `tests/security/schema-variants.test.cjs` enforces it locally |
 
 ## Residual risks and open items
 

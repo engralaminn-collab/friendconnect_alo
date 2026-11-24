@@ -115,6 +115,14 @@ jobs:
         # generated artefact is stale.
         run: npm run schema:check
 
+      - name: MySQL index/variant invariants
+        shell: bash
+        # `prisma validate` above catches a genuinely invalid variant, but it
+        # needs the schema-engine binary. This suite enforces the same
+        # restrictions textually (MySQL cannot index a TEXT column without a
+        # prefix length) so a regression fails fast and locally too.
+        run: node --test tests/security/schema-variants.test.cjs
+
       - name: Lint
         run: npm run lint
 

@@ -248,7 +248,7 @@ model MessageReaction {
   id        String   @id @default(cuid())
   messageId String
   userId    String
-  emoji     String @db.Text
+  emoji     String
   createdAt DateTime @default(now())
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
@@ -371,11 +371,11 @@ model File {
   name       String
   // Optional: upload routes write `name` + `url` only. A required `filename`
   // made every POST /api/files/upload fail against a Prisma backend.
-  filename   String? @db.Text
+  filename   String?
   mimeType   String
   size       Int
-  url        String @db.Text   @unique
-  thumbUrl   String? @db.Text
+  url        String   @unique
+  thumbUrl   String?
   createdAt  DateTime @default(now())
 
   owner User @relation(fields: [ownerId], references: [id], onDelete: Cascade)
@@ -667,8 +667,8 @@ model Attachment {
   filename   String
   mimeType   String
   size       Int
-  url        String @db.Text
-  thumbUrl   String? @db.Text
+  url        String
+  thumbUrl   String?
   createdAt  DateTime @default(now())
 
   message Message? @relation(fields: [messageId], references: [id], onDelete: SetNull)
@@ -694,7 +694,7 @@ model Attachment {
 
 model FileAccess {
   id        String   @id @default(cuid())
-  fileUrl   String @db.Text
+  fileUrl   String
   userId    String
   // owner | message_recipient | group_member | story_viewer | profile_public
   source    String
