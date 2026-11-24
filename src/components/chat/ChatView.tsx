@@ -242,36 +242,29 @@ export function ChatView({
       }
       return
     }
-    // Send via socket for realtime broadcast, with REST fallback
-    if (socket?.connected) {
-      socket.emit("message:send", {
-        conversationId: conversation.id,
-        content,
-        replyToId: replyToId || null,
-        attachmentIds,
-      }, (res: any) => {
-        if (res?.error) {
-          toast.error(res.error)
-        } else if (res?.ok) {
-          setMessages((prev) => {
-            if (prev.some((m) => m.id === res.message.id)) return prev
-            return [...prev, res.message]
-          })
-          onConversationChanged()
-        }
+    // Persist through REST first, then let the socket fan the message out.
+    //
+    // Sending only over the socket used to be the primary path, and it was broken:
+    // the realtime server had no conversation-aware `message:send` handler, so the
+    // emit was refused (`{ ok: false }` with no `error` field) and the message
+    // silently vanished. Storing first also means a dropped broadcast costs the
+    // live update, not the message.
+    try {
+      const r = await fetch(`/api/conversations/${conversation.id}/messages`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content, replyToId: replyToId || null, attachmentIds }),
       })
-    } else {
-      // REST fallback
-      try {
-        const r = await fetch(`/api/conversations/${conversation.id}/messages`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content, replyToId: replyToId || null, attachmentIds }),
-        })
-        if (!r.ok) throw new Error("Send failed")
-      } catch (e: any) {
-        toast.error(e.message || "Send failed")
-      }
+      const body = await r.json().catch(() => ({}))
+      if (!r.ok) throw new Error(body?.error || "Send failed")
+      setMessages((prev) => {
+        if (!body?.message || prev.some((m) => m.id === body.message.id)) return prev
+        return [...prev, body.message]
+      })
+      // Participants receive `message:new` over their own user room.
+      if (socket?.connected) socket.emit("conversation:join", conversation.id)
+    } catch (e: any) {
+      toast.error(e.message || "Send failed")
     }
     onConversationChanged()
   }
@@ -283,19 +276,16 @@ export function ChatView({
   }
 
   const handleReact = async (m: MessageData, emoji: string) => {
-    // optimistic via socket
-    if (socket?.connected) {
-      socket.emit("message:react", { messageId: m.id, emoji }, (res: any) => {
-        if (res?.error) toast.error(res.error)
+    try {
+      const r = await fetch(`/api/messages/${m.id}/reactions`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ emoji }),
       })
-    } else {
-      try {
-        await fetch(`/api/messages/${m.id}/react`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ emoji }),
-        })
-      } catch {}
+      if (!r.ok) throw new Error("Failed")
+      await loadMessages()
+    } catch {
+      toast.error("Could not save the reaction")
     }
   }
 
