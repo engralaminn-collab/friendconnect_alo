@@ -1,6 +1,7 @@
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import { db } from "@/lib/db"
+import { findCurrentSession } from "./session-registry.cjs"
 
 export type CurrentUser = {
   id: string
@@ -18,12 +19,32 @@ export type CurrentUser = {
   fileQuotaBytes: number
 }
 
+export async function getLegacyCookieSessionToken(req?: Request): Promise<string | null> {
+  if (req) {
+    const match = (req.headers.get('cookie') || '').match(/(?:^|;\s*)fc_session=([^;]+)/)
+    return match ? decodeURIComponent(match[1]) : null
+  }
+  try {
+    const { cookies } = await import('next/headers')
+    return (await cookies()).get('fc_session')?.value || null
+  } catch {
+    return null
+  }
+}
+
 export async function getCurrentUser(): Promise<CurrentUser | null> {
-  const session = await getServerSession(authOptions)
-  const id = (session?.user as any)?.id
-  if (!id) return null
-  const user = await db.user.findUnique({
-    where: { id },
+  const nextAuthSession = await getServerSession(authOptions).catch(() => null)
+  const nextAuthUser = nextAuthSession?.user as any
+  const cookieToken = await getLegacyCookieSessionToken()
+  const registry = await findCurrentSession(db, {
+    userId: typeof nextAuthUser?.id === 'string' ? nextAuthUser.id : null,
+    token: typeof nextAuthUser?.sessionToken === 'string' ? nextAuthUser.sessionToken : null,
+    issuedAt: nextAuthUser?.sessionIssuedAt,
+    cookieToken,
+  } as any).catch(() => null)
+  if (!registry) return null
+  return db.user.findUnique({
+    where: { id: registry.userId },
     select: {
       id: true,
       username: true,
@@ -40,7 +61,6 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
       fileQuotaBytes: true,
     },
   })
-  return user
 }
 
 export async function requireUser(): Promise<CurrentUser> {
@@ -111,23 +131,15 @@ export async function clearSessionCookie(): Promise<void> {
 }
 
 // Get the current session token from the cookie (for logout/validation)
-export function getCurrentSessionToken(req?: Request): string | null {
-  if (typeof document !== "undefined") {
-    const match = document.cookie.match(/fc_session=([^;]+)/)
-    return match ? match[1] : null
-  }
-  if (req) {
-    const cookie = req.headers.get("cookie") || ""
-    const match = cookie.match(/fc_session=([^;]+)/)
-    return match ? match[1] : null
-  }
-  // Server-side without req — try headers from next/headers
-  try {
-    const { headers } = require("next/headers")
-    const cookieHeader = headers().get("cookie") || ""
-    const match = cookieHeader.match(/fc_session=([^;]+)/)
-    return match ? match[1] : null
-  } catch {
-    return null
-  }
+export async function getCurrentSessionToken(req?: Request): Promise<string | null> {
+  const nextAuthSession = req ? null : await getServerSession(authOptions).catch(() => null)
+  const nextAuthUser = nextAuthSession?.user as any
+  const cookieToken = await getLegacyCookieSessionToken(req)
+  const registry = await findCurrentSession(db, {
+    userId: typeof nextAuthUser?.id === 'string' ? nextAuthUser.id : null,
+    token: typeof nextAuthUser?.sessionToken === 'string' ? nextAuthUser.sessionToken : null,
+    issuedAt: nextAuthUser?.sessionIssuedAt,
+    cookieToken,
+  } as any).catch(() => null)
+  return registry?.token || null
 }

@@ -82,6 +82,12 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Unit and security regression tests
+        run: npm run test:unit
+
+      - name: Realtime server syntax check
+        run: node --check socket-server.js
+
       - name: Production build
         env:
           NODE_ENV: production
@@ -94,6 +100,9 @@ jobs:
           test -f .next/standalone/server.js
           test -d .next/standalone/.next
           echo "PASS: Next.js standalone server and static output exist."
+
+      - name: End-to-end security regressions
+        run: npm run test:integration
 
       - name: Upload production build artifact
         if: success()

@@ -1,0 +1,12 @@
+{
+  "status": "NOT_RUN",
+  "reason": "No AI provider is configured in this process; no model calls were made.",
+  "provider": "none",
+  "providerConfigured": false,
+  "promptProfile": "Jara default chat configuration",
+  "promptSha256": "4a492e30e92a9956ddbf6f992a7dff2d5b50f5c3785c6fb5c855013e4985e3f5",
+  "scenarioSetSha256": "5a15c14b01127aa1ed64e665c7c2eca475de02f1f8fb0a6ac8b3dae7177a07a7",
+  "evaluatorSha256": "11cf9a4e6628eef9377b5cf86f2e772954b32c59bb58622ceec2b9be23f1dc3d",
+  "scenariosAvailable": 11,
+  "modelCalls": 0
+}

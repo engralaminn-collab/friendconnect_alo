@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/session"
 import { db } from "@/lib/db"
+import { filterMessagesVisibleToUser } from "@/lib/ai-input"
 import { z } from "zod"
 
 // List conversations for the current user, with last message preview + unread counts
@@ -20,10 +21,10 @@ export async function GET() {
           },
           messages: {
             orderBy: { createdAt: "desc" },
-            take: 1,
+            take: 50,
             select: {
-              id: true, content: true, createdAt: true, senderId: true,
-              deletedForAll: true, attachments: { select: { id: true, filename: true, mimeType: true, url: true } },
+              id: true, content: true, createdAt: true, senderId: true, deletedFor: true,
+              attachments: { select: { id: true, filename: true, mimeType: true, url: true } },
             },
           },
         },
@@ -38,7 +39,7 @@ export async function GET() {
       const other = conv.type === "direct"
         ? conv.members.find((mm) => mm.userId !== me.id)?.user
         : null
-      const lastMsg = conv.messages[0] || null
+      const lastMsg = filterMessagesVisibleToUser<any>(conv.messages, me.id)[0] || null
       const unread = lastMsg && m.lastReadAt && lastMsg.createdAt > m.lastReadAt && lastMsg.senderId !== me.id ? 1 : 0
       return {
         id: conv.id,
@@ -56,7 +57,7 @@ export async function GET() {
         lastMessage: lastMsg
           ? {
               id: lastMsg.id,
-              content: lastMsg.deletedForAll ? "🗑️ message deleted" : lastMsg.content || "📎 attachment",
+              content: lastMsg.content || "📎 attachment",
               createdAt: lastMsg.createdAt,
               senderId: lastMsg.senderId,
               attachments: lastMsg.attachments,

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/session"
 import { db } from "@/lib/db"
+import { filterMessagesVisibleToUser } from "@/lib/ai-input"
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const me = await getCurrentUser()
@@ -14,12 +15,12 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   if (!q) return NextResponse.json({ messages: [] })
 
   const messages = await db.message.findMany({
-    where: { conversationId: (await params).id, content: { contains: q }, deletedForAll: false },
+    where: { conversationId: (await params).id, content: { contains: q } },
     orderBy: { createdAt: "desc" },
     take: 30,
     include: {
       sender: { select: { id: true, username: true, name: true, avatarUrl: true } },
     },
   })
-  return NextResponse.json({ messages: messages.reverse() })
+  return NextResponse.json({ messages: filterMessagesVisibleToUser<any>(messages, me.id).reverse() })
 }

@@ -1,6 +1,7 @@
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { filterMessagesVisibleToUser } from '@/lib/ai-input'
 
 export async function GET() {
   try {
@@ -33,7 +34,7 @@ export async function GET() {
     })
     const lastByPeer = new Map<string, (typeof msgs)[number]>()
     const unreadByPeer = new Map<string, number>()
-    for (const m of msgs) {
+    for (const m of filterMessagesVisibleToUser<any>(msgs, me.id)) {
       const peer = m.senderId === me.id ? m.receiverId! : m.senderId
       if (!lastByPeer.has(peer)) lastByPeer.set(peer, m)
       if (m.receiverId === me.id && m.status !== 'SEEN') {

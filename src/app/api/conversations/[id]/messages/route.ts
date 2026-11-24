@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/session"
 import { db } from "@/lib/db"
+import { filterMessagesVisibleToUser } from "@/lib/ai-input"
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const me = await getCurrentUser()
@@ -14,7 +15,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   const limit = Math.min(Number(searchParams.get("limit") || 50), 100)
 
   const messages = await db.message.findMany({
-    where: { conversationId: (await params).id, deletedForAll: false },
+    where: { conversationId: (await params).id },
     orderBy: { createdAt: "desc" },
     take: limit,
     ...(cursor
@@ -28,7 +29,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       replyTo: { select: { id: true, content: true, senderId: true, sender: { select: { username: true, name: true } } } },
     },
   })
-  return NextResponse.json({ messages: messages.reverse(), nextCursor: messages.length === limit ? messages[messages.length - 1].id : null })
+  const visibleMessages = filterMessagesVisibleToUser<any>(messages, me.id)
+  return NextResponse.json({
+    messages: visibleMessages.reverse(),
+    nextCursor: visibleMessages.length === limit ? visibleMessages[visibleMessages.length - 1].id : null,
+  })
 }
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }) {

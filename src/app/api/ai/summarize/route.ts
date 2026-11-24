@@ -3,6 +3,7 @@ import { getSessionUser } from "@/lib/session"
 import { errorJson, json } from "@/lib/serialize"
 import { aiSummarize, isAIConfigured } from "@/lib/ai"
 import { db } from "@/lib/db"
+import { filterMessagesVisibleToUser } from "@/lib/ai-input"
 
 export async function POST(req: NextRequest) {
   const me = await getSessionUser()
@@ -22,12 +23,12 @@ export async function POST(req: NextRequest) {
 
   // Fetch last 50 messages
   const messages = await db.message.findMany({
-    where: { conversationId, deletedForAll: false },
+    where: { conversationId },
     orderBy: { createdAt: "desc" },
     take: 50,
     include: { sender: { select: { name: true } } },
   })
-  const formatted = messages.reverse().map(m => ({
+  const formatted = filterMessagesVisibleToUser<any>(messages, me.id).reverse().map(m => ({
     sender: m.sender.name,
     content: m.content,
   }))

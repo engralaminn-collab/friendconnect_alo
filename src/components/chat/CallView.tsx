@@ -23,6 +23,7 @@ export interface ActiveCall {
   // The other party
   peer: { id: string; name: string; avatarUrl?: string | null }
   role: "caller" | "callee"
+  remoteOffer?: RTCSessionDescriptionInit | null
 }
 
 export function CallView({

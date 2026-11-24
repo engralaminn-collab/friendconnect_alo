@@ -30,27 +30,22 @@ function resolveSecret(): string {
  * `Session.token` is NOT NULL + UNIQUE and the socket server looks sessions up
  * by it, so this must happen on every successful credential login — otherwise
  * /api/auth/token returns 404 and the socket cannot authenticate at all.
- * Failure here must not block login (the app still works over HTTP).
+ * The DB row is the revocation authority for both API and realtime sessions,
+ * so login must fail closed if this row cannot be created.
  */
-async function ensureSessionRow(userId: string, userAgent: string): Promise<void> {
-  try {
-    const token = randomBytes(32).toString("hex")
-    const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
-    await db.session.create({
-      data: {
-        userId,
-        token,
-        expiresAt,
-        userAgent,
-        lastActiveAt: new Date(),
-      },
-    })
-  } catch (e) {
-    // Realtime degrades but HTTP sessions still work, so this must not block
-    // login. It must not be silent either: a swallowed error here is exactly
-    // how realtime auth stayed broken without anyone noticing.
-    console.warn("[auth] failed to create session row; realtime auth will not work for this login:", (e as Error)?.message)
-  }
+async function ensureSessionRow(userId: string, userAgent: string): Promise<string> {
+  const token = randomBytes(32).toString("hex")
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)
+  await db.session.create({
+    data: {
+      userId,
+      token,
+      expiresAt,
+      userAgent,
+      lastActiveAt: new Date(),
+    },
+  })
+  return token
 }
 
 export const authOptions: NextAuthOptions = {
@@ -90,12 +85,16 @@ export const authOptions: NextAuthOptions = {
           where: { id: user.id },
           data: { lastSeenAt: new Date() },
         })
-        await ensureSessionRow(user.id, String((req as { headers?: Record<string, string> })?.headers?.["user-agent"] ?? ""))
+        const sessionToken = await ensureSessionRow(
+          user.id,
+          String((req as { headers?: Record<string, string> })?.headers?.["user-agent"] ?? "")
+        )
         return {
           id: user.id,
           email: user.email,
           name: user.name,
           username: user.username,
+          sessionToken,
         } as any
       },
     }),
@@ -105,6 +104,7 @@ export const authOptions: NextAuthOptions = {
       if (user) {
         token.id = (user as any).id
         token.username = (user as any).username
+        token.sessionToken = (user as any).sessionToken
       }
       return token
     },
@@ -112,6 +112,8 @@ export const authOptions: NextAuthOptions = {
       if (session.user) {
         ;(session.user as any).id = token.id
         ;(session.user as any).username = token.username
+        ;(session.user as any).sessionToken = token.sessionToken
+        ;(session.user as any).sessionIssuedAt = token.iat
       }
       return session
     },

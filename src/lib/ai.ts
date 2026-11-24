@@ -22,9 +22,22 @@
 // 5. OpenAI-compatible API (any provider)
 //    Set OPENAI_API_KEY + OPENAI_BASE_URL + AI_MODEL
 //
-// 6. No provider configured → returns a helpful message
+// 6. No provider configured → throws AIProviderError; API routes report an unavailable/configuration error
 
-type ChatMessage = { role: string; content: string }
+type ChatMessage = { role: 'user' | 'assistant'; content: string }
+
+export class AIProviderError extends Error {
+  readonly code = 'AI_PROVIDER_UNAVAILABLE'
+  constructor(message: string) {
+    super(message)
+    this.name = 'AIProviderError'
+  }
+}
+
+const PROVIDER_TIMEOUT_MS = 45_000
+function providerSignal(): AbortSignal {
+  return AbortSignal.timeout(PROVIDER_TIMEOUT_MS)
+}
 
 // ---------- Provider detection ----------
 
@@ -83,6 +96,7 @@ async function ollamaChat(messages: ChatMessage[], systemPrompt?: string): Promi
   const res = await fetch(`${url}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal: providerSignal(),
     body: JSON.stringify({ model, messages: fullMessages, stream: false }),
   })
   if (!res.ok) throw new Error(`Ollama HTTP ${res.status}`)
@@ -135,6 +149,7 @@ async function openRouterChat(messages: ChatMessage[], systemPrompt?: string): P
       "HTTP-Referer": process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000",
       "X-Title": "FriendConnect",
     },
+    signal: providerSignal(),
     body: JSON.stringify({ model, messages: fullMessages, max_tokens: 1000 }),
   })
   if (!res.ok) throw new Error(`OpenRouter HTTP ${res.status}`)
@@ -156,6 +171,7 @@ async function huggingfaceChat(messages: ChatMessage[], systemPrompt?: string): 
       "Authorization": `Bearer ${apiKey}`,
       "Content-Type": "application/json",
     },
+    signal: providerSignal(),
     body: JSON.stringify({ inputs: prompt, parameters: { max_new_tokens: 500, temperature: 0.7 } }),
   })
   if (!res.ok) throw new Error(`HuggingFace HTTP ${res.status}`)
@@ -166,7 +182,7 @@ async function huggingfaceChat(messages: ChatMessage[], systemPrompt?: string): 
   return data.generated_text || ""
 }
 
-// ---------- OpenAI-compatible (fallback) ----------
+// ---------- OpenAI-compatible HTTP adapter ----------
 
 async function openaiCompatibleChat(messages: ChatMessage[], systemPrompt?: string): Promise<string> {
   const apiKey = process.env.OPENAI_API_KEY || process.env.AI_API_KEY
@@ -179,6 +195,7 @@ async function openaiCompatibleChat(messages: ChatMessage[], systemPrompt?: stri
   const res = await fetch(`${baseUrl}/chat/completions`, {
     method: "POST",
     headers: { "Authorization": `Bearer ${apiKey}`, "Content-Type": "application/json" },
+    signal: providerSignal(),
     body: JSON.stringify({ model, messages: fullMessages, max_tokens: 1000 }),
   })
   if (!res.ok) throw new Error(`OpenAI HTTP ${res.status}`)
@@ -186,36 +203,40 @@ async function openaiCompatibleChat(messages: ChatMessage[], systemPrompt?: stri
   return data.choices?.[0]?.message?.content || ""
 }
 
-// ---------- Main chat function — tries providers in priority order ----------
+// ---------- Main chat function: use exactly the configured provider ----------
 
 export async function aiChat(messages: ChatMessage[], systemPrompt?: string): Promise<string> {
   const provider = getAIProvider()
+  if (provider === 'none') throw new AIProviderError('No AI provider is configured.')
 
   try {
+    let result: string
     switch (provider) {
-      case "ollama":
-        return await ollamaChat(messages, systemPrompt)
-      case "zai":
-        return await zaiChat(messages, systemPrompt)
-      case "openrouter":
-        return await openRouterChat(messages, systemPrompt)
-      case "huggingface":
-        return await huggingfaceChat(messages, systemPrompt)
-      case "openai-compatible":
-        return await openaiCompatibleChat(messages, systemPrompt)
+      case 'ollama':
+        result = await ollamaChat(messages, systemPrompt)
+        break
+      case 'zai':
+        result = await zaiChat(messages, systemPrompt)
+        break
+      case 'openrouter':
+        result = await openRouterChat(messages, systemPrompt)
+        break
+      case 'huggingface':
+        result = await huggingfaceChat(messages, systemPrompt)
+        break
+      case 'openai-compatible':
+        result = await openaiCompatibleChat(messages, systemPrompt)
+        break
       default:
-        return "[AI not configured — set one of: OLLAMA_URL, ZAI_API_KEY, OPENROUTER_API_KEY, HUGGINGFACE_API_KEY, or OPENAI_API_KEY]"
+        throw new AIProviderError('No compatible AI provider is configured.')
     }
-  } catch (e: any) {
-    console.error(`[AI] ${provider} chat failed`, e?.message)
-    // Try fallback to z-ai if available
-    try {
-      const zai = await getZAI()
-      if (zai && provider !== "zai") {
-        return await zaiChat(messages, systemPrompt)
-      }
-    } catch {}
-    return `[AI error: ${e?.message}]`
+    if (!result.trim()) throw new Error('empty_completion')
+    return result
+  } catch {
+    // Do not silently transmit user content to a different cloud provider or
+    // turn an infrastructure error into a successful-looking model response.
+    console.warn(`[AI] ${provider} completion failed; no cross-provider fallback was attempted`)
+    throw new AIProviderError('The configured AI provider did not complete the request.')
   }
 }
 

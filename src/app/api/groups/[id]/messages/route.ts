@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { filterMessagesVisibleToUser } from '@/lib/ai-input'
 
 export async function GET(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -20,7 +21,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
       include: { sender: { include: { profile: true } } },
     })
     return json({
-      messages: messages.reverse().map((m) => ({
+      messages: filterMessagesVisibleToUser<any>(messages, me.id).reverse().map((m) => ({
         id: m.id,
         senderId: m.senderId,
         senderName: m.sender.name,

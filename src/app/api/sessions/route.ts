@@ -1,5 +1,5 @@
 import { db } from '@/lib/db'
-import { getSessionUser } from '@/lib/session'
+import { getSessionUser, getCurrentSessionToken } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
 
 // GET active sessions for the current user (device management)
@@ -7,8 +7,7 @@ export async function GET() {
   try {
     const me = await getSessionUser()
     if (!me) return errorJson('Unauthorized', 401)
-    const cookieStore = await import('next/headers').then(m => m.cookies())
-    const currentToken = (await cookieStore).get('fc_session')?.value
+    const currentToken = await getCurrentSessionToken()
     const sessions = await db.session.findMany({
       where: { userId: me.id, expiresAt: { gt: new Date() } },
       orderBy: { lastActiveAt: 'desc' },

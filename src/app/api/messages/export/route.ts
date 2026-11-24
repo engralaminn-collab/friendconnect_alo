@@ -2,6 +2,7 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { filterMessagesVisibleToUser } from '@/lib/ai-input'
 
 // GET /api/messages/export?userId=ID — export a 1:1 conversation as JSON (downloadable)
 export async function GET(req: NextRequest) {
@@ -43,7 +44,8 @@ export async function GET(req: NextRequest) {
 
     // filter out scheduled + deleted-for-everyone
     const now = new Date()
-    const exportable = messages.filter((m) => (!m.scheduledFor || m.scheduledFor <= now) && m.deletedFor !== 'everyone')
+    const exportable = filterMessagesVisibleToUser<any>(messages, me.id)
+      .filter((m) => (!m.scheduledFor || m.scheduledFor <= now) && m.deletedFor !== 'everyone')
 
     if (format === 'txt') {
       const lines = exportable.map((m) => {

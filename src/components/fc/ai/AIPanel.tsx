@@ -13,7 +13,7 @@ interface AIMessage {
 
 export function AIPanel({ onClose }: { onClose: () => void }) {
   const [messages, setMessages] = useState<AIMessage[]>([
-    { role: "assistant", content: "Hi! I'm your AI assistant. I can help you summarize conversations, translate messages, or answer questions. How can I help?" }
+    { role: "assistant", content: "Hi, I'm FriendConnect's AI assistant. I can answer questions and help draft text. I don't have action tools or access to your chats from this panel." }
   ])
   const [input, setInput] = useState("")
   const [loading, setLoading] = useState(false)
@@ -37,8 +37,7 @@ export function AIPanel({ onClose }: { onClose: () => void }) {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          messages: [...messages, { role: "user", content: userMsg }].map(m => ({ role: m.role, content: m.content })),
-          systemPrompt: "You are a helpful AI assistant integrated into FriendConnect, a personal messaging app. Be concise and friendly.",
+          messages: [...messages.slice(-39), { role: "user", content: userMsg }].map(m => ({ role: m.role, content: m.content })),
         }),
       })
       const data = await res.json()
