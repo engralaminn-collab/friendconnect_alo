@@ -448,7 +448,7 @@ export function ChatView({
       )}
 
       {/* Messages */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto py-2">
+      <div ref={scrollRef} data-testid="chat-messages" className="flex-1 overflow-y-auto py-2">
         {loading ? (
           <div className="flex items-center justify-center h-full text-muted-foreground text-sm">
             Loading messages…

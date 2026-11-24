@@ -234,6 +234,7 @@ export function Sidebar({
                 <button
                   key={c.id}
                   onClick={() => onSelect(c.id)}
+                  data-testid="sidebar-conversation"
                   className={`w-full flex items-center gap-2 px-3 py-2.5 hover:bg-muted transition text-left ${
                     selectedId === c.id ? "bg-muted" : ""
                   }`}
