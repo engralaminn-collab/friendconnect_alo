@@ -34,8 +34,25 @@ function annotate(message, file) {
   console.log(`::error${location}::${flat}`)
 }
 
+/** The step's combined output, captured by CI (`| tee test-results/e2e.log`). */
+const logPath = process.argv[3] || 'test-results/e2e.log'
+
+/** Annotate the tail of the run log — the only way to see a startup failure. */
+function annotateLogTail(reason) {
+  if (!existsSync(logPath)) {
+    annotate(`${reason} No JSON report and no captured log at ${logPath}.`)
+    return
+  }
+  const lines = readFileSync(logPath, 'utf8').replace(/\r/g, '').split('\n').filter(Boolean)
+  // The interesting part of a Playwright startup failure is at the end.
+  const tail = lines.slice(-25).join('\n')
+  annotate(`${reason}\n--- last lines of the end-to-end run ---\n${tail}`)
+}
+
 if (!existsSync(reportPath)) {
-  annotate(`Playwright failed but no JSON report was written at ${reportPath}. The suite probably failed before running any test (server startup, browser install or config).`)
+  annotateLogTail(
+    `Playwright failed but no JSON report was written at ${reportPath}: the suite did not get as far as running a test.`,
+  )
   process.exit(0)
 }
 
@@ -59,7 +76,11 @@ for (const suite of report.suites ?? []) {
 }
 
 if (!failed.length) {
-  annotate('Playwright reported a failure but the JSON report contains no failed test. Check the job log for a startup error.')
+  // Every test either passed or never ran: this is a webServer/startup failure
+  // (or a teardown error), and the process output is the only evidence.
+  annotateLogTail(
+    'Playwright exited non-zero but the JSON report contains no failed test, so the failure is not an assertion. This is normally the webServer failing to start or exiting early.',
+  )
   process.exit(0)
 }
 
