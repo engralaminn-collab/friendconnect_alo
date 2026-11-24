@@ -192,6 +192,94 @@ function encodeVal(model, key, v) {
   return v
 }
 
+/**
+ * Scalar columns of a model, from the generated metadata. Used to reject a filter
+ * this runtime cannot honour: silently dropping a condition is how a
+ * `members: { some: { userId } }` filter degraded into `1=1` and let any user read
+ * any conversation (see `relationCondition`).
+ */
+const scalarColumnCache = new Map()
+function scalarColumns(model) {
+  const key = model.table
+  if (scalarColumnCache.has(key)) return scalarColumnCache.get(key)
+  // `EXPECTED_COLUMNS` is generated from prisma/schema.prisma and is the
+  // authoritative column list (the drift check compares the live database to it).
+  // It is keyed by model name (`user`), not by table name (`User`).
+  const generated = EXPECTED_COLUMNS?.[model.model]?.columns
+    ?? EXPECTED_COLUMNS?.[model.model.charAt(0).toLowerCase() + model.model.slice(1)]?.columns
+    ?? []
+  if (!generated.length) {
+    throw new Error(`No generated column metadata for ${model.model} (db-runtime)`)
+  }
+  const columns = new Set(generated)
+  scalarColumnCache.set(key, columns)
+  return columns
+}
+
+/**
+ * A `where` fragment on a related model: `{ some }`, `{ every }`, `{ none }` for
+ * to-many relations, or a plain nested filter for a to-one relation.
+ *
+ * Before this existed the runtime had no relation support at all: `cond()` fell
+ * through to `pushFilter()`, found no operator it recognised and emitted nothing,
+ * so the condition vanished. Every authorization check written as
+ * `members: { some: { userId: me.id } }` therefore matched every row — a
+ * conversation reader could read any conversation, and `include`/`select` were the
+ * only things keeping the API honest.
+ */
+function relationCondition(model, field, filter, alias) {
+  const relation = model.relations[field]
+  if (!relation) {
+    throw new Error(`Unknown filter field ${model.model ?? model.table}.${field} (db-runtime)`)
+  }
+  const childModel = MODELS[relation.model]
+  const qualifier = alias ? `${alias}."${relation.from}"` : `"${model.table}"."${relation.from}"`
+  const childAlias = `r_${String(relation.model)}_${String(field)}`
+  const expr = `${childAlias}."${relation.to}" = ${qualifier}`
+
+  if (relation.kind === 'one') {
+    if (filter === null) {
+      return { sql: `NOT EXISTS (SELECT 1 FROM "${childModel.table}" ${childAlias} WHERE ${expr})`, params: [] }
+    }
+    if (typeof filter !== 'object' || filter instanceof Date) {
+      throw new Error(`Relation filter on to-one ${field} must be an object (db-runtime)`)
+    }
+    const nested = cond(childModel, filter, childAlias)
+    return { sql: `EXISTS (SELECT 1 FROM "${childModel.table}" ${childAlias} WHERE ${expr} AND ${nested.sql})`, params: nested.params }
+  }
+
+  if (typeof filter !== 'object' || filter instanceof Date) {
+    throw new Error(`Relation filter on to-many ${field} must be an object (db-runtime)`)
+  }
+  const keys = Object.keys(filter)
+  for (const key of keys) {
+    if (!['some', 'every', 'none'].includes(key)) {
+      throw new Error(`Unsupported relation filter ${field}.${key} (db-runtime): expected some/every/none`)
+    }
+  }
+  const params = []
+  const clauses = []
+  if ('some' in filter) {
+    if (filter.some === null) return { sql: '0=1', params }
+    const nested = cond(childModel, filter.some, childAlias)
+    clauses.push(`EXISTS (SELECT 1 FROM "${childModel.table}" ${childAlias} WHERE ${expr} AND ${nested.sql})`)
+    params.push(...nested.params)
+  }
+  if ('none' in filter) {
+    if (filter.none === null) return { sql: '0=1', params }
+    const nested = cond(childModel, filter.none, childAlias)
+    clauses.push(`NOT EXISTS (SELECT 1 FROM "${childModel.table}" ${childAlias} WHERE ${expr} AND ${nested.sql})`)
+    params.push(...nested.params)
+  }
+  if ('every' in filter) {
+    if (filter.every === null) return { sql: '1=1', params }
+    const nested = cond(childModel, filter.every, childAlias)
+    clauses.push(`NOT EXISTS (SELECT 1 FROM "${childModel.table}" ${childAlias} WHERE ${expr} AND NOT (${nested.sql}))`)
+    params.push(...nested.params)
+  }
+  return { sql: clauses.length ? clauses.join(' AND ') : '1=1', params }
+}
+
 function expandWhere(model, where) {
   if (!where || typeof where !== 'object') return where
   const out = { ...where }
@@ -216,6 +304,17 @@ function cond(model, where, alias) {
   const w = expandWhere(model, where)
 
   const pushFilter = (col, val) => {
+    if (model.relations?.[col]) {
+      const relation = relationCondition(model, col, val, alias)
+      parts.push(`(${relation.sql})`)
+      params.push(...relation.params)
+      return
+    }
+    if (!scalarColumns(model).has(col)) {
+      // Never silently ignore a condition: a dropped filter is a security bug that
+      // reads as a passing test.
+      throw new Error(`Unknown filter field ${model.model ?? model.table}.${col} (db-runtime)`)
+    }
     const qcol = `${prefix}"${col}"`
     if (val === null) {
       parts.push(`${qcol} IS NULL`)

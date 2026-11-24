@@ -61,9 +61,10 @@ touches `DATABASE_URL`, a real mailbox or a real AI provider.
 | --- | --- |
 | `session-api.test.cjs` | NextAuth and legacy login, `/api/me`, session listing/revocation, private upload then download (403 for a stranger, 200 for a message recipient), socket disconnect after revocation, logout; Jara history injection refused; group per-user delete visibility; AI provider isolation |
 | `authz-drift.test.cjs` | REST routes import the shared authorization helper instead of re-deriving it, and the helper's answers match the expected matrix for every relationship state |
-| `db-runtime.test.cjs` | the SQLite runtime: `Date`/`Boolean` coercion, `$transaction` (callback + array, rollback on throw), `groupBy`/`aggregate`, the full `include` matrix, nested writes with rollback and nested ids surviving a transaction, boot refusal on a half-migrated database, metadata coverage of all 52 models |
+| `db-runtime.test.cjs` | the SQLite runtime: `Date`/`Boolean` coercion, `$transaction` (callback + array, rollback on throw), `groupBy`/`aggregate`, the full `include` matrix, nested writes with rollback and nested ids surviving a transaction, boot refusal on a half-migrated database, metadata coverage of all 52 models, and relation filters in `where` (`some`/`none`/nested `every`, unknown fields rejected instead of ignored) |
 | `polls.test.cjs` | poll creation validation (blank/duplicate/too many options, past expiry, non-member), participant-only voting and reads, option-range checks, concurrent votes collapsing to one, expiry closing a poll while preserving its tally |
 | `socket-authz.test.cjs` | handshake rejects missing/expired/revoked tokens, event authorization, scoped presence |
+| `socket-conversation.test.cjs` | the conversation protocol the chat UI speaks: `message:send` with a `conversationId` is stored **with** that id and delivered to every member, a non-member is refused, `message:react` toggles and broadcasts, `typing:start`/`typing:stop` reach the peer, `message:read` advances `lastReadAt`, and `message:delete` reaches all members |
 | `friends.test.cjs`, `security.test.cjs` | friend request/accept contract, blocked and unauthorized access paths |
 
 ### `tests/e2e/*.spec.ts` — Playwright
@@ -114,7 +115,7 @@ Last full local run on this branch:
 | `npm run lint` | 0 errors, 0 warnings |
 | `npm run schema:check` | PASS (variants, metadata, DDL, MySQL migration, drift) |
 | `npm run test:unit` + `test:security` | 69/69 pass (the security suite includes `schema-variants.test.cjs`, which also needs `node --test` for the plain-`.cjs` case files) |
-| `npm run test:integration` | 18/18 pass |
+| `npm run test:integration` | 19/19 pass |
 | `npm run build` | clean |
 | `npm run test:e2e` | **not run here** — browsers unavailable; executed by CI |
 
