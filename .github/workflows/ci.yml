@@ -86,13 +86,22 @@ jobs:
       - name: Validate Prisma schema
         shell: bash
         # `prisma validate` needs the schema engine binary; it is fetched during
-        # `npm ci` above. Both provider variants are checked because either can
-        # be the one deployed.
+        # `npm ci` above. All three schemas are checked because either provider
+        # variant can be the one deployed.
+        #
+        # Each schema is validated with a DATABASE_URL of its own provider shape:
+        # `prisma validate` rejects a URL whose protocol does not match the
+        # datasource, so validating the mysql variant against the job-wide
+        # `file:` URL failed even though the schema itself was valid. `validate`
+        # never connects, so these placeholders contact no database.
         run: |
           set -euo pipefail
-          npx prisma validate --schema prisma/schema.prisma
-          npx prisma validate --schema prisma/schema.mysql.prisma
-          npx prisma validate --schema prisma/schema.sqlite.prisma
+          DATABASE_URL="file:./prisma/ci.db" \
+            npx prisma validate --schema prisma/schema.prisma
+          DATABASE_URL="file:./prisma/ci.db" \
+            npx prisma validate --schema prisma/schema.sqlite.prisma
+          DATABASE_URL="mysql://ci:ci@127.0.0.1:3306/ci_validation_only" \
+            npx prisma validate --schema prisma/schema.mysql.prisma
 
       - name: Validate migration history
         shell: bash
@@ -100,7 +109,10 @@ jobs:
         # migration that does not apply cleanly to an empty database.
         run: |
           set -euo pipefail
-          npx prisma migrate diff \
+          # Same provider/URL rule: the mysql datamodel needs a mysql URL shape.
+          # `--from-empty` means no database is connected to.
+          DATABASE_URL="mysql://ci:ci@127.0.0.1:3306/ci_validation_only" \
+            npx prisma migrate diff \
             --from-empty \
             --to-schema-datamodel prisma/schema.mysql.prisma \
             --script > /tmp/expected-mysql.sql
