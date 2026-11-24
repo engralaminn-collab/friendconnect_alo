@@ -1,6 +1,8 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { canDownloadFile, grantFileAccess, grantMessageFileAccess, grantStoryFileAccess } from '../../src/lib/file-access'
+import * as core from '../../src/lib/file-access.cjs'
+import { db } from '../../src/lib/db'
 
 /**
  * These tests describe the grant-based model introduced for finding #10.
@@ -53,7 +55,8 @@ function mockStore(seed: Record<string, any[]> = {}) {
           (row) =>
             !(
               (where?.fileUrl === undefined || row.fileUrl === where.fileUrl) &&
-              (where?.userId === undefined || row.userId === where.userId)
+              (where?.userId === undefined || row.userId === where.userId) &&
+              (where?.messageId === undefined || row.messageId === where.messageId)
             ),
         )
         tables.fileAccess.length = 0
@@ -254,4 +257,60 @@ test('grants are idempotent', async () => {
   await grantFileAccess(file.url, 'friend', 'message_recipient', {}, store)
   await grantFileAccess(file.url, 'friend', 'message_recipient', {}, store)
   assert.equal(store.__tables.fileAccess.length, 1)
+})
+
+test('the CommonJS core (used by socket-server.js) issues the same grants as the app facade', async () => {
+  // Finding #10 follow-up: socket-sent attachments skipped grant creation, so a
+  // recipient could see the file in the message but got 403 on download. The
+  // socket server imports `file-access.cjs` directly; both paths must behave
+  // identically, including the group fan-out.
+  const store = mockStore({
+    groupMember: [
+      { groupId: 'g1', userId: 'member-a' },
+      { groupId: 'g1', userId: 'member-b' },
+    ],
+  })
+  await core.grantMessageFileAccess(
+    { id: 'm1', fileUrl: file.url, senderId: 'owner', receiverId: 'friend', groupId: null },
+    store,
+  )
+  assert.equal(await core.canDownloadFile('friend', file, store), true)
+  assert.equal(await core.canDownloadFile('stranger', file, store), false)
+
+  await core.grantMessageFileAccess(
+    { id: 'm2', fileUrl: file.url, senderId: 'owner', receiverId: null, groupId: 'g1' },
+    store,
+  )
+  assert.equal(await core.canDownloadFile('member-a', file, store), true)
+  assert.equal(await core.canDownloadFile('member-b', file, store), true)
+  assert.equal(await core.canDownloadFile('outsider', file, store), false)
+})
+
+test('revoking a message withdraws only the grants that message created', async () => {
+  const store = mockStore()
+  // The same upload is attached to two messages: one DM and one forwarded copy.
+  await grantMessageFileAccess({ id: 'm-dm', fileUrl: file.url, senderId: 'owner', receiverId: 'friend' }, store)
+  await grantMessageFileAccess({ id: 'm-fwd', fileUrl: file.url, senderId: 'owner', receiverId: 'other' }, store)
+  assert.equal(await canDownloadFile('friend', file, store), true)
+  assert.equal(await canDownloadFile('other', file, store), true)
+
+  await core.revokeMessageGrants({ id: 'm-dm' }, store)
+  assert.equal(await canDownloadFile('friend', file, store), false, 'the deleted message no longer shares the file')
+  assert.equal(await canDownloadFile('other', file, store), true, 'the other message still shares it')
+})
+
+test('the core refuses to run without a configured store instead of guessing a backend', async () => {
+  // Guards finding #8's rule: never silently pick a database. A process that
+  // has not registered a provider must fail loudly rather than fall back.
+  // (`file-access.ts` registers the app handle at import time, so clear it and
+  // restore it afterwards to keep the suite order-independent.)
+  core.setStoreProvider(null as any)
+  try {
+    await assert.rejects(
+      async () => core.grantFileAccess('/api/files/x', 'u', 'owner', {}, null as any),
+      /no database store configured/,
+    )
+  } finally {
+    core.setStoreProvider(() => db)
+  }
 })

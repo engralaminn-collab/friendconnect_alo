@@ -282,10 +282,32 @@ function delegateKey(modelName) {
   return modelName[0].toLowerCase() + modelName.slice(1)
 }
 
-const runtimeModels = runtimeSource ? parseRuntimeModels(runtimeSource) : null
+// The runtime's model map is generated now, so read it from the generated
+// metadata rather than parsing a hand-maintained literal out of db-runtime.js.
+// If the generated file is missing or stale, the `--check` runs of the three
+// generators (invoked by `npm run schema:check` before this script) report it;
+// here we only need the effective model list.
+let runtimeModels = null
+try {
+  const { createRequire } = await import('node:module')
+  const requireFromRoot = createRequire(new URL('../src/lib/db-runtime.js', import.meta.url))
+  const metadata = requireFromRoot('./schema-metadata.cjs')
+  runtimeModels = metadata.MODELS
+  if (!runtimeModels || !Object.keys(runtimeModels).length) {
+    fail('runtime', 'schema-metadata.cjs exports no MODELS map')
+    runtimeModels = null
+  }
+} catch (error) {
+  // Fall back to the textual parser for older checkouts that still carry a
+  // literal MODELS block; report clearly if neither exists.
+  runtimeModels = runtimeSource ? parseRuntimeModels(runtimeSource) : null
+  if (!runtimeModels) {
+    fail('runtime', `could not read the generated model map: ${error.message}`)
+  }
+}
 
 if (!runtimeModels) {
-  fail('runtime', 'could not locate the MODELS map in db-runtime.js')
+  // already reported above
 } else {
   for (const name of canonicalNames) {
     const key = delegateKey(name)

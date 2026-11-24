@@ -2,11 +2,15 @@
 # Run chat-service and verify the realtime flow end-to-end in one shot.
 set +e
 
-pkill -f "bun.*chat-service" 2>/dev/null
+# Resolve paths from this script rather than a hardcoded developer checkout.
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
+
+pkill -f "chat-service" 2>/dev/null
 pkill -f "supervise-chat" 2>/dev/null
 sleep 1
 
-setsid /home/z/my-project/scripts/supervise-chat.sh > /tmp/chat-service.log 2>&1 < /dev/null &
+setsid "$REPO_ROOT/scripts/supervise-chat.sh" > /tmp/chat-service.log 2>&1 < /dev/null &
 disown
 
 # wait for chat-service

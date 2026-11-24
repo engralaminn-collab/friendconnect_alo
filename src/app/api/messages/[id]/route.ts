@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/session"
 import { db } from "@/lib/db"
+import { revokeMessageGrants } from "@/lib/file-access"
 
 // Edit a message
 export async function PATCH(req: Request, { params }: { params: Promise<{ id: string }> }) {
@@ -18,7 +19,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       sender: { select: { id: true, username: true, name: true, avatarUrl: true } },
       attachments: true,
       reactions: { include: { user: { select: { id: true, username: true } } } },
-      reads: { select: { userId: true, readAt: true } },
+      // NOTE: there is no per-message read receipt relation. `reads` was selected
+      // here against a `MessageRead` model that exists in no schema and is never
+      // written, so it could only fail or return undefined. Read state is tracked
+      // with `Message.status`/`seenAt` (per conversation) instead.
     },
   })
   return NextResponse.json({ message: updated })
@@ -50,6 +54,9 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
       where: { id: (await params).id },
       data: { deletedFor: "everyone", content: "", fileUrl: null, fileName: null, fileSize: null, mimeType: null },
     })
+    // Withdraw the attachment: delete only the grants this message created so
+    // the same upload stays reachable from any other thread that shares it.
+    await revokeMessageGrants({ id: (await params).id })
     return NextResponse.json({ ok: true, deletedForAll: true })
   }
 

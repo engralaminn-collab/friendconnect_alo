@@ -81,7 +81,9 @@ export async function getSessionUser(): Promise<CurrentUser | null> {
 //
 // `Session.token` is the column the realtime server authenticates against
 // (NOT NULL + UNIQUE), so it must always be written. `sessionToken` is the
-// legacy column kept for schema compatibility.
+// legacy column NextAuth-era rows were keyed by and is also NOT NULL in the
+// canonical schema, so both are populated with the same value (see
+// `ensureSessionRow` in auth.ts, which does the same for the NextAuth path).
 export async function createSession(userId: string, opts?: { userAgent?: string; ip?: string }): Promise<string> {
   const crypto = require("crypto")
   const token = crypto.randomBytes(32).toString("hex")
@@ -89,6 +91,7 @@ export async function createSession(userId: string, opts?: { userAgent?: string;
   await db.session.create({
     data: {
       token,
+      sessionToken: token,
       userId,
       expiresAt,
       userAgent: opts?.userAgent || null,

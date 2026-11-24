@@ -205,11 +205,14 @@ export function Composer({
           onKeyDown={handleKeyDown}
           rows={1}
           placeholder="Type a message…"
+          data-testid="chat-composer-input"
           className="flex-1 resize-none bg-muted rounded-2xl px-4 py-2.5 text-sm outline-none focus:ring-2 focus:ring-emerald-500/40 max-h-40"
         />
 
         <Button
           onClick={handleSend}
+          data-testid="chat-send"
+          aria-label="Send message"
           disabled={!text.trim() && pendingAttachments.length === 0}
           className="rounded-full shrink-0 bg-emerald-500 hover:bg-emerald-600 text-white"
           size="icon"

@@ -36,48 +36,77 @@ export DATABASE_URL
 echo "[1/6] Installing dependencies…"
 npm ci --no-audit --no-fund
 
-echo "[2/6] Selecting Prisma schema…"
-# prisma/schema.prisma is the SQLite variant. For MySQL the tracked source of
-# truth is schema.mysql.prisma, which has to be copied over schema.prisma before
-# generate/migrate — otherwise `prisma migrate deploy` runs the SQLite schema
-# against a MySQL database (and Prisma errors, or worse, applies the wrong DDL).
-# scripts/production-install.sh already does this; deploy.sh did not.
+echo "[2/7] Verifying generated schemas…"
+# prisma/schema.prisma is the single editable source of truth; the provider
+# variants, the runtime metadata, the SQLite DDL and the MySQL migration are all
+# generated from it. Refuse to deploy if any of them is stale — that is how a
+# deployment ends up running different DDL than the code expects.
+#
+# Previously this step copied schema.mysql.prisma OVER schema.prisma. That
+# destroyed the canonical file in the working tree: the next schema edit went to
+# the wrong file, and the copy was never restored on failure. Prisma accepts an
+# explicit --schema, so no copy is needed.
+npm run schema:check
+
 if [[ "$DATABASE_URL" == mysql://* || "$DATABASE_URL" == mariadb://* ]]; then
-  SCHEMA_BACKUP=""
-  if [ -f prisma/schema.prisma ] && ! grep -q 'provider = "mysql"' prisma/schema.prisma; then
-    SCHEMA_BACKUP="prisma/.schema.prisma.predeploy.bak"
-    cp prisma/schema.prisma "$SCHEMA_BACKUP"
-    echo "  Backed up SQLite schema -> $SCHEMA_BACKUP"
-  fi
-  cp prisma/schema.mysql.prisma prisma/schema.prisma
-  echo "  Using prisma/schema.mysql.prisma (MySQL)"
-  PRISMA_SCHEMA="prisma/schema.prisma"
+  PRISMA_SCHEMA="prisma/schema.mysql.prisma"
+  echo "  MySQL → $PRISMA_SCHEMA (canonical schema.prisma left untouched)"
 else
-  echo "  Using prisma/schema.sqlite.prisma (SQLite)"
   PRISMA_SCHEMA="prisma/schema.sqlite.prisma"
+  echo "  SQLite → $PRISMA_SCHEMA"
 fi
 npx prisma generate --schema "$PRISMA_SCHEMA"
 
-echo "[3/6] Database migrations…"
+echo "[3/7] Database migrations…"
 if [[ "$DATABASE_URL" == mysql://* || "$DATABASE_URL" == mariadb://* ]]; then
+  # Back up before touching the schema. A migration that cannot be rolled back is
+  # still recoverable if there is a dump, and this is the only step that writes
+  # to production data.
+  BACKUP_DIR="${BACKUP_DIR:-$APP_DIR/backups}"
+  mkdir -p "$BACKUP_DIR"
+  STAMP="$(date +%Y%m%d-%H%M%S)"
+  if command -v mysqldump >/dev/null 2>&1; then
+    # Parse the URL without printing credentials. The helper exists because
+    # inlining JavaScript inside eval is unreadable and mis-quotes passwords
+    # containing quotes or dollar signs.
+    if ! . <(node scripts/lib/db-url-env.mjs); then
+      echo "FAIL: cannot parse DATABASE_URL for the backup step."
+      exit 1
+    fi
+    DUMP="$BACKUP_DIR/pre-migrate-$STAMP.sql.gz"
+    if MYSQL_PWD="$DB_PASS" mysqldump --host="$DB_HOST" --port="$DB_PORT" --user="$DB_USER" \
+        --single-transaction --quick --no-tablespaces "$DB_NAME" | gzip > "$DUMP"; then
+      echo "  ✓ database backed up → $DUMP"
+    else
+      echo "FAIL: database backup failed; refusing to migrate without one."
+      echo "      Set SKIP_DB_BACKUP=1 only if you have an external backup."
+      [[ "${SKIP_DB_BACKUP:-0}" == "1" ]] || exit 1
+      rm -f "$DUMP"
+    fi
+  else
+    echo "  WARNING: mysqldump not found; no backup taken before migrating."
+    echo "           Install the MySQL client or set SKIP_DB_BACKUP=1 if you have one."
+    [[ "${SKIP_DB_BACKUP:-0}" == "1" ]] || exit 1
+  fi
+
   # Non-destructive: only applies new files from prisma/migrations. Never resets data.
   npx prisma migrate deploy --schema "$PRISMA_SCHEMA"
 else
-  echo "  SQLite: tables are created/updated automatically on start."
+  echo "  SQLite: additive migrations run automatically on start (src/lib/db-migrations.cjs)."
 fi
 
-echo "[4/6] Building…"
+echo "[4/7] Building…"
 npm run build
 
 mkdir -p logs
 UPLOAD_DIR="$(envget UPLOAD_DIR)"
 [ -n "$UPLOAD_DIR" ] && mkdir -p "$UPLOAD_DIR"
 
-echo "[5/6] Reloading PM2…"
+echo "[5/7] Reloading PM2…"
 pm2 startOrReload ecosystem.config.cjs --update-env
 pm2 save >/dev/null
 
-echo "[6/6] Health check…"
+echo "[6/7] Health check…"
 for i in 1 2 3 4 5 6; do
   sleep 3
   APP=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${PORT}/api/health" || echo 000)

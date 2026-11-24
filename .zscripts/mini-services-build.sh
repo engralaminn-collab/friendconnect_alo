@@ -1,7 +1,9 @@
 #!/bin/bash
 
 # 配置项
-ROOT_DIR="/home/z/my-project/mini-services"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+# Derive the repo root from this script's location (finding #12).
+ROOT_DIR="${ROOT_DIR:-$(cd "$SCRIPT_DIR/../mini-services" 2>/dev/null && pwd || echo "$SCRIPT_DIR/../mini-services")}"
 DIST_DIR="/tmp/build_fullstack_$BUILD_ID/mini-services-dist"
 
 main() {

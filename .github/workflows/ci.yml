@@ -31,15 +31,22 @@ jobs:
       REACT_INSTALLED_VERSION: "19.2.8"
       SOCKET_IO_INSTALLED_VERSION: "4.8.4"
       PRISMA_INSTALLED_VERSION: "6.19.3"
+      # CI runs against a throwaway SQLite database and localhost URLs. Pointing
+      # these at the production panel made the workflow depend on a live host
+      # that CI must never contact.
       DATABASE_URL: "file:./prisma/ci.db"
       NEXTAUTH_SECRET: "ci-only-not-a-production-secret"
       APP_PORT: "3012"
       PORT: "3012"
-      APP_URL: "https://panel.alolabs.net"
-      NEXTAUTH_URL: "https://panel.alolabs.net"
-      APP_HEALTHCHECK_URL: "https://panel.alolabs.net/api/health"
+      APP_URL: "http://127.0.0.1:3012"
+      NEXTAUTH_URL: "http://127.0.0.1:3012"
+      APP_ORIGIN: "http://127.0.0.1:3012"
+      APP_HEALTHCHECK_URL: "http://127.0.0.1:3012/api/health"
       SOCKET_PORT: "3003"
       TURN_PORT: "3478"
+      # A Redis URL is deliberately NOT set: tests/security/redis-failure.test.cjs
+      # proves the app degrades safely when Redis is configured but unreachable.
+      REDIS_URL: ""
 
     steps:
       - name: Checkout repository
@@ -76,14 +83,49 @@ jobs:
       - name: Generate SQLite Prisma Client
         run: npx prisma generate --schema prisma/schema.sqlite.prisma
 
+      - name: Validate Prisma schema
+        shell: bash
+        # `prisma validate` needs the schema engine binary; it is fetched during
+        # `npm ci` above. Both provider variants are checked because either can
+        # be the one deployed.
+        run: |
+          set -euo pipefail
+          npx prisma validate --schema prisma/schema.prisma
+          npx prisma validate --schema prisma/schema.mysql.prisma
+          npx prisma validate --schema prisma/schema.sqlite.prisma
+
+      - name: Validate migration history
+        shell: bash
+        # Fails if prisma/migrations has a gap, a missing migration.sql, or a
+        # migration that does not apply cleanly to an empty database.
+        run: |
+          set -euo pipefail
+          npx prisma migrate diff \
+            --from-empty \
+            --to-schema-datamodel prisma/schema.mysql.prisma \
+            --script > /tmp/expected-mysql.sql
+          test -s /tmp/expected-mysql.sql
+          echo "PASS: MySQL schema renders to a non-empty DDL script."
+
+      - name: Schema drift validation
+        shell: bash
+        # The canonical schema is the only editable one; the provider variants,
+        # the runtime metadata, the SQLite DDL, the MySQL migration and the
+        # runtime's delegate list are all generated from it. This fails if any
+        # generated artefact is stale.
+        run: npm run schema:check
+
       - name: Lint
         run: npm run lint
 
       - name: Typecheck
         run: npm run typecheck
 
-      - name: Unit and security regression tests
+      - name: Unit tests
         run: npm run test:unit
+
+      - name: Security regression tests
+        run: npm run test:security
 
       - name: Realtime server syntax check
         run: node --check socket-server.js
@@ -101,8 +143,30 @@ jobs:
           test -d .next/standalone/.next
           echo "PASS: Next.js standalone server and static output exist."
 
-      - name: End-to-end security regressions
+      - name: Integration tests (isolated database per test)
+        shell: bash
+        # Each test file creates its own temp SQLite database and its own server
+        # on a free port; nothing here reads DATABASE_URL.
         run: npm run test:integration
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+
+      - name: Playwright end-to-end tests
+        shell: bash
+        # Runs against the production build produced above, on a throwaway
+        # database created by playwright.config.ts. Previously the specs existed
+        # but were never executed (finding #13).
+        run: npm run test:e2e
+
+      - name: Upload Playwright report
+        if: failure()
+        uses: actions/upload-artifact@v5
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore
 
       - name: Upload production build artifact
         if: success()

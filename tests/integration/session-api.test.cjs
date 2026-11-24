@@ -220,6 +220,26 @@ test('NextAuth login, private upload/download, session revocation, socket discon
   const eveMe = await (await fetch(`${base}/api/auth/me`, { headers: { cookie: cookieHeader(eve.jar) } })).json()
   const eveId = eveMe.user.id
 
+  // Direct messages are now gated by `canInteract`: a stranger's default
+  // `messagePermission` is FRIENDS, so Alice must actually be friends with Bob
+  // before she can DM him (finding #3). Previously REST messaging checked only
+  // for a BLOCKED friendship row, which nothing ever wrote, so any two accounts
+  // could message.
+  const befriend = async (requesterJar, accepterJar, accepterId, requesterId) => {
+    const requested = await fetch(`${base}/api/friends`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', cookie: cookieHeader(requesterJar) },
+      body: JSON.stringify({ action: 'request', targetId: accepterId }),
+    })
+    assert.equal(requested.status, 200, await requested.text())
+    const accepted = await fetch(`${base}/api/friends/request/${requesterId}/accept`, {
+      method: 'POST',
+      headers: { cookie: cookieHeader(accepterJar) },
+    })
+    assert.equal(accepted.status, 200, await accepted.text())
+  }
+  await befriend(alice.jar, bob.jar, bobId, me.user.id)
+
   const postMessage = async (jar, payload) => {
     const response = await fetch(`${base}/api/messages`, {
       method: 'POST', headers: { 'content-type': 'application/json', cookie: cookieHeader(jar) },
@@ -437,7 +457,7 @@ test('NextAuth login, private upload/download, session revocation, socket discon
     method: 'POST', headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ identifier: alice.credentials.username, password: alice.credentials.password }),
   })
-  assert.equal(customLogin.status, 200)
+  assert.equal(customLogin.status, 200, `credential login failed (${customLogin.status}): ${await customLogin.clone().text()}\n${appLogs.slice(-2000)}`)
   collectCookies(customLogin, legacyJar)
   assert.ok(legacyJar.has('fc_session'))
   assert.equal((await fetch(`${base}/api/auth/me`, { headers: { cookie: cookieHeader(legacyJar) } })).status, 200)

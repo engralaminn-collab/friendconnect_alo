@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
 import { handleRouteError } from '@/lib/api-errors'
+import { grantMessageFileAccess } from '@/lib/file-access'
 
 // POST /api/messages/forward  { messageId, targets: [{ receiverId? | groupId? }] }
 export async function POST(req: NextRequest) {
@@ -42,6 +43,9 @@ export async function POST(req: NextRequest) {
             forwardedFrom: orig.senderId,
           },
         })
+        // Finding #10: a forwarded attachment is reachable by its new
+        // participants, so it needs its own grants.
+        await grantMessageFileAccess(m)
         created.push(m.id)
       } else if (t.groupId) {
         const membership = await db.groupMember.findUnique({ where: { groupId_userId: { groupId: t.groupId, userId: me.id } } })
@@ -60,6 +64,7 @@ export async function POST(req: NextRequest) {
             forwardedFrom: orig.senderId,
           },
         })
+        await grantMessageFileAccess(m)
         created.push(m.id)
       }
     }

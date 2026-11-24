@@ -44,7 +44,7 @@ export async function GET(req: NextRequest) {
         include: {
           sender: { include: { profile: true } },
           reactions: { include: { user: { select: { id: true, name: true } } } },
-          starredBy: { where: { userId: me.id }, select: { userId: true } },
+          stars: { where: { userId: me.id }, select: { userId: true } },
         },
       })
       return json({
@@ -67,7 +67,7 @@ export async function GET(req: NextRequest) {
           pinnedBy: m.pinnedBy,
           replyToId: m.replyToId,
           expiresAt: m.expiresAt?.toISOString() ?? null,
-          starred: m.starredBy.length > 0,
+          starred: (m.stars?.length ?? 0) > 0,
           reactions: m.reactions.map((r) => ({ emoji: r.emoji, userId: r.user.id, userName: r.user.name })),
         })),
       })
@@ -111,7 +111,7 @@ export async function GET(req: NextRequest) {
       take: q ? 100 : 50,
       include: {
         reactions: { include: { user: { select: { id: true, name: true } } } },
-        starredBy: { where: { userId: me.id }, select: { userId: true } },
+        stars: { where: { userId: me.id }, select: { userId: true } },
       },
     })
     // filter out expired disappearing messages + not-yet-due scheduled messages in JS
@@ -144,7 +144,7 @@ export async function GET(req: NextRequest) {
         pinnedBy: m.pinnedBy,
         replyToId: m.replyToId,
         expiresAt: m.expiresAt?.toISOString() ?? null,
-        starred: m.starredBy.length > 0,
+        starred: (m.stars?.length ?? 0) > 0,
         reactions: m.reactions.map((r) => ({ emoji: r.emoji, userId: r.user.id, userName: r.user.name })),
       })),
     })

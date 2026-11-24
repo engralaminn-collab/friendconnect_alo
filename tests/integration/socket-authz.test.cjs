@@ -103,10 +103,14 @@ test('Socket.IO enforces handshake, session revocation, event authorization, and
     await prisma.profile.create({ data: { userId: id, profileVisibility: 'FRIENDS', messagePermission: 'FRIENDS', callPermission: 'FRIENDS' } })
   }
   await prisma.friendship.create({ data: { requesterId: ids.alice, receiverId: ids.bob, status: 'ACCEPTED' } })
-  await prisma.session.create({ data: { userId: ids.alice, token: tokens.alice, expiresAt: new Date(Date.now() + 60_000) } })
-  await prisma.session.create({ data: { userId: ids.bob, token: tokens.bob, expiresAt: new Date(Date.now() + 60_000) } })
-  await prisma.session.create({ data: { userId: ids.outsider, token: tokens.outsider, expiresAt: new Date(Date.now() + 60_000) } })
-  await prisma.session.create({ data: { userId: ids.outsider, token: tokens.expired, expiresAt: new Date(Date.now() - 60_000) } })
+  // Both token columns are NOT NULL in the canonical schema: `token` is what the
+  // realtime server authenticates against and `sessionToken` is the legacy
+  // column. Writing only one produced a constraint failure.
+  const sessionRow = (userId, token, expiresAt) => ({ userId, token, sessionToken: token, expiresAt })
+  await prisma.session.create({ data: sessionRow(ids.alice, tokens.alice, new Date(Date.now() + 60_000)) })
+  await prisma.session.create({ data: sessionRow(ids.bob, tokens.bob, new Date(Date.now() + 60_000)) })
+  await prisma.session.create({ data: sessionRow(ids.outsider, tokens.outsider, new Date(Date.now() + 60_000)) })
+  await prisma.session.create({ data: sessionRow(ids.outsider, tokens.expired, new Date(Date.now() - 60_000)) })
   const message = await prisma.message.create({
     data: { senderId: ids.alice, receiverId: ids.bob, content: 'private test', status: 'SENT' },
   })

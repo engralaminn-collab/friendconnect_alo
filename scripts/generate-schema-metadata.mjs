@@ -191,7 +191,9 @@ function buildMetadata(models) {
     const columns = Object.values(model.fields)
       .filter((field) => SCALARS.has(field.type))
       .map((field) => field.name)
-    lines.push(`EXPECTED_COLUMNS[${js(model.name)}] = { table: ${js(model.table)}, columns: ${JSON.stringify(columns)} }`)
+    // Keyed by delegate name (`user`), matching MODELS, so callers can look a
+    // model up the same way in both maps.
+    lines.push(`EXPECTED_COLUMNS[${js(delegateKey(model.name))}] = { table: ${js(model.table)}, columns: ${JSON.stringify(columns)} }`)
   }
   lines.push('')
   lines.push('module.exports = { MODELS, EXPECTED_COLUMNS, cuid }')
@@ -229,6 +231,31 @@ function buildRelations(models) {
     }
   }
 
+  // One-to-one back references: `Profile.userId` is the owning side, so
+  // `User.profile` is `{ from: 'id', to: 'userId' }`. An unnamed scalar back
+  // reference is unambiguous when the target has exactly one scalar field
+  // pointing back at this model.
+  for (const model of Object.values(models)) {
+    for (const [relName, rel] of Object.entries(relations[model.name])) {
+      if (rel.kind !== 'one') continue
+      if (rel.from !== null) continue // already the owning side
+      if (rel.relationName) continue // handled by name below
+      const candidates = Object.values(models[rel.model].fields).filter(
+        (field) => SCALARS.has(field.type) && /_id$|[a-z]Id$/.test(field.name) === false && false,
+      )
+      void candidates
+      const backPointers = Object.entries(models[rel.model].fields).filter(
+        ([, field]) =>
+          SCALARS.has(field.type) &&
+          field.name === `${model.name[0].toLowerCase()}${model.name.slice(1)}Id`,
+      )
+      if (backPointers.length === 1) {
+        rel.from = 'id'
+        rel.to = backPointers[0][0]
+      }
+    }
+  }
+
   // Fill join columns from the owning (non-list) side of each relation.
   for (const model of Object.values(models)) {
     for (const field of Object.values(model.fields)) {
@@ -243,15 +270,22 @@ function buildRelations(models) {
       own.from = localCols[0]
       own.to = foreignCols[0]
 
-      // Mirror onto the opposite list field.
+      // Mirror onto the opposite side. It can be a list (one-to-many) or a
+      // scalar (one-to-one, e.g. `User.profile`), and it is identified by the
+      // *relation name* when Prisma declares one — matching on "any unvisited
+      // opposite field" conflated several relations between the same two models
+      // (User -> Group has both `ownedGroups` and `groupMemberships`).
       const relationName = own.relationName
-      const back = relations[field.type]?.['']
-      void back
       for (const [backName, backRel] of Object.entries(relations[field.type] ?? {})) {
         if (backRel.model !== model.name) continue
-        if (backRel.kind !== 'many') continue
         if (backRel.from !== null || backRel.to !== null) continue
-        if (relationName && backRel.relationName && relationName !== backRel.relationName) continue
+        if (relationName) {
+          if (backRel.relationName !== relationName) continue
+        } else if (backRel.kind !== 'many') {
+          // Without a relation name, only a list can be the unambiguous back
+          // reference; a scalar one-to-one needs a declared name.
+          continue
+        }
         relations[field.type][backName].from = foreignCols[0]
         relations[field.type][backName].to = localCols[0]
       }
@@ -284,6 +318,20 @@ for (const [modelName, fields] of Object.entries(relations)) {
     }
   }
   relationLines.push(`  ${js(delegateKey(modelName))}: ${JSON.stringify(resolved, null, 2).replace(/\n/g, '\n  ')},`)
+  // Persist the resolution. The loop below used to copy from `RELATIONS`, which
+  // is the *filtered* map, so relations whose join columns were resolved by the
+  // back-reference pass (one-to-one, e.g. `User.profile`) never reached the
+  // runtime and `include` returned nothing for them.
+  models[modelName].relations = {}
+  for (const [fieldName, rel] of Object.entries(fields)) {
+    if (rel.from === null || rel.to === null) continue
+    models[modelName].relations[fieldName] = {
+      kind: rel.kind,
+      model: delegateKey(rel.model),
+      from: rel.from,
+      to: rel.to,
+    }
+  }
 }
 relationLines.push('}')
 relationLines.push('')
@@ -292,7 +340,19 @@ relationLines.push('  if (MODELS[key]) MODELS[key].relations = rels')
 relationLines.push('}')
 relationLines.push('')
 
-output = output.replace('module.exports = { MODELS, cuid }\n', relationLines.join('\n') + '\nmodule.exports = { MODELS, EXPECTED_COLUMNS, RELATIONS, cuid }\n')
+// Anchor on the export line the builder actually emits. This previously searched
+// for the pre-EXPECTED_COLUMNS spelling, so the replace silently did nothing and
+// `MODELS[key].relations` was never populated — every `include:` in the app
+// returned nothing, including the socket handshake's user lookup.
+const EXPORT_MARKER = 'module.exports = { MODELS, EXPECTED_COLUMNS, cuid }\n'
+if (!output.includes(EXPORT_MARKER)) {
+  console.error('FAIL: cannot find the module.exports line to splice relations into.')
+  process.exit(1)
+}
+output = output.replace(
+  EXPORT_MARKER,
+  relationLines.join('\n') + '\nmodule.exports = { MODELS, EXPECTED_COLUMNS, RELATIONS, cuid }\n',
+)
 
 const checkOnly = process.argv.includes('--check')
 const current = existsSync(OUTPUT) ? readFileSync(OUTPUT, 'utf8') : null

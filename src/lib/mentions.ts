@@ -1,5 +1,9 @@
 // Parse @username mentions from message text.
 // Returns the text with mentions highlighted + list of mentioned usernames.
+//
+// STATUS: not wired up. ChatView renders plain text today. Kept because it is a
+// correct, tested-by-inspection helper that the mention feature will need; do not
+// read its presence as evidence that mentions work.
 
 export interface Mention {
   username: string

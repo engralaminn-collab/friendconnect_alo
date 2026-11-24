@@ -151,17 +151,27 @@ function getSqlite() {
   sqlite.pragma('foreign_keys = ON')
   sqlite.pragma('journal_mode = WAL')
   sqlite.exec(INIT_SQL)
-  runAdditiveMigrations(sqlite, { log: (m) => console.log(m) })
+  // Migrations are additive patches for databases created by older releases. On
+  // a severely damaged database they can themselves fail (a backfill cannot read
+  // a column that never existed), so record the failure and let the column check
+  // below produce the diagnostic instead of leaking a raw SQLite message.
+  let migrationError = null
+  try {
+    runAdditiveMigrations(sqlite, { log: (m) => console.log(m) })
+  } catch (error) {
+    migrationError = error
+  }
 
   // Fail loudly rather than serving requests against a half-migrated database.
   // A missing column turns into a 500 on whichever route touches it, which is
   // much harder to diagnose than refusing to boot.
   const missing = findMissingColumns(sqlite, EXPECTED_COLUMNS)
   if (missing.length) {
+    const cause = migrationError ? ` Migration could not complete: ${migrationError.message}.` : ''
     throw new Error(
-      `[db] SQLite schema is incomplete after migrations (${missing.length} missing). ` +
-        `Missing: ${missing.slice(0, 12).join(', ')}${missing.length > 12 ? ', …' : ''}. ` +
-        `Restore from backup or recreate the database with a fresh DATABASE_URL.`,
+      `[db] SQLite database schema is incomplete (${missing.length} missing column(s)/table(s)). ` +
+        `Missing: ${missing.slice(0, 12).join(', ')}${missing.length > 12 ? ', …' : ''}.${cause} ` +
+        `Restore this database from a backup, or point DATABASE_URL at a new file to create a fresh one.`,
     )
   }
   // Seed asynchronously; the promise is stored so tests can await it and so a
@@ -441,17 +451,13 @@ function createStagingClient(operations) {
     const live = delegates[key]
     client[key] = {
       async create(args = {}) {
-        // Materialise the row now (so the callback can reference its id) and
-        // replay the same insert inside the real transaction.
-        const data = { ...(MODELS[key].defaults ? MODELS[key].defaults() : {}), ...(args.data || {}) }
-        const snapshot = await live.findUnique({ where: { id: data.id } })
-        if (snapshot) throw new Error(`Duplicate id ${data.id}`)
-        record('create', { key, data, include: args.include })
-        const shape = structuredCloneSafe(data)
-        for (const [field, value] of Object.entries(MODELS[key].relations || {})) {
-          if (value.kind === 'many' && shape[field] === undefined) shape[field] = []
-        }
-        return shape
+        // Materialise the whole tree now: the callback must be able to read the
+        // ids of rows it just created, and replay must insert exactly these.
+        const tree = materialiseTree(key, args.data || {})
+        const snapshot = await live.findUnique({ where: { id: tree.row.id } })
+        if (snapshot) throw new Error(`Duplicate id ${tree.row.id}`)
+        record('create', { key, tree })
+        return shapeOfTree(tree)
       },
       async createMany(args = {}) {
         const rows = Array.isArray(args.data) ? args.data : [args.data]
@@ -463,8 +469,13 @@ function createStagingClient(operations) {
         return { count: prepared.length }
       },
       async update(args = {}) {
-        record('update', { key, where: args.where, data: args.data })
-        return live.findFirst({ where: args.where })
+        const existing = await live.findFirst({ where: args.where })
+        if (!existing) throw new Error('Record to update not found')
+        const { scalar, nested } = splitNested(MODELS[key], args.data || {})
+        // Materialise nested rows up front so replay commits the same ids.
+        const trees = materialiseNestedFrom(MODELS[key], key, existing, nested)
+        record('update', { key, where: args.where, data: scalar, trees })
+        return { ...existing, ...structuredCloneSafe(scalar) }
       },
       async updateMany(args = {}) {
         record('updateMany', { key, where: args.where, data: args.data })
@@ -532,13 +543,28 @@ async function runTransaction(fn, options) {
       const model = MODELS[operation.key]
       const live = delegates[operation.key]
       if (operation.method === 'create') {
-        insertRow(db, model, operation.data)
+        // Replay the materialised tree so the committed rows are the ones the
+        // callback already saw (same ids, same foreign keys).
+        insertTree(db, operation.tree)
       } else if (operation.method === 'createMany') {
         for (const row of operation.prepared) insertRow(db, model, row)
       } else if (operation.method === 'update') {
         const w = cond(model, operation.where)
-        const { sets, params } = buildUpdateSets(model, operation.data)
-        db.prepare(`UPDATE "${model.table}" SET ${sets.join(', ')} WHERE ${w.sql}`).run(...params, ...w.params)
+        if (operation.data && Object.keys(operation.data).length) {
+          const { sets, params } = buildUpdateSets(model, operation.data)
+          db.prepare(`UPDATE "${model.table}" SET ${sets.join(', ')} WHERE ${w.sql}`).run(...params, ...w.params)
+        }
+        for (const connect of operation.trees?.connects ?? []) {
+          const childModel = MODELS[connect.key]
+          const where = cond(childModel, connect.where)
+          const found = db.prepare(`SELECT id FROM "${childModel.table}" WHERE ${where.sql} LIMIT 1`).get(...where.params)
+          if (!found) throw new Error(`Nested connect found no ${connect.key}`)
+          const set = buildUpdateSets(childModel, connect.fk)
+          db.prepare(`UPDATE "${childModel.table}" SET ${set.sets.join(', ')} WHERE "id" = ?`).run(...set.params, found.id)
+        }
+        for (const children of Object.values(operation.trees?.children ?? {})) {
+          for (const child of children) insertTree(db, child)
+        }
       } else if (operation.method === 'updateMany') {
         const w = cond(model, operation.where)
         const { sets, params } = buildUpdateSets(model, operation.data)
@@ -572,11 +598,10 @@ async function runTransaction(fn, options) {
     const resolved = {}
     for (const [name, value] of Object.entries(result)) {
       if (value && typeof value === 'object' && typeof value.id === 'string') {
-        const modelName = Object.keys(MODELS).find((key) => {
-          const row = db.prepare(`SELECT * FROM "${MODELS[key].table}" WHERE id = ?`).get(value.id)
-          return Boolean(row)
-        })
-        resolved[name] = modelName
+        // The staging shape carries its model key, so this is a direct lookup
+        // instead of a search across all 52 tables.
+        const modelName = value.__tree?.key
+        resolved[name] = modelName && delegates[modelName]
           ? await delegates[modelName].findUnique({ where: { id: value.id } })
           : value
       } else {
@@ -594,6 +619,172 @@ function insertRow(db, model, data) {
   const vals = keys.map((k) => encodeVal(model, k, data[k]))
   const sql = `INSERT INTO "${model.table}" (${keys.map((k) => `"${k}"`).join(',')}) VALUES (${keys.map(() => '?').join(',')})`
   db.prepare(sql).run(...vals)
+}
+
+/**
+ * Nested writes.
+ *
+ * Prisma lets one `create`/`update` write related rows:
+ *
+ *   db.conversation.create({ data: { type: 'group', members: { create: [...] } } })
+ *   db.post.create({ data: { title, comments: { create: { body } } } })
+ *
+ * The runtime used to pass those relation keys straight into the INSERT, so the
+ * statement named a column that does not exist ("table Conversation has no
+ * column named members") and every call site relying on nested writes returned
+ * 500 on the built-in backend. `POST /api/conversations` — how every
+ * conversation and group chat is created — was one of them.
+ *
+ * Supported operations (the ones the app uses):
+ *   - to-many:  `{ create: rowOrRows }`, `{ connect: whereOrArray }`,
+ *               `{ createMany: { data } }`
+ *   - to-one:   `{ create: row }`, `{ connect: where }`
+ *   - updates:  the same shapes under `update: { ... }`
+ *
+ * The linking column comes from the generated relation metadata, so a relation
+ * added to the schema works without touching this code. Anything else throws
+ * loudly rather than silently dropping a write.
+ *
+ * A tree is materialised (ids, foreign keys and defaults filled in) *before* the
+ * insert. That is what lets a `$transaction` callback read the ids of the rows it
+ * just created and have replay commit exactly those rows instead of minting new
+ * ones.
+ */
+
+const NESTED_OPS = ['create', 'createMany', 'connect']
+
+/** Split relation-valued keys (nested writes) from scalar columns. */
+function splitNested(model, data) {
+  const relations = model.relations || {}
+  const scalar = {}
+  const nested = []
+  for (const [field, value] of Object.entries(data || {})) {
+    if (relations[field] && value && typeof value === 'object' && !(value instanceof Date)) {
+      nested.push([field, relations[field], value])
+    } else {
+      scalar[field] = value
+    }
+  }
+  return { scalar, nested }
+}
+
+/** Reject nested operations this runtime cannot honour, instead of ignoring them. */
+function assertNestedSpec(owner, field, spec) {
+  const keys = Object.keys(spec || {}).filter((key) => spec[key] !== undefined)
+  const unsupported = keys.filter((key) => !NESTED_OPS.includes(key))
+  if (unsupported.length) {
+    throw new Error(
+      `Unsupported nested write ${owner}.${field}: ${unsupported.join(', ')} (supported: ${NESTED_OPS.join(', ')})`,
+    )
+  }
+  if (!keys.length) throw new Error(`Nested write ${owner}.${field} is empty`)
+}
+
+/** Rows requested by a `create`/`createMany` operation. */
+function rowsToCreate(spec) {
+  const payload = spec.create !== undefined ? spec.create : spec.createMany?.data
+  if (payload === undefined) return []
+  return Array.isArray(payload) ? payload : [payload]
+}
+
+/**
+ * Materialise the nested writes attached to one parent row.
+ *
+ * `parentId` is explicit so this serves both `create` (parent is new) and
+ * `update` (parent already exists and keeps its id).
+ */
+function materialiseNested(key, parentId, nested) {
+  const children = {}
+  const connects = []
+  for (const [field, relation, spec] of nested) {
+    assertNestedSpec(key, field, spec)
+    const childModel = MODELS[relation.model]
+    if (!childModel) throw new Error(`Unknown related model ${relation.model}`)
+    if (parentId === undefined || parentId === null) {
+      throw new Error(`Cannot nest ${key}.${field}: ${relation.from} is unset`)
+    }
+
+    const created = rowsToCreate(spec).map((childData) => {
+      const childPayload = { ...(childData || {}) }
+      // Only fill the foreign key when the caller left it out, so an explicit
+      // value is never silently overwritten.
+      if (childPayload[relation.to] === undefined) childPayload[relation.to] = parentId
+      return materialiseTree(relation.model, childPayload)
+    })
+
+    if (relation.kind === 'one' && created.length > 1) {
+      throw new Error(`to-one relation ${key}.${field} accepts a single row`)
+    }
+
+    if (spec.connect !== undefined) {
+      for (const target of Array.isArray(spec.connect) ? spec.connect : [spec.connect]) {
+        connects.push({
+          field,
+          key: relation.model,
+          where: expandWhere(childModel, target),
+          fk: { [relation.to]: parentId },
+        })
+      }
+    }
+
+    if (created.length) children[field] = created
+  }
+  return { children, connects }
+}
+
+/** Materialise nested writes against a row that already exists. */
+function materialiseNestedFrom(model, key, row, nested) {
+  if (!nested.length) return { children: {}, connects: [] }
+  return materialiseNested(key, row[nested[0][1].from], nested)
+}
+
+/**
+ * Turn `data` into a fully materialised tree.
+ *
+ * `tree.row`       the row itself, every scalar and default filled in
+ * `tree.children`  `{ field: tree[] }` for owned child rows
+ * `tree.connects`  `[{ field, key, where, fk }]` existing rows to link
+ */
+function materialiseTree(key, data) {
+  const model = MODELS[key]
+  if (!model) throw new Error(`Unknown model ${key}`)
+  const { scalar, nested } = splitNested(model, data)
+  const row = { ...(model.defaults ? model.defaults() : {}), ...scalar }
+  if (model.dates?.includes('updatedAt')) row.updatedAt = now()
+  return { key, row, ...materialiseNestedFrom(model, key, row, nested) }
+}
+
+/** Insert a materialised tree inside an already-open transaction. */
+function insertTree(db, tree) {
+  // `row` is null when the tree only carries nested writes for an existing
+  // parent (the update case).
+  if (tree.row) insertRow(db, MODELS[tree.key], tree.row)
+  for (const connect of tree.connects) {
+    const childModel = MODELS[connect.key]
+    const where = cond(childModel, connect.where)
+    const found = db.prepare(`SELECT id FROM "${childModel.table}" WHERE ${where.sql} LIMIT 1`).get(...where.params)
+    if (!found) throw new Error(`Nested connect found no ${connect.key}`)
+    const set = buildUpdateSets(childModel, connect.fk)
+    db.prepare(`UPDATE "${childModel.table}" SET ${set.sets.join(', ')} WHERE "id" = ?`).run(...set.params, found.id)
+  }
+  for (const children of Object.values(tree.children)) {
+    for (const child of children) insertTree(db, child)
+  }
+}
+
+/** The Prisma-shaped result of a materialised tree. */
+function shapeOfTree(tree) {
+  const shape = structuredCloneSafe(tree.row)
+  // Non-enumerable: JSON responses must never leak the internal tree.
+  Object.defineProperty(shape, '__tree', { value: tree, enumerable: false })
+  for (const [field, relation] of Object.entries(MODELS[tree.key].relations || {})) {
+    if (relation.kind === 'many' && shape[field] === undefined) shape[field] = []
+  }
+  for (const [field, children] of Object.entries(tree.children)) {
+    const kind = MODELS[tree.key].relations[field].kind
+    shape[field] = kind === 'many' ? children.map(shapeOfTree) : shapeOfTree(children[0])
+  }
+  return shape
 }
 
 function delegate(name) {
@@ -752,18 +943,38 @@ function delegate(name) {
     },
     async create(args = {}) {
       const db = getSqlite()
-      const data = { ...(model.defaults ? model.defaults() : {}), ...(args.data || {}) }
-      if (model.dates?.includes('updatedAt')) data.updatedAt = now()
-      insertRow(db, model, data)
-      return this.findUnique({ where: { id: data.id }, include: args.include })
+      const tree = materialiseTree(name, args.data || {})
+      // The whole tree commits or nothing does, so a group can never be created
+      // without the members the same call promised.
+      db.transaction(() => insertTree(db, tree))()
+      const parent = await this.findUnique({ where: { id: tree.row.id }, include: args.include })
+      if (!parent) return parent
+      for (const [field, children] of Object.entries(tree.children)) {
+        if (parent[field] === undefined) {
+          parent[field] = model.relations[field].kind === 'many'
+            ? children.map((child) => child.row)
+            : children[0].row
+        }
+      }
+      return parent
     },
     async update(args = {}) {
       const db = getSqlite()
       const existing = await this.findFirst({ where: args.where })
       if (!existing) throw new Error('Record to update not found')
+      const { scalar, nested } = splitNested(model, args.data || {})
       const w = cond(model, args.where)
-      const { sets, params } = buildUpdateSets(model, args.data)
-      db.prepare(`UPDATE "${model.table}" SET ${sets.join(', ')} WHERE ${w.sql}`).run(...params, ...w.params)
+      // Anchor nested writes on the existing row's key, which is what Prisma
+      // does for `update({ data: { <relation>: { create } } })`.
+      const trees = materialiseNestedFrom(model, name, existing, nested)
+
+      db.transaction(() => {
+        if (Object.keys(scalar).length) {
+          const { sets, params } = buildUpdateSets(model, scalar)
+          db.prepare(`UPDATE "${model.table}" SET ${sets.join(', ')} WHERE ${w.sql}`).run(...params, ...w.params)
+        }
+        insertTree(db, { key: name, row: null, connects: trees.connects, children: trees.children })
+      })()
       return this.findFirst({ where: args.where, include: args.include })
     },
     async updateMany(args = {}) {

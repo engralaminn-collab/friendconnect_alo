@@ -31,6 +31,12 @@ const {
   canInteract,
   eventRateLimit,
 } = require('./src/lib/socket-security.cjs')
+const fileAccess = require('./src/lib/file-access.cjs')
+
+// Finding #10: socket-sent attachments must create the same `FileAccess`
+// grants the REST route creates, otherwise the attachment the recipient just
+// received over the socket returns 403 when they open it.
+fileAccess.setStoreProvider(() => prisma)
 
 const PORT = Number(process.env.SOCKET_PORT || 3003)
 const APP_ORIGIN = process.env.APP_ORIGIN || process.env.NEXTAUTH_URL || true
@@ -278,6 +284,7 @@ io.on('connection', (socket) => {
           status: await isUserOnline(data.receiverId) ? 'DELIVERED' : 'SENT',
         },
       })
+      await fileAccess.grantMessageFileAccess(msg)
       const payload = {
         id: msg.id,
         senderId,
@@ -347,6 +354,7 @@ io.on('connection', (socket) => {
         },
         include: { sender: { include: { profile: true } } },
       })
+      await fileAccess.grantMessageFileAccess(msg)
       const payload = {
         id: msg.id,
         senderId,
@@ -451,6 +459,9 @@ io.on('connection', (socket) => {
       where: { id: messageId },
       data: { deletedFor, content: deletedFor === 'everyone' ? '' : msg.content },
     })
+    // Withdrawing an attachment revokes only the grants this message created,
+    // so the same upload stays reachable in any other thread that shares it.
+    if (deletedFor === 'everyone') await fileAccess.revokeMessageGrants(msg)
     const payload = { id: messageId, deletedFor }
     if (msg.receiverId) {
       emitToUser(msg.receiverId, 'message:deleted', payload)
