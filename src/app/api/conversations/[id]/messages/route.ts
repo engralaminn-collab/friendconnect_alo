@@ -4,6 +4,8 @@ import { db } from "@/lib/db"
 import { filterMessagesVisibleToUser } from "@/lib/ai-input"
 import { grantMessageFileAccess } from "@/lib/file-access"
 import { emitRealtimeToUsers } from "@/lib/realtime-emit"
+import { scheduleJaraReply } from "@/lib/jara-responder"
+import { JARA_ID } from "@/lib/jara"
 
 export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const me = await getCurrentUser()
@@ -123,6 +125,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     "message:new",
     msg,
   )
+
+  // This is the path the chat UI sends on. When Jara is one of the members its
+  // answer is stored in this same conversation, so it renders, paginates and
+  // notifies like any other message instead of living in a separate chatbot.
+  if (members.some((m) => m.userId === JARA_ID)) {
+    scheduleJaraReply(msg.id)
+  }
 
   return NextResponse.json({ message: msg }, { status: 201 })
 }

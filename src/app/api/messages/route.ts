@@ -5,6 +5,7 @@ import { errorJson, json } from '@/lib/serialize'
 import { filterMessagesVisibleToUser } from '@/lib/ai-input'
 import { canInteract, isJaraId } from '@/lib/socket-security.cjs'
 import { grantMessageFileAccess } from '@/lib/file-access'
+import { scheduleJaraReply } from '@/lib/jara-responder'
 import { handleRouteError } from '@/lib/api-errors'
 
 /** Reject an attachment URL the caller does not own (finding #3). */
@@ -224,6 +225,14 @@ export async function POST(req: NextRequest) {
     // Finding #10: participants get an indexed download grant instead of the
     // download endpoint scanning Message for a matching fileUrl.
     await grantMessageFileAccess(msg)
+
+    // Jara is a user, not a chatbot page: a message addressed to it is answered
+    // through this same store by the AI gateway, and the reply reaches the sender
+    // over Socket.IO. Scheduled rather than awaited so the send is never blocked
+    // by provider latency.
+    if (receiverId && isJaraId(receiverId)) {
+      scheduleJaraReply(msg.id)
+    }
 
     return json({
       message: {
