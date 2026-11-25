@@ -13,7 +13,7 @@ export async function POST(_req: Request, { params }: { params: Promise<{ id: st
     return NextResponse.json({ error: "Message not found" }, { status: 404 })
   }
   const existing = await db.messageStar.findUnique({
-    where: { userId_messageId: { userId: me.id, messageId } },
+    where: { messageId_userId: { messageId, userId: me.id } },
   })
   if (existing) {
     await db.messageStar.delete({ where: { id: existing.id } })
