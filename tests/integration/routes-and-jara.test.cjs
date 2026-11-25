@@ -246,9 +246,18 @@ test('conversation messages, attachment ownership, preferences, star/edit/delete
   assert.equal(prefJson.preference.muted, true)
 
   // Star, verify in GET /api/messages/starred, react, edit, and delete -> starred list hides deleted message!
-  assert.equal((await fetch(`${base}/api/messages/${sentMsg.id}/star`, { method: 'POST', headers: { cookie: cookieHeader(bob.jar) } })).status, 200)
+  const starRes = await fetch(`${base}/api/messages/${sentMsg.id}/star`, { method: 'POST', headers: { cookie: cookieHeader(bob.jar) } })
+  assert.equal(starRes.status, 200, `${await starRes.text()}\n${appLogs}`)
   const starred1 = await (await fetch(`${base}/api/messages/starred`, { headers: { cookie: cookieHeader(bob.jar) } })).json()
   assert.equal(starred1.starred.some((m) => m.id === sentMsg.id), true)
+  const unstarRes = await fetch(`${base}/api/messages/${sentMsg.id}/star`, { method: 'POST', headers: { cookie: cookieHeader(bob.jar) } })
+  assert.equal(unstarRes.status, 200, `${await unstarRes.clone().text()}\n${appLogs}`)
+  assert.equal((await unstarRes.json()).starred, false)
+  const unstarred = await (await fetch(`${base}/api/messages/starred`, { headers: { cookie: cookieHeader(bob.jar) } })).json()
+  assert.equal(unstarred.starred.some((m) => m.id === sentMsg.id), false)
+  const restarRes = await fetch(`${base}/api/messages/${sentMsg.id}/star`, { method: 'POST', headers: { cookie: cookieHeader(bob.jar) } })
+  assert.equal(restarRes.status, 200, `${await restarRes.clone().text()}\n${appLogs}`)
+  assert.equal((await restarRes.json()).starred, true)
 
   const reactPromise = new Promise((r) => bobSocket.once('message:reaction', r))
   const reactRes = await fetch(`${base}/api/messages/${sentMsg.id}/reactions`, {
