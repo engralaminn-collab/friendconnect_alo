@@ -90,3 +90,5 @@ playwright-report/
 test-results/
 playwright/.cache/
 e2e-run.log
+# Captured integration-test output, parsed into annotations by CI
+integration-run.log
