@@ -31,9 +31,58 @@ Server
       POST /api/jara/rollback — create rollback proposal (requires approval)
       GET  /api/jara/health — health + AI provider status
 
-Realtime (existing)
- └── Socket.IO (socket-server.js, port 3003) — auth via session token, chat:message, etc. Jara messages are HTTP-persisted but could be broadcast via socket (future). Jara does NOT need socket to chat; HTTP is reliable.
+Realtime (same infrastructure as human users)
+ └── Socket.IO (socket-server.js, port 3003) — auth via session token, `message:send`,
+     `conversation:join`, presence, typing. A socket-sent message that belongs to a
+     conversation containing Jara calls `POST /api/jara/respond` on the app (shared
+     `x-internal-secret`), the app generates the answer, stores it as a normal
+     `Message` in that conversation and fanouts it with `message:new` to every member.
 ```
+
+## Jara in the messaging system (added 2026-11-25)
+
+Jara is a participant in the ordinary message store, not a separate chatbot. The
+bridge is `src/lib/jara-responder.ts`.
+
+```
+Human sends a message
+├── POST /api/conversations/:id/messages   (the chat UI path)
+├── POST /api/messages                     (legacy DM path / API clients)
+└── Socket.IO `message:send`  ──► socket-server.js
+                                  └─► POST /api/jara/respond (x-internal-secret)
+                                        └─► replyAsJaraForMessage(messageId)
+                                              ├─ participation check (DM receiver, conversation
+                                              │   member, or group member + consent + mention)
+                                              ├─ idempotency on "sourceMessageId" (REST and
+                                              │   socket triggers cannot double-answer)
+                                              ├─ per-user rate limit (30/min)
+                                              ├─ live JaraConfig → buildJaraSystemPrompt
+                                              ├─ aiChat() through the configured provider
+                                              ├─ persist Message{senderId: JARA_ID,
+                                              │   conversationId, replyToId, metadata}
+                                              ├─ message:new fanout to the audience
+                                              ├─ Notification("Jara replied")
+                                              └─ JaraAuditLog action=ai_reply
+```
+
+Guarantees:
+
+- **Same rows, same UI.** The answer has a `conversationId`, a `replyToId` and a
+  `senderId` of Jara, so it paginates, renders, notifies, obeys delete-for-me and
+  appears in the conversation list exactly like a human message.
+- **Authorization first.** Jara only answers threads it is a member of. The
+  internal trigger cannot be used to make Jara read a conversation it is not in
+  (`reason: not_participant`), and the endpoint itself requires the internal secret.
+- **Honest inference.** With no provider configured, or a provider error, the user
+  gets a notice with `type: system` and `metadata.inference = "unavailable"`. No
+  canned answer is ever presented as model output.
+- **Groups stay private.** A group reply requires an enabled `JaraGroupConsent` row
+  *and* an explicit `@Jara`/`jara`/`জারা` mention in the message.
+- **Read receipts.** The source message is marked `SEEN` when Jara answers.
+
+Verification: `tests/integration/jara-user.test.cjs` (5 tests, real production
+build, real HTTP provider, real Socket.IO round trip). See
+`docs/JARA_MESSAGING_ACCEPTANCE.md`.
 
 ## Governance Flow (Approval Gate)
 

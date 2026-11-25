@@ -31,6 +31,8 @@ const {
   isMessageParticipant,
   canInteract,
   eventRateLimit,
+  isJaraId,
+  JARA_IDS,
 } = require('./src/lib/socket-security.cjs')
 const fileAccess = require('./src/lib/file-access.cjs')
 
@@ -59,6 +61,38 @@ function verifyInternalSecret(provided) {
   const b = Buffer.from(provided, 'utf8')
   if (a.length !== b.length) return false
   return crypto.timingSafeEqual(a, b)
+}
+
+// Jara is a real participant, so a socket-sent message addressed to it must be
+// answered exactly like one sent over REST. The AI gateway lives in the Next app
+// (TypeScript), so the realtime server asks it to produce the answer and does not
+// wait: provider latency must never delay the sender's ack.
+const APP_INTERNAL_URL = (process.env.APP_INTERNAL_URL || `http://127.0.0.1:${process.env.PORT || 3000}`).replace(/\/+$/, '')
+
+function triggerJaraReply(messageId, conversationId) {
+  if (!INTERNAL_SECRET || !messageId) return
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), 25_000)
+  fetch(`${APP_INTERNAL_URL}/api/jara/respond`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-internal-secret': INTERNAL_SECRET },
+    body: JSON.stringify({ messageId, conversationId: conversationId || null }),
+    signal: controller.signal,
+  })
+    .catch(() => {
+      // Best effort: the message is stored, and the conversation fetch shows
+      // whatever Jara managed to persist.
+    })
+    .finally(() => clearTimeout(timer))
+}
+
+/** True when the conversation has Jara as a member; used to trigger the reply. */
+async function conversationIncludesJara(conversationId) {
+  return Boolean(
+    await prisma.conversationMember
+      .findUnique({ where: { conversationId_userId: { conversationId, userId: JARA_IDS.JARA_AI } }, select: { conversationId: true } })
+      .catch(() => null),
+  )
 }
 
 const server = http.createServer((req, res) => {
@@ -408,6 +442,9 @@ io.on('connection', (socket) => {
           emitToUser(userId, 'message:new', payload)
         }
         if (typeof ack === 'function') ack({ ok: true, message: payload, tempId: data.tempId })
+        if (await conversationIncludesJara(conversationId)) {
+          triggerJaraReply(msg.id, conversationId)
+        }
         for (const peer of peers) {
           notifyUser(peer, {
             type: 'message',
@@ -476,6 +513,9 @@ io.on('connection', (socket) => {
       emitToUser(data.receiverId, 'message:new', payload)
       emitToUser(senderId, 'message:new', payload)
       if (typeof ack === 'function') ack({ ok: true, message: payload, tempId: data.tempId })
+      if (isJaraId(data.receiverId)) {
+        triggerJaraReply(msg.id, null)
+      }
       notifyUser(data.receiverId, {
         type: 'message',
         title: socket.data.user?.name || 'New message',

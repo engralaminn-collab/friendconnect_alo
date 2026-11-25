@@ -69,3 +69,50 @@ This addendum expands the review scope to Jara AI/multimodal capabilities and mu
 - Local verification: unit 55/55, typecheck/lint/build pass, integration 2/2, diff check outcome reported in `JARA_TEST_REPORT.md`; Prisma validation/generation blocked by unavailable schema-engine host. No external accounts, GPU, production database or real hardware were accessed.
 
 Read `docs/JARA_TEST_REPORT.md` for exact command outcomes and `docs/JARA_MULTIMODAL_ARCHITECTURE.md` for capability boundaries and acceptance gates. No commit, push, PR, deployment, production restart/migration, destructive DB operation, credential request, or external provider call occurred.
+
+## Jara messaging-user review addendum — 2026-11-25
+
+Branch `arena/d33d7903-friendconnect-alo` (base `dc1e3f0`, PR #20). This addendum
+covers the change that made Jara a participant in the ordinary message store
+instead of only in the separate `/api/jara/chat` screen.
+
+### Changes
+
+- Added `src/lib/jara-responder.ts`: authorization (DM receiver, conversation
+  member, or group member + consent + explicit mention), idempotency on the source
+  message id, per-user rate limit, live config → system prompt → `aiChat`,
+  persistence as a normal `Message`, `message:new` fanout, notification, read
+  receipt and `JaraAuditLog` entry.
+- `POST /api/messages` and `POST /api/conversations/:id/messages` (the chat UI
+  path) now trigger the reply after the message is stored; provider latency never
+  blocks the send.
+- `socket-server.js` `message:send` triggers the same reply through the new
+  internal `POST /api/jara/respond` route (shared `x-internal-secret`,
+  constant-time comparison). `APP_INTERNAL_URL` documents the direction.
+- Without a reachable provider the user receives an explicit `type: system`
+  notice with `metadata.inference = "unavailable"`; no canned text is presented as
+  model output.
+
+### Verification
+
+- New `tests/integration/jara-user.test.cjs`: 5 tests, real production build, real
+  HTTP Ollama-compatible provider, real Socket.IO round trip — permanent identity
+  and idempotent seeding, Bangla DM, duplicate protection, read receipt,
+  notification, honest unavailability, cross-user privacy (`not_participant`),
+  internal-secret enforcement, ordinary-user 403s, and the Super Admin
+  propose → approve → audit flow (hash/version tamper and replay refused).
+- `npm run test:integration` 26/26, `test:unit`, `test:security` (42),
+  `schema:check`, `tsc --noEmit` (0 errors), `lint`, production build: all pass.
+
+### Residuals (unchanged by this work)
+
+- No live AI provider is reachable from this environment, so answer quality is
+  unverified; the gateway path is exercised over HTTP only.
+- Jara audio/video calls remain browser STT/TTS + avatar UI; no real-time video
+  avatar, no LiveKit participation by Jara, no server-side ASR/TTS.
+- Owner-approved avatar image not supplied; governance pipeline unchanged.
+- MySQL acceptance and production deployment to `panel.alolabs.net` remain
+  `BLOCKED` (no database server, no engine download, no SSH/CI secrets, no DNS
+  access). Nothing was deployed.
+
+See `docs/JARA_MESSAGING_ACCEPTANCE.md` and `docs/JARA_ARCHITECTURE.md`.

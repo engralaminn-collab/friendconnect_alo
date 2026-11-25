@@ -7,7 +7,39 @@
 
 ---
 
-## Status board
+## Update 2026-11-25 — Jara is a messaging user, and the earlier blockers are re-checked
+
+Branch `arena/d33d7903-friendconnect-alo` (base `dc1e3f0`, PR #20). Full detail:
+`docs/JARA_MESSAGING_ACCEPTANCE.md`. This supersedes the status board below where
+the two disagree.
+
+| Area | Status (2026-11-25) | Evidence |
+|---|---|---|
+| TypeScript | **PASS** — 0 errors | `npx tsc --noEmit`, `npm run typecheck` |
+| Dependencies | **PASS** — `npm ci` from the lockfile, no peer conflicts, no `--force` | clean install |
+| Production build | **PASS** — standalone server + static output produced | `npm run build`, `Verify standalone build output` |
+| Integration tests | **PASS** — 26/26 | `npm run test:integration` |
+| Security regression | **PASS** — 42 tests | `npm run test:security` |
+| Unit tests | **PASS** | `npm run test:unit` |
+| Schema drift | **PASS** — 52 models / 52 delegates / 52 tables | `npm run schema:check` |
+| Jara permanent identity | **PASS** — exactly one `jara-ai-system-001`, idempotent across restarts | `tests/integration/jara-user.test.cjs` |
+| Jara DM messaging (real message store) | **PASS** — answer persisted, fanout over Socket.IO, notification, read receipt | same |
+| Jara Bangla text | **PASS** | same |
+| Jara provider inference | **PASS (plumbing)** / **BLOCKED (live model)** — no external provider reachable here | real HTTP provider used in tests |
+| Jara audio/video call | **PARTIAL** — browser STT/TTS and avatar call UI exist; not re-verified in this environment | `docs/JARA_ARCHITECTURE.md` |
+| Jara governance | **PASS** — propose → approve (hash/version/expiry/replay checks) → audit; ordinary users 403 | integration test |
+| Owner-approved Jara avatar | **BLOCKED** — no reference image supplied | — |
+| MySQL acceptance | **BLOCKED** — no server, no Prisma engine download | — |
+| Production deployment / domain | **BLOCKED** — no SSH, CI secrets or DNS access; nothing deployed | — |
+
+The row "Jara real-inference verification — FAIL (canned fallback)" below is
+outdated: cross-provider canned fallbacks were removed from `src/lib/ai.ts`, and
+the messaging path now reports unavailable inference explicitly instead of
+answering.
+
+---
+
+## Status board (2026-11-23, superseded where noted above)
 
 | Area | Status |
 |---|---|
