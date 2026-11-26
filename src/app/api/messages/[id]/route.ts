@@ -100,7 +100,6 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
     messageId,
     conversationId: msg.conversationId ?? null,
     deletedFor: "me",
-    deletedFor: false,
   })
   return NextResponse.json({ ok: true, scope: "self" })
 }
