@@ -27,8 +27,8 @@ jobs:
     env:
       NODE_VERSION: "22.23.4"
       NPM_VERSION: "10.9.9"
-      NEXT_INSTALLED_VERSION: "16.3.0"
-      REACT_INSTALLED_VERSION: "19.2.8"
+      NEXT_INSTALLED_VERSION: "16.4.6"
+      REACT_INSTALLED_VERSION: "19.3.1"
       SOCKET_IO_INSTALLED_VERSION: "4.8.4"
       PRISMA_INSTALLED_VERSION: "6.19.3"
       # CI runs against a throwaway SQLite database and localhost URLs. Pointing
