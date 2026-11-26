@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS `JaraAppearanceProfile` (
   `isDefault` TINYINT(1) NOT NULL DEFAULT 0,
   `isTemporary` TINYINT(1) NOT NULL DEFAULT 0,
   `expiresAt` DATETIME(3),
-  `face` VARCHAR(191) NOT NULL DEFAULT 'friendly',
+  `face` VARCHAR(191) NOT NULL DEFAULT 'realistic',
   `avatar` VARCHAR(191) NOT NULL DEFAULT 'default',
   `avatarUrl` TEXT,
   `background` VARCHAR(191) NOT NULL DEFAULT 'gradient-emerald',

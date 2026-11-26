@@ -74,7 +74,7 @@ export const JARA_DEFAULT_CONFIG: Omit<JaraConfigData, 'version' | 'isLive'> & {
   displayName: 'Jara AI',
   aiDisclosure: 'I am Jara AI, a digital human assistant. I am not a real human.',
   isEnabled: true,
-  face: 'friendly',
+  face: 'realistic',
   avatar: 'default',
   avatarUrl: null,
   background: 'gradient-emerald',

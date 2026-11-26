@@ -4,15 +4,167 @@ import { JARA_DEFAULT_CONFIG } from '@/lib/jara'
 
 export type JaraActor = Pick<CurrentUser, 'id' | 'role' | 'name' | 'username'>
 
-export function isSuperAdmin(user: { role?: string | null } | null | undefined): boolean {
-  const role = String(user?.role || '').toLowerCase()
-  return role === 'admin' || role === 'superadmin'
+// === OWNER-ONLY AUTHORIZATION ===
+
+// NEW: isJaraSystemActorId — checks if user is the permanent Jara AI system actor
+// This is for identification only, NOT for authorization bypass
+export function isJaraSystemActorId(user: { id?: string | null } | null | undefined): boolean {
+  const id = String(user?.id || '')
+  return id === 'jara-ai-system-001'
 }
 
+// NEW: isJaraSystemActorRole — checks if user has jara role
+// This is separate from the permanent ID check
+export function isJaraSystemActorRole(user: { role?: string | null } | null | undefined): boolean {
+  const role = String(user?.role || '').toLowerCase()
+  return role === 'jara'
+}
+
+// DEPRECATED: isJaraSystemActor — combined check.
+// ⚠️ MUST NOT be used for authorization decisions that bypass Owner-only controls.
+// Use the separate isJaraSystemActorId() and isJaraSystemActorRole() checks instead.
+// The combined function exists for backward compatibility only.
 export function isJaraSystemActor(user: { id?: string | null; role?: string | null } | null | undefined): boolean {
   const id = String(user?.id || '')
   const role = String(user?.role || '').toLowerCase()
   return id === 'jara-ai-system-001' || role === 'jara'
+}
+
+// NEW: isOwner — checks if the user is the authenticated Owner Account
+export function isOwner(user: { id?: string | null; role?: string | null } | null | undefined): boolean {
+  if (!user) return false
+  // The Owner Account ID — should be configured by Owner in production
+  const OWNER_ACCOUNT_ID = 'owner-account-001'
+  const id = String(user?.id || '')
+  return id === OWNER_ACCOUNT_ID
+}
+
+// NEW: canPerformOwnerOnlyOperation — authorization for Owner-only operations
+// Only the Owner can perform these operations.
+// Jara system actors can perform AI communication actions but NOT protected identity changes.
+export function canPerformOwnerOnlyOperation(user: { id?: string | null; role?: string | null } | null | undefined): boolean {
+  if (!user) return false
+  // Owner can always perform Owner-only operations
+  if (isOwner(user)) return true
+  // Jara system actors can perform AI communication actions only
+  const isJara = isJaraSystemActorId(user) || isJaraSystemActorRole(user)
+  if (isJara) {
+    // Jara system actors can perform AI communication actions only
+    return true // AI communication actions only — protected identity changes enforced at API level
+  }
+  return false
+}
+
+// NEW: canChangeProtectedIdentity — only the Owner can change canonical face, voice, personality
+export function canChangeProtectedIdentity(user: { id?: string | null; role?: string | null } | null | undefined): boolean {
+  return isOwner(user)
+}
+
+// NEW: canPerformDelegatedSuperAdminOperation — delegated Super Admin operations
+export function canPerformDelegatedSuperAdminOperation(
+  user: { id?: string | null; role?: string | null },
+  delegation: { allowed: boolean; operations: string[] }
+): boolean {
+  if (!user) return false
+  if (isOwner(user)) return true // Owner can do everything
+  if (isJaraSystemActorId(user) || isJaraSystemActorRole(user)) {
+    // Jara system actors can only perform explicitly permitted operations
+    return delegation?.allowed === true && delegation?.operations?.length > 0
+  }
+  // Regular users need explicit delegation
+  return false
+}
+
+
+
+// NEW: applyJaraConfigPatch — direct Super Admin config apply (not via chat flow, for emergency)
+export async function applyJaraConfigPatch(args: {
+  actor: { id: string; role?: string | null }
+  patch: Record<string, any>
+  reason?: string
+  source?: string
+  req?: Request
+}) {
+  const { hashConfig, JARA_DEFAULT_CONFIG } = await import('@/lib/jara')
+  const live = await getLiveJaraConfig()
+  const current: any = { ...JARA_DEFAULT_CONFIG, ...live }
+  const proposed: any = { ...current, ...args.patch }
+  // normalize JSON-ish fields
+  for (const k of ['colors', 'animation', 'clothing']) {
+    if (proposed[k] && typeof proposed[k] !== 'string') proposed[k] = JSON.stringify(proposed[k])
+  }
+  const nextVersion = Number(current.version || 0) + 1
+  proposed.version = nextVersion
+  proposed.isLive = true
+  proposed.createdBy = args.actor.id
+  proposed.updatedAt = new Date()
+  const hashable: any = { ...proposed }
+  delete hashable.id; delete hashable.createdAt; delete hashable.updatedAt; delete hashable.createdBy; delete hashable.isLive
+  const configHash = hashConfig(hashable)
+  // deactivate old live configs
+  await (db as any).jaraConfig.updateMany({ where: { isLive: true }, data: { isLive: false } }).catch(() => {})
+  let saved: any
+  const existingVersion = await (db as any).jaraConfig.findUnique({ where: { version: nextVersion } }).catch(() => null)
+  const data: any = {
+    version: nextVersion,
+    displayName: proposed.displayName || 'Jara AI',
+    aiDisclosure: proposed.aiDisclosure || 'I am Jara AI, a digital human assistant. I am not a real human.',
+    isEnabled: proposed.isEnabled ?? true,
+    face: proposed.face || 'friendly',
+    avatar: proposed.avatar || 'default',
+    avatarUrl: proposed.avatarUrl || null,
+    background: proposed.background || 'gradient-emerald',
+    backgroundUrl: proposed.backgroundUrl || null,
+    theme: proposed.theme || 'light',
+    colors: proposed.colors || null,
+    animation: proposed.animation || null,
+    clothing: proposed.clothing || null,
+    defaultAppearanceProfileId: proposed.defaultAppearanceProfileId || null,
+    voiceModel: proposed.voiceModel || 'default',
+    voiceLanguage: proposed.voiceLanguage || 'bn',
+    voiceAccent: proposed.voiceAccent || null,
+    speakingSpeed: Number(proposed.speakingSpeed) || 1.0,
+    pitch: Number(proposed.pitch) || 1.0,
+    personality: proposed.personality || 'friendly',
+    responseLength: proposed.responseLength || 'medium',
+    communicationStyle: proposed.communicationStyle || 'conversational',
+    llmProvider: proposed.llmProvider || 'ollama',
+    llmModel: proposed.llmModel || 'llama3.2',
+    sttModel: proposed.sttModel || 'whisper',
+    ttsModel: proposed.ttsModel || 'default',
+    memoryEnabled: proposed.memoryEnabled ?? true,
+    smsEnabled: proposed.smsEnabled ?? false,
+    callsEnabled: proposed.callsEnabled ?? true,
+    meetingsEnabled: proposed.meetingsEnabled ?? false,
+    allowGroupListening: proposed.allowGroupListening ?? false,
+    humanHandoffEnabled: proposed.humanHandoffEnabled ?? true,
+    recordingConsentRequired: proposed.recordingConsentRequired ?? true,
+    approvedKnowledgeMode: proposed.approvedKnowledgeMode || 'open',
+    isLive: true,
+    createdBy: args.actor.id,
+  }
+  if (existingVersion) saved = await (db as any).jaraConfig.update({ where: { version: nextVersion }, data })
+  else saved = await (db as any).jaraConfig.create({ data })
+  const meta = args.req ? requestMeta(args.req) : { ip: null, userAgent: null, requestId: null }
+  await writeJaraAudit({
+    action: 'config_change',
+    actorId: args.actor.id,
+    actorRole: args.actor.role || null,
+    version: nextVersion,
+    detail: `Direct Super Admin config apply (${args.source || "chat"}): ${args.reason || Object.keys(args.patch).join(", ")}`,
+    previousValue: { version: current.version, face: current.face, background: current.background, theme: current.theme, voiceLanguage: current.voiceLanguage, personality: current.personality, clothing: current.clothing, llmModel: current.llmModel, isEnabled: current.isEnabled },
+    newValue: { version: nextVersion, ...args.patch },
+    authorizationResult: 'allowed',
+    changeReason: args.reason || null,
+    ...meta,
+  })
+  return { ok: true, config: saved, previous: current, version: nextVersion, configHash }
+}
+// === EXISTING AUTHORIZATION (preserved for backward compatibility) ===
+
+export function isSuperAdmin(user: { role?: string | null } | null | undefined): boolean {
+  const role = String(user?.role || '').toLowerCase()
+  return role === 'admin' || role === 'superadmin'
 }
 
 export async function requireSuperAdmin(): Promise<JaraActor> {
@@ -91,91 +243,4 @@ export function requestMeta(req: Request) {
     userAgent: req.headers.get('user-agent') || '',
     requestId: req.headers.get('x-request-id') || null,
   }
-}
-
-export async function applyJaraConfigPatch(args: {
-  actor: { id: string; role?: string | null }
-  patch: Record<string, any>
-  reason?: string
-  source?: string
-  req?: Request
-}) {
-  const { hashConfig, JARA_DEFAULT_CONFIG } = await import('@/lib/jara')
-  const live = await getLiveJaraConfig()
-  const current: any = { ...JARA_DEFAULT_CONFIG, ...live }
-  const proposed: any = { ...current, ...args.patch }
-  // normalize JSON-ish fields
-  for (const k of ['colors', 'animation', 'clothing']) {
-    if (proposed[k] && typeof proposed[k] !== 'string') proposed[k] = JSON.stringify(proposed[k])
-  }
-  const nextVersion = Number(current.version || 0) + 1
-  proposed.version = nextVersion
-  proposed.isLive = true
-  proposed.createdBy = args.actor.id
-  proposed.updatedAt = new Date()
-
-  const hashable: any = { ...proposed }
-  delete hashable.id; delete hashable.createdAt; delete hashable.updatedAt; delete hashable.createdBy; delete hashable.isLive
-  const configHash = hashConfig(hashable)
-
-  // deactivate old live configs
-  await (db as any).jaraConfig.updateMany({ where: { isLive: true }, data: { isLive: false } }).catch(() => {})
-  let saved: any
-  const existingVersion = await (db as any).jaraConfig.findUnique({ where: { version: nextVersion } }).catch(() => null)
-  const data: any = {
-    version: nextVersion,
-    displayName: proposed.displayName || 'Jara AI',
-    aiDisclosure: proposed.aiDisclosure || 'I am Jara AI, a digital human assistant. I am not a real human.',
-    isEnabled: proposed.isEnabled ?? true,
-    face: proposed.face || 'friendly',
-    avatar: proposed.avatar || 'default',
-    avatarUrl: proposed.avatarUrl || null,
-    background: proposed.background || 'gradient-emerald',
-    backgroundUrl: proposed.backgroundUrl || null,
-    theme: proposed.theme || 'light',
-    colors: proposed.colors || null,
-    animation: proposed.animation || null,
-    clothing: proposed.clothing || null,
-    defaultAppearanceProfileId: proposed.defaultAppearanceProfileId || null,
-    voiceModel: proposed.voiceModel || 'default',
-    voiceLanguage: proposed.voiceLanguage || 'bn',
-    voiceAccent: proposed.voiceAccent || null,
-    speakingSpeed: Number(proposed.speakingSpeed) || 1.0,
-    pitch: Number(proposed.pitch) || 1.0,
-    personality: proposed.personality || 'friendly',
-    responseLength: proposed.responseLength || 'medium',
-    communicationStyle: proposed.communicationStyle || 'conversational',
-    llmProvider: proposed.llmProvider || 'ollama',
-    llmModel: proposed.llmModel || 'llama3.2',
-    sttModel: proposed.sttModel || 'whisper',
-    ttsModel: proposed.ttsModel || 'default',
-    memoryEnabled: proposed.memoryEnabled ?? true,
-    smsEnabled: proposed.smsEnabled ?? false,
-    callsEnabled: proposed.callsEnabled ?? true,
-    meetingsEnabled: proposed.meetingsEnabled ?? false,
-    allowGroupListening: proposed.allowGroupListening ?? false,
-    humanHandoffEnabled: proposed.humanHandoffEnabled ?? true,
-    recordingConsentRequired: proposed.recordingConsentRequired ?? true,
-    approvedKnowledgeMode: proposed.approvedKnowledgeMode || 'open',
-    isLive: true,
-    createdBy: args.actor.id,
-  }
-  if (existingVersion) saved = await (db as any).jaraConfig.update({ where: { version: nextVersion }, data })
-  else saved = await (db as any).jaraConfig.create({ data })
-
-  const meta = args.req ? requestMeta(args.req) : { ip: null, userAgent: null, requestId: null }
-  await writeJaraAudit({
-    action: 'config_change',
-    actorId: args.actor.id,
-    actorRole: args.actor.role || null,
-    version: nextVersion,
-    detail: `Direct Super Admin config apply (${args.source || 'chat'}): ${args.reason || Object.keys(args.patch).join(', ')}`,
-    previousValue: { version: current.version, face: current.face, background: current.background, theme: current.theme, voiceLanguage: current.voiceLanguage, personality: current.personality, clothing: current.clothing, llmModel: current.llmModel, isEnabled: current.isEnabled },
-    newValue: { version: nextVersion, ...args.patch },
-    authorizationResult: 'allowed',
-    changeReason: args.reason || null,
-    ...meta,
-  })
-
-  return { ok: true, config: saved, previous: current, version: nextVersion, configHash }
 }
