@@ -39,7 +39,7 @@ CREATE TABLE IF NOT EXISTS `JaraConfig` (
   `voiceAccent`        VARCHAR(50) NULL,
   `speakingSpeed`      DOUBLE NOT NULL DEFAULT 1.0,
   `pitch`              DOUBLE NOT NULL DEFAULT 1.0,
-  `personality`        VARCHAR(100) NOT NULL DEFAULT 'friendly',
+  `personality`        VARCHAR(100) NOT NULL DEFAULT 'realistic',
   `responseLength`     VARCHAR(20) NOT NULL DEFAULT 'medium',
   `communicationStyle` VARCHAR(100) NOT NULL DEFAULT 'conversational',
   `llmProvider`        VARCHAR(100) NOT NULL DEFAULT 'ollama',

@@ -171,33 +171,43 @@ export async function openChatWith(page: Page, peer: Account) {
   // Wait for the authenticated shell before inspecting the sidebar. The New chat
   // button is rendered in every sidebar state, so it is a reliable "shell is up"
   // signal.
-  //
-  // Do NOT assert `existing.or(newChat)` here. Playwright's strict mode rejects a
-  // locator that resolves to more than one element, and both are visible at the
-  // same time whenever the conversation already exists — so the assertion passed
-  // only until the second call, then failed with a strict-mode violation instead
-  // of opening the thread.
   const newChat = page.getByTestId('new-chat')
   await expect(newChat).toBeVisible({ timeout: 30_000 })
 
-  const existing = page.getByTestId('sidebar-conversation').filter({ hasText: peer.name })
-  // `existing` is a filter over the rendered list, so a positive count is a
-  // settled answer. A zero count is not (the conversations request may still be in
-  // flight), but falling through to the New chat dialog is safe: creating a direct
-  // conversation is idempotent because it has exactly two members.
-  if ((await existing.count()) === 0) {
+  // Wait for conversations to load from the API. The conversations request may
+  // still be in flight, so we retry locating the conversation element.
+  const maxRetries = 3
+  let conversationClicked = false
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const existing = page.getByTestId('sidebar-conversation').filter({ hasText: peer.name })
+    const count = await existing.count()
+
+    if (count > 0) {
+      await existing.first().click()
+      conversationClicked = true
+      break
+    }
+
+    // Conversations not yet loaded; wait a bit and retry
+    if (attempt < maxRetries - 1) {
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+    }
+  }
+
+  // If conversations still aren't visible after retries, create a new conversation
+  if (!conversationClicked) {
     await newChat.click()
     const friend = page.getByTestId('new-chat-friend').filter({ hasText: peer.name })
     await expect(friend).toBeVisible({ timeout: 15_000 })
     await friend.click()
-  } else {
-    await existing.first().click()
   }
+
   await expect(page.getByTestId('chat-composer-input')).toBeVisible({ timeout: 30_000 })
 }
 
 /** Open an already-listed conversation from the sidebar and wait for its pane. */
 export async function openListedChatWith(page: Page, peer: Account) {
-  await page.getByTestId('sidebar-conversation').filter({ hasText: peer.name }).first().click()
-  await expect(page.getByTestId('chat-composer-input')).toBeVisible({ timeout: 30_000 })
+  await page.getByTestId("sidebar-conversation").filter({ hasText: peer.name }).first().click()
+  await expect(page.getByTestId("chat-composer-input")).toBeVisible({ timeout: 30_000 })
 }
