@@ -25,7 +25,7 @@
 CREATE TABLE IF NOT EXISTS `JaraConfig` (
   `id`                 VARCHAR(191) NOT NULL,
   `version`            INTEGER NOT NULL DEFAULT 1,
-  `face`               VARCHAR(100) NOT NULL DEFAULT 'friendly',
+  `face`               VARCHAR(100) NOT NULL DEFAULT 'realistic',
   `avatar`             VARCHAR(100) NOT NULL DEFAULT 'default',
   `avatarUrl`          TEXT NULL,
   `background`         VARCHAR(100) NOT NULL DEFAULT 'gradient-emerald',

@@ -729,7 +729,7 @@ model JaraConfig {
   aiDisclosure      String   @default("I am Jara AI, a digital human assistant. I am not a real human.")
   isEnabled         Boolean  @default(true) // emergency disable / kill switch
   // Visual identity
-  face              String   @default("friendly") // realistic | illustrated | anime | friendly | professional
+  face              String   @default("realistic") // realistic | illustrated | anime | friendly | professional
   avatar            String   @default("default")  // 2d | 3d | default
   avatarUrl         String?
   background        String   @default("gradient-emerald")
@@ -851,7 +851,7 @@ model JaraAppearanceProfile {
   isTemporary     Boolean  @default(false)
   expiresAt       DateTime?
   // Visual
-  face            String   @default("friendly")
+  face            String   @default("realistic")
   avatar          String   @default("default")
   avatarUrl       String?
   background      String   @default("gradient-emerald")

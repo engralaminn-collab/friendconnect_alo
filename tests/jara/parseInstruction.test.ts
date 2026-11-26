@@ -34,6 +34,6 @@ test('friendly and professional tone', () => {
 test('restore default appearance', () => {
   const r = parseInstructionToPatch('জারা, তোমার আগের ডিফল্ট অফিসিয়াল লুক ফিরিয়ে আনো।')
   assert.equal(r.restoreDefault, true)
-  assert.equal(r.patch.face, 'friendly')
+  assert.equal(r.patch.face, 'realistic')
   assert.equal(r.patch.background, 'gradient-emerald')
 })
