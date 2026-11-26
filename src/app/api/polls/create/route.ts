@@ -9,7 +9,7 @@ import { db } from "@/lib/db"
  *
  * The poll row and the message that carries it are written in one transaction,
  * so a failure can never leave an orphan `Poll` with no message (which the UI
- * cannot render and no one can vote on) or a `messageType: "poll"` message with
+ * cannot render and no one can vote on) or a `type: "poll"` message with
  * no poll behind it.
  *
  * Input is validated before it reaches the database: `options` used to be
@@ -74,9 +74,9 @@ export async function POST(req: NextRequest) {
           conversationId,
           senderId: me.id,
           content: question.trim(),
-          // The column is `type` (see the Message model): `messageType` exists in
+          // The column is `type` (see the Message model): `type` exists in
           // no schema, so every poll creation used to 500 on the built-in
-          // backend with "table Message has no column named messageType".
+          // backend with "table Message has no column named type".
           type: "poll",
           metadata: JSON.stringify({ question: question.trim(), options: cleaned }),
         },

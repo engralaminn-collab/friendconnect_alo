@@ -85,9 +85,8 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
       messageId,
       conversationId: msg.conversationId ?? null,
       deletedFor: "everyone",
-      deletedForAll: true,
     })
-    return NextResponse.json({ ok: true, deletedForAll: true })
+    return NextResponse.json({ ok: true, deletedFor: true })
   }
 
   const raw = typeof msg.deletedFor === "string" ? msg.deletedFor.trim() : ""
@@ -101,7 +100,7 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ id: s
     messageId,
     conversationId: msg.conversationId ?? null,
     deletedFor: "me",
-    deletedForAll: false,
+    deletedFor: false,
   })
   return NextResponse.json({ ok: true, scope: "self" })
 }

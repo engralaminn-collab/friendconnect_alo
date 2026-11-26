@@ -21,7 +21,7 @@ export async function POST(req: NextRequest) {
       conversationId,
       senderId: me.id,
       content: label || `Location: ${lat.toFixed(4)}, ${lng.toFixed(4)}`,
-      messageType: "location",
+      type: "location",
       metadata: JSON.stringify({ lat, lng, label }),
     },
   })
