@@ -14,6 +14,7 @@ function scanViaClamd(buf: Buffer, target: { path: string } | { host: string; po
   return new Promise((resolve) => {
     const socket = net.createConnection(target as any)
     const chunks: Buffer[] = []
+  const push = (data: Buffer | string) => chunks.push(typeof data === 'string' ? Buffer.from(data) : data)
     let settled = false
     const finish = (res: ScanResult) => {
       if (settled) return
@@ -28,7 +29,7 @@ function scanViaClamd(buf: Buffer, target: { path: string } | { host: string; po
     socket.on('error', (err) => {
       finish({ status: 'error', scanner: 'clamav', detail: `ClamAV daemon connection failed: ${err.message}` })
     })
-    socket.on('data', (data) => chunks.push(data))
+    socket.on('data', push)
     socket.on('end', () => {
       const reply = Buffer.concat(chunks).toString('utf8').replace(/\0/g, '').trim()
       if (reply.endsWith('OK')) {

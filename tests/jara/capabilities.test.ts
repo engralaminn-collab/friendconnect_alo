@@ -134,7 +134,8 @@ test('GPU avatar renderer adapter fails closed unconfigured and dispatches jobs 
 test('ClamAV INSTREAM scanner distinguishes clean and infected payloads over TCP', async (t) => {
   const clamd = net.createServer((socket) => {
     const buf: Buffer[] = []
-    socket.on('data', (d) => buf.push(d))
+    const push = (d: Buffer | string) => buf.push(typeof d === 'string' ? Buffer.from(d) : d)
+    socket.on('data', push)
     socket.on('end', () => {
       const joined = Buffer.concat(buf).toString('utf8')
       socket.end(joined.includes('EICAR-TEST-VIRUS') ? 'stream: Eicar-Signature FOUND\0' : 'stream: OK\0')
