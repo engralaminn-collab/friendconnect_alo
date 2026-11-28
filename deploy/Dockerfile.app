@@ -79,6 +79,8 @@ COPY --from=builder /app/src/lib/socket-security.cjs ./src/lib/socket-security.c
 COPY --from=builder /app/src/lib/file-access.cjs ./src/lib/file-access.cjs
 COPY --from=builder /app/src/lib/upload-security.cjs ./src/lib/upload-security.cjs
 COPY --from=builder /app/src/lib/session-registry.cjs ./src/lib/session-registry.cjs
+COPY --from=builder /app/src/lib/call-sweep.cjs ./src/lib/call-sweep.cjs
+COPY --from=builder /app/src/lib/session-sweep.cjs ./src/lib/session-sweep.cjs
 
 # --- Prisma CLI, schema and migrations (for `prisma migrate deploy`) ------------
 COPY --from=builder /app/prisma ./prisma
