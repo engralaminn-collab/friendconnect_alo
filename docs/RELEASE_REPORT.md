@@ -196,7 +196,7 @@ Limitations of the new work:
 - The TOTP replay claim and the friendship pair lock are per process unless `REDIS_URL` is set. Multi-instance deployments need a shared store.
 - The matrix follows a 30-item list recorded from the execution request. A different numbered list is in `docs/archive/AUDIT_INITIAL.md`. The owner must confirm which is authoritative.
 
-Also in this turn: the CI run for `842b9f9` (`46167546796`) passed in every job, and its integration step succeeded with 55 tests. The later commits (`8a533dc`, `14719bf`) were tested locally only. Pushing them starts a new CI run.
+CI evidence this turn: run `46167546796` (`842b9f9`) passed in every job, and its integration step succeeded with 55 tests. Run `46169734302` (`52a0cd9`, which includes `8a533dc` and `14719bf`) passed in every job: lint, typecheck, unit, security, integration, Playwright e2e, the MySQL 8 migration and CRUD, and the Docker build with container checks.
 
 Open after this turn: F27 streaming (a security trade-off, see the matrix); F26 orphaned files (destructive, needs an owner decision); F19 and F20 broader coverage; F21 removal (owner decision); F24 (owner input).
 
