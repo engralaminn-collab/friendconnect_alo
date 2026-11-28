@@ -98,7 +98,11 @@ COPY --from=builder /app/scripts/load-env.cjs ./scripts/load-env.cjs
 # the smaller standalone node_modules tree without copying development packages.
 COPY --from=prod-deps /app/node_modules ./node_modules
 
-RUN mkdir -p upload logs db && chown -R fc:fc /app
+# `/data` is a named volume in the real deployment and in docker-verify.sh. A
+# fresh volume mounted over a nonexistent path is root-owned; the non-root `fc`
+# process then cannot create its SQLite DB or upload directory. Pre-create the
+# mount point with the final uid/gid so Docker initializes the volume correctly.
+RUN mkdir -p upload logs db /data/upload && chown -R fc:fc /app /data
 USER fc
 EXPOSE 3000 3003 3478/udp 3478/tcp
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \

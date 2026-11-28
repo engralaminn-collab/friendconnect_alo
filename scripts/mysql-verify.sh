@@ -31,8 +31,11 @@ failures=0
 pass() { echo "PASS: $*"; }
 fail() { echo "FAIL: $*"; failures=$((failures + 1)); }
 
+CRUD_SCRIPT="$REPO_ROOT/.mysql-verify-crud.cjs"
+
 cleanup() {
   docker rm -f "$CONTAINER" >/dev/null 2>&1
+  rm -f "$CRUD_SCRIPT"
 }
 trap cleanup EXIT
 
@@ -134,7 +137,7 @@ echo
 echo "=== 7. Real CRUD through the generated client ==="
 # This is the part a "migration step" in CI does not prove: that the generated
 # client can actually read and write against this provider.
-cat > /tmp/mysql-verify-crud.cjs <<'CRUD'
+cat > "$CRUD_SCRIPT" <<'CRUD'
 const { PrismaClient } = require('@prisma/client')
 const prisma = new PrismaClient()
 
@@ -219,7 +222,7 @@ main()
 CRUD
 
 # The script is CJS and the repo is not `type: module`, so it runs as-is.
-if node /tmp/mysql-verify-crud.cjs; then
+if node "$CRUD_SCRIPT"; then
   pass "CRUD, DateTime coercion, unique constraints and AI audit writes work on real MySQL"
 else
   fail "CRUD round trip against real MySQL failed"

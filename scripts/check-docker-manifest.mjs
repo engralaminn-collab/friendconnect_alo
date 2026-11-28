@@ -110,6 +110,19 @@ function isShipped(copied, relPath) {
 for (const image of IMAGES) {
   const copied = dockerfileCopies(image.file)
   if (!image.shipsRealtime) continue
+
+  // Both production images run as non-root `fc` and mount a named volume at
+  // /data. Docker initializes a new named volume from the image path; if that path
+  // does not exist with fc ownership, SQLite and uploads fail with EACCES.
+  const dockerSource = existsSync(join(ROOT, image.file))
+    ? readFileSync(join(ROOT, image.file), 'utf8')
+    : ''
+  const runner = dockerSource.match(/^FROM\s+\S+\s+AS\s+runner\s*$([\s\S]*)/im)?.[1] || ''
+  const beforeUser = runner.split(/^\s*USER\s+/im)[0]
+  if (!/mkdir\s+-p[^\n]*\/data(?:\/|\s|$)/.test(beforeUser) || !/chown[^\n]*\/data(?:\s|$)/.test(beforeUser)) {
+    problems.push(`${image.file}: non-root runner must create and chown /data before USER fc`)
+  }
+
   for (const entry of ENTRYPOINTS) {
     if (!isShipped(copied, entry)) {
       problems.push(`${image.file}: does not COPY the entrypoint ${entry}`)

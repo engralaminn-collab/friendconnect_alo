@@ -109,6 +109,16 @@ echo
 echo "=== 3. Start the realtime server ==="
 docker network create "$NETWORK" >/dev/null 2>&1
 docker volume create "$VOLUME" >/dev/null 2>&1
+
+# A named volume is mounted over /data for both processes. The image runs as the
+# non-root `fc` user, so prove the volume inherits a writable uid/gid *before* a
+# database error turns into an opaque 60-second health timeout.
+if docker run --rm -v "$VOLUME:/data" --entrypoint sh "$IMAGE" -c   'touch /data/.write-probe && mkdir -p /data/upload && rm /data/.write-probe'; then
+  pass "named /data volume is writable by the non-root runtime user"
+else
+  fail "named /data volume is not writable by the non-root runtime user"
+fi
+
 docker rm -f "$SOCKET_CONTAINER" >/dev/null 2>&1
 
 docker run -d --name "$SOCKET_CONTAINER" \

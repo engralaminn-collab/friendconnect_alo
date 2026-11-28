@@ -124,7 +124,31 @@ COPY --from=builder /app/src/lib/file-access.cjs ./src/lib/file-access.cjs
   }
 }
 
-// --- 4. the fix is what makes it pass ---------------------------------------
+// --- 4. the non-root data volume must be initialized in the image -----------
+{
+  const tmp = mkdtempSync(join(tmpdir(), 'fc-docker-volume-'))
+  try {
+    for (const p of ['scripts', 'src/lib', 'socket-server.js', 'package.json', 'Dockerfile', 'deploy']) {
+      cpSync(join(ROOT, p), join(tmp, p), { recursive: true })
+    }
+    // Reintroduce the real CI failure: a named volume mounted at an absent /data
+    // path is root-owned, while both processes run as USER fc.
+    for (const file of ['Dockerfile', 'deploy/Dockerfile.app']) {
+      const path = join(tmp, file)
+      const broken = readFileSync(path, 'utf8')
+        .replace(/ \/data\/upload/g, '')
+        .replace(/ \/data(?=\s|$)/gm, '')
+      writeFileSync(path, broken)
+    }
+    const r = run(tmp)
+    check('Dockerfiles without a writable /data mount point are rejected', r.code === 1, r.out.trim())
+    check('rejection names non-root /data ownership', /create and chown \/data/.test(r.out), r.out.trim())
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+}
+
+// --- 5. the fix is what makes it pass ---------------------------------------
 {
   const dockerfile = readFileSync(join(ROOT, 'Dockerfile'), 'utf8')
   check(
