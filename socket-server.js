@@ -38,6 +38,8 @@ const {
   JARA_IDS,
 } = require('./src/lib/socket-security.cjs')
 const fileAccess = require('./src/lib/file-access.cjs')
+const { expireStaleRingingCalls } = require('./src/lib/call-sweep.cjs')
+const { deleteExpiredSessions } = require('./src/lib/session-sweep.cjs')
 
 // Finding #10: socket-sent attachments must create the same `FileAccess`
 // grants the REST route creates, otherwise the attachment the recipient just
@@ -991,6 +993,24 @@ async function notifyUser(userId, n) {
 
 async function runJobs() {
   const now = new Date()
+  // Finding 26: expired sessions cannot authenticate; remove them.
+  try {
+    await deleteExpiredSessions(prisma, now)
+  } catch (e) {
+    console.warn('[jobs] expired sessions', e.message)
+  }
+  // Finding 29: a call that rang without an answer is marked missed. Otherwise a
+  // stale `ringing` row keeps both participants "busy" indefinitely.
+  try {
+    const expired = await expireStaleRingingCalls(prisma, { now })
+    for (const call of expired) {
+      const payload = { callId: call.id, status: 'missed' }
+      emitToUser(call.callerId, 'call:timeout', payload)
+      emitToUser(call.receiverId, 'call:timeout', payload)
+    }
+  } catch (e) {
+    console.warn('[jobs] ringing calls', e.message)
+  }
   try {
     const due = await prisma.message.findMany({
       // Finding 9: cancelling a scheduled message sets `status` to CANCELLED

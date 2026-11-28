@@ -5,6 +5,7 @@ import { getSessionUser } from '@/lib/session'
 import { uploadDir } from '@/lib/paths'
 import { canDownloadFile } from '@/lib/file-access'
 import { validateUpload, downloadHeaders } from '@/lib/upload-security.cjs'
+import { parseRange } from '@/lib/http-range.cjs'
 
 const EXT_FOR_MIME: Record<string, string> = {
   'image/jpeg': 'jpg', 'image/png': 'png', 'image/webp': 'webp',
@@ -13,7 +14,7 @@ const EXT_FOR_MIME: Record<string, string> = {
   'audio/mp4': 'm4a', 'audio/webm': 'webm', 'audio/ogg': 'ogg',
 }
 
-export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
+export async function GET(req: Request, { params }: { params: Promise<{ id: string }> }) {
   const me = await getSessionUser()
   if (!me) return new Response('Unauthorized', { status: 401 })
 
@@ -40,7 +41,28 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     return new Response('Invalid stored file', { status: 415 })
   }
 
+  // Finding 27: honour a single HTTP Range so media players can seek and
+  // interrupted downloads can resume. The full object was already validated above.
+  const headers = { ...downloadHeaders(file.name, ext, file.mimeType), 'accept-ranges': 'bytes' }
+  const range = parseRange(req.headers.get('range'), bytes.length)
+  if (range.type === 'unsatisfiable') {
+    return new Response(null, {
+      status: 416,
+      headers: { 'content-range': `bytes */${bytes.length}`, 'accept-ranges': 'bytes', 'cache-control': 'private, no-store' },
+    })
+  }
+  if (range.type === 'partial') {
+    const slice = bytes.subarray(range.start, range.end + 1)
+    return new Response(new Uint8Array(slice), {
+      status: 206,
+      headers: {
+        ...headers,
+        'content-length': String(slice.length),
+        'content-range': `bytes ${range.start}-${range.end}/${bytes.length}`,
+      },
+    })
+  }
   return new Response(new Uint8Array(bytes), {
-    headers: downloadHeaders(file.name, ext, file.mimeType),
+    headers: { ...headers, 'content-length': String(bytes.length) },
   })
 }
