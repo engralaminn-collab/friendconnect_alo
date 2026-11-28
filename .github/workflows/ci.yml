@@ -301,8 +301,25 @@ jobs:
         run: docker version
 
       - name: Build image and verify the running container
+        id: dockerverify
+        # `continue-on-error` so the next step can publish the failing assertions as
+        # annotations before the job fails. Log artifacts are not reliably
+        # downloadable, so an annotation is the only dependable evidence channel.
+        continue-on-error: true
         shell: bash
-        run: bash scripts/docker-verify.sh
+        run: |
+          set -o pipefail
+          bash scripts/docker-verify.sh 2>&1 | tee docker-verify.log
+
+      - name: Report Docker verification failures as annotations
+        if: steps.dockerverify.outcome == 'failure'
+        shell: bash
+        run: node scripts/report-verification-failures.mjs docker-verify.log "Docker runtime"
+
+      - name: Fail the job if Docker verification failed
+        if: steps.dockerverify.outcome == 'failure'
+        shell: bash
+        run: exit 1
 
       - name: Collect container logs on failure
         if: failure()
@@ -343,8 +360,22 @@ jobs:
         run: npm ci --include=dev --no-audit --no-fund
 
       - name: Apply migrations to a real MySQL 8 server and run CRUD
+        id: mysqlverify
+        continue-on-error: true
         shell: bash
-        run: bash scripts/mysql-verify.sh
+        run: |
+          set -o pipefail
+          bash scripts/mysql-verify.sh 2>&1 | tee mysql-verify.log
+
+      - name: Report MySQL verification failures as annotations
+        if: steps.mysqlverify.outcome == 'failure'
+        shell: bash
+        run: node scripts/report-verification-failures.mjs mysql-verify.log "MySQL runtime"
+
+      - name: Fail the job if MySQL verification failed
+        if: steps.mysqlverify.outcome == 'failure'
+        shell: bash
+        run: exit 1
 
       - name: Collect MySQL logs on failure
         if: failure()
