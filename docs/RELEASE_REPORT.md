@@ -152,7 +152,7 @@ Limits of this evidence:
 
 | Item | Status |
 |---|---|
-| Original 30 findings | 18 fixed and verified; 2 fixed with static-only verification (Docker runtime BLOCKED); 25 fixed with local Prisma validation BLOCKED; 4 BLOCKED; 24 PARTIAL on owner input; 26 and 27 PARTIAL; 14, 18, 19, 20, 21, 28 OPEN. Full matrix: `docs/REMEDIATION_MATRIX.md`. |
+| Original 30 findings | 20 fixed and verified (incl. ALREADY FIXED); 2 fixed with the coturn/compose runtime not run; 1 fixed with local Prisma validation BLOCKED; 6 PARTIAL (19, 20, 21, 24, 26, 27); 1 OPEN (28). See `docs/REMEDIATION_MATRIX.md`. The 30-item source list is not confirmed (see the matrix's Source list section). |
 | Docker image build and container run | VERIFIED by CI run `46159428630` (image build, boot, health, registration, upload persistence, graceful stop). Compose stacks not run. |
 | Database | MySQL 8 migrations and CRUD VERIFIED by CI run `46159428630`. SQLite schema and runtime verified locally and in CI. |
 | AI platform, calls, SMS, documents, workflows | NOT STARTED or PARTIAL (see §7) |
@@ -161,3 +161,50 @@ Limits of this evidence:
 | Pull request | #26 open, not merged |
 
 **PARTIAL — NOT COMPLETE.**
+
+## 12. Update: follow-on work on this branch
+
+Commits added after `41b37d3`, in order:
+
+| Commit | Content | Evidence |
+|---|---|---|
+| `49b183a` | Pair lock and blocker-only unblock in `src/lib/friendship.ts`; 12-test state-machine suite | 12/12 pass. Two tests failed before the fix. |
+| `5a89fdd` | TOTP accepted once per time step (`verifyTotpOnce`); OTP and backup-code tests | 7 + 6 tests. Replay assertion added to `security.test.cjs`. |
+| `45e5127` | Keyset message pagination (`src/lib/message-page.ts`). A SQLite-runtime defect was found: `cursor` was ignored, so cursor paging looped on the same rows. | 6 tests. Restoring the old query fails the suite. |
+| `4a4fdc7` | Live test of the socket server's expired-session sweep | Passes. Breaking the call site fails it. |
+| `9c2ca31` | coturn pinned to `4.19.2-r0@sha256:ccdbc51e…` | Tag and digest confirmed on Docker Hub. 4 source-level tests. |
+
+Test gates on the final tree, measured locally in this sandbox:
+
+| Gate | Result |
+|---|---|
+| lint | exit 0 |
+| typecheck | exit 0 |
+| unit | 51/51 |
+| security | 112/112 |
+| build | exit 0 (needs `NEXTAUTH_SECRET` at build time, as the production guard requires) |
+| integration | 55/55 (`test:integration` now runs `.ts` suites in the same invocation as CI) |
+| schema:check, check-docker-manifest, socket-server syntax, check-env --mode ci | exit 0 |
+
+What changed in the test runner: `test:integration` previously ran only `tests/integration/*.test.cjs`. The new `.ts` suites were not run by CI until the script was changed. The 11 failures seen earlier were not a flaky test. `.next` (excluded from snapshots) was missing, so `.next/standalone` was absent. Running `npm run build` fixed it.
+
+Not run in this sandbox, and therefore not verified: Docker build and container (CI-only, last run `46159428630`); the compose coturn runtime; real WebRTC or SMS; the 30-second live sweep in CI (it does run inside `test:integration`, which CI executes).
+
+Limitations of the new work:
+- The TOTP replay claim and the friendship pair lock are per process unless `REDIS_URL` is set. Multi-instance deployments need a shared store.
+- The matrix follows a 30-item list recorded from the execution request. A different numbered list is in `docs/archive/AUDIT_INITIAL.md`. The owner must confirm which is authoritative.
+
+## 13. Status of the wider scope
+
+| Area | Status |
+|---|---|
+| AI identity, multi-model gateway, AI call participation | NOT STARTED on this branch. `src/lib/ai-identity.ts` and `ai-gateway.ts` are pure modules with unit tests. Nothing imports them outside tests, and there is no AI account model or route. |
+| WebRTC audio and video | NOT STARTED as a verified feature. No real browser or device test. |
+| SMS gateway with consent and opt-out | NOT STARTED as a verified feature. No authorised gateway test. |
+| Document sharing and RAG with permission isolation | NOT STARTED. |
+| Workflow automation with human approval | NOT STARTED. |
+| Source-level research review of listed repositories | PARTIAL. Metadata and selected LICENSE files only. See `docs/INTEGRATION_RESEARCH_MATRIX.md`. |
+| Production deploy, merge of PR #25, merge to `main` | NOT DONE (not authorised). |
+
+**PARTIAL — NOT COMPLETE.** The feature build-out above is not started, and the research review is incomplete.
+
