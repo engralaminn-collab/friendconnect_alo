@@ -74,3 +74,17 @@ The Jara series contains overlapping audits written on different dates. Read `JA
 ## Archive
 
 `archive/` contains older audits and worklogs (`AUDIT_INITIAL.md`, `AUDIT_FINAL.md`, `IMPLEMENTATION_AUDIT.md`, `E2E_TEST_RESULTS.md`, `DATABASE_ACCEPTANCE_REPORT.md`, `WORKLOG_HISTORY.md`, and an older candidate backend). Status: **Historical**. Do not use them as evidence for current behaviour.
+
+## Status documents (2026-11-28)
+
+These record what is implemented, partial, blocked, or not started for the AI and communication roadmap. Each names its blockers. None of them claims a feature is complete.
+
+- `AI_IDENTITY_AND_PERMISSIONS.md`
+- `VOICE_VIDEO_ARCHITECTURE.md`
+- `JARA_LIVE_AVATAR.md`
+- `CODING_AGENT_SECURITY.md`
+- `DOCUMENT_SHARING_AND_RAG.md`
+- `SMS_AND_NOTIFICATION_ARCHITECTURE.md`
+
+The Stage A wiring audit is in `AI_ARCHITECTURE.md`, section "Stage A wiring audit".
+

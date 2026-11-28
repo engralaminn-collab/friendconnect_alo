@@ -142,3 +142,24 @@ Schema/runtime audit found significant existing parity gaps, so no new persisten
 Candidate licenses/maintenance metadata, runtime fit and operational cautions are in [`JARA_OPEN_SOURCE_STACK.md`](./JARA_OPEN_SOURCE_STACK.md). No candidate software or provider was installed, called, or benchmarked. Current sandbox hardware is only 2 CPU / ~3.8 GiB RAM without GPU/container tools, and does not inform production capacity.
 
 See [`JARA_PRIVACY_AND_CONSENT.md`](./JARA_PRIVACY_AND_CONSENT.md), [`JARA_PROVIDER_CONFIGURATION.md`](./JARA_PROVIDER_CONFIGURATION.md), [`JARA_DEPLOYMENT_GUIDE.md`](./JARA_DEPLOYMENT_GUIDE.md), and [`JARA_TEST_REPORT.md`](./JARA_TEST_REPORT.md) for channel controls, configuration names, readiness, test outputs, blockers and rollback. The evaluation baseline remains `NOT_RUN` (0 model calls). No persistent memory, camera understanding, realtime agent, semantic retrieval, outbound SMS, or general task runner is implemented.
+
+## Stage A wiring audit (2026-11-28, source-level)
+
+Checked against branch `arena/2b2a87d0-friendconnect-alo` at `b6248b6`. `main` is `ba1f0ee`. Production was **not** inspected: the sandbox cannot reach `learn.aloeducation.com` (outbound access is limited to GitHub, npm and PyPI), and no server credentials are available. Production status: NOT INDEPENDENTLY VERIFIED.
+
+| Module | Imported by | Status |
+|---|---|---|
+| `src/lib/ai.ts` (`aiChat`, `getAIProvider`) | `jara-responder.ts`, `/api/ai/*`, `/api/jara/chat`, `/api/jara/voice`, `/api/jara/group`, `/api/jara/health` | **Live.** The only inference path in production code. |
+| `src/lib/jara-responder.ts` | `/api/jara/respond`, `/api/messages`, `/api/conversations/[id]/messages` | **Live.** Calls `aiChat()`. |
+| `src/lib/ai-input.ts` | message, conversation, group, AI and Jara routes | **Live.** Input guard. |
+| `src/lib/ai-gateway.ts` | **tests only** (`tests/security/ai-gateway.test.cjs`) | **Not wired.** Not a production gateway. |
+| `src/lib/ai-identity.ts` | **tests only** (`tests/security/ai-identity.test.cjs`) | **Not wired.** No AI account model or route uses it. |
+
+Facts about the live path:
+
+- Provider selection is fixed by environment precedence in `getAIProvider()`: Ollama, LiteLLM, Z.ai, OpenRouter, Hugging Face, then OpenAI-compatible. The first variable set wins. There is no capability-aware or privacy-aware routing.
+- `aiChat()` makes one non-streaming request and returns the full text. It has no streaming, no fallback, and no per-user provider policy.
+- The socket server does not call a model. It calls `POST /api/jara/respond` with the `x-internal-secret` header, and that route runs `jara-responder.ts`.
+- Two AI modules exist that are not part of the live path. They must not be described as the production gateway until a route calls them and a test proves it.
+
+Consequences for the phase plan: "unified gateway" and "AI identity enforcement" are not yet integrated. Integrating either changes the Jara responder, which is a live path, so each change needs a regression test against the current behaviour first.
