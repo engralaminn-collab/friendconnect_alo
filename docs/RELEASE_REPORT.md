@@ -152,7 +152,7 @@ Limits of this evidence:
 
 | Item | Status |
 |---|---|
-| Original 30 findings | 20 fixed and verified (incl. ALREADY FIXED); 2 fixed with the coturn/compose runtime not run; 1 fixed with local Prisma validation BLOCKED; 6 PARTIAL (19, 20, 21, 24, 26, 27); 1 OPEN (28). See `docs/REMEDIATION_MATRIX.md`. The 30-item source list is not confirmed (see the matrix's Source list section). |
+| Original 30 findings | 21 fixed and verified (incl. ALREADY FIXED); 2 fixed with the coturn/compose runtime not run; 1 fixed with local Prisma validation BLOCKED; 6 PARTIAL (19, 20, 21, 24, 26, 27); 0 OPEN. See `docs/REMEDIATION_MATRIX.md`. The 30-item source list is not confirmed (see the matrix's Source list section). |
 | Docker image build and container run | VERIFIED by CI run `46159428630` (image build, boot, health, registration, upload persistence, graceful stop). Compose stacks not run. |
 | Database | MySQL 8 migrations and CRUD VERIFIED by CI run `46159428630`. SQLite schema and runtime verified locally and in CI. |
 | AI platform, calls, SMS, documents, workflows | NOT STARTED or PARTIAL (see §7) |
@@ -164,7 +164,7 @@ Limits of this evidence:
 
 ## 12. Update: follow-on work on this branch
 
-Commits added after `41b37d3`, in order:
+Commits added after `41b37d3`, in order (the first five first, then the two below):
 
 | Commit | Content | Evidence |
 |---|---|---|
@@ -173,6 +173,8 @@ Commits added after `41b37d3`, in order:
 | `45e5127` | Keyset message pagination (`src/lib/message-page.ts`). A SQLite-runtime defect was found: `cursor` was ignored, so cursor paging looped on the same rows. | 6 tests. Restoring the old query fails the suite. |
 | `4a4fdc7` | Live test of the socket server's expired-session sweep | Passes. Breaking the call site fails it. |
 | `9c2ca31` | coturn pinned to `4.19.2-r0@sha256:ccdbc51e…` | Tag and digest confirmed on Docker Hub. 4 source-level tests. |
+| `8a533dc` | Global write-rate floor on every state-changing `/api` request, in `src/proxy.ts` (F28) | 8 behavioural tests on the real proxy; disabling the refusal fails 6. Integration passes with the limit active. |
+| `14719bf` | Retention sweep for expired stories, highlights kept (F26) | 2 integration tests on the real runtime; removing the highlight filter fails one. Both Dockerfiles updated; manifest check passes. |
 
 Test gates on the final tree, measured locally in this sandbox:
 
@@ -181,9 +183,9 @@ Test gates on the final tree, measured locally in this sandbox:
 | lint | exit 0 |
 | typecheck | exit 0 |
 | unit | 51/51 |
-| security | 112/112 |
+| security | 120/120 |
 | build | exit 0 (needs `NEXTAUTH_SECRET` at build time, as the production guard requires) |
-| integration | 55/55 (`test:integration` now runs `.ts` suites in the same invocation as CI) |
+| integration | 57/57 (`test:integration` now runs `.ts` suites in the same invocation as CI) |
 | schema:check, check-docker-manifest, socket-server syntax, check-env --mode ci | exit 0 |
 
 What changed in the test runner: `test:integration` previously ran only `tests/integration/*.test.cjs`. The new `.ts` suites were not run by CI until the script was changed. The 11 failures seen earlier were not a flaky test. `.next` (excluded from snapshots) was missing, so `.next/standalone` was absent. Running `npm run build` fixed it.
@@ -193,6 +195,10 @@ Not run in this sandbox, and therefore not verified: Docker build and container 
 Limitations of the new work:
 - The TOTP replay claim and the friendship pair lock are per process unless `REDIS_URL` is set. Multi-instance deployments need a shared store.
 - The matrix follows a 30-item list recorded from the execution request. A different numbered list is in `docs/archive/AUDIT_INITIAL.md`. The owner must confirm which is authoritative.
+
+Also in this turn: the CI run for `842b9f9` (`46167546796`) passed in every job, and its integration step succeeded with 55 tests. The later commits (`8a533dc`, `14719bf`) were tested locally only. Pushing them starts a new CI run.
+
+Open after this turn: F27 streaming (a security trade-off, see the matrix); F26 orphaned files (destructive, needs an owner decision); F19 and F20 broader coverage; F21 removal (owner decision); F24 (owner input).
 
 ## 13. Status of the wider scope
 

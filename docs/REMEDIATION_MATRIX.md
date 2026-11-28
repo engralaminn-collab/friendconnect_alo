@@ -41,9 +41,9 @@
 | 23 | Current / historical / superseded documentation index | FIXED AND VERIFIED (this session) | `docs/README.md` | Index classifies every `docs/*.md` and `docs/archive/`. |
 | 24 | Project metadata and security reporting guidance without invented licence or contact | PARTIAL — BLOCKED on owner input | **New** `SECURITY.md` | Policy written without an invented contact. Private vulnerability reporting is disabled (`{"enabled":false}`). No licence exists (`license: null`); the owner must decide. |
 | 25 | Align Prisma, adapters, Node, npm | FIXED (lockfile and CI pins align); Prisma validate BLOCKED here | `package.json` (`prisma` and `@prisma/client` 6.19.3 installed), `ci.yml` pins Node 22.23.4, npm 10.9.9, Prisma 6.19.3; `npm ci` succeeded | `prisma validate` and `generate` need `binaries.prisma.sh`, which is unreachable from this sandbox. CI performs them. |
-| 26 | Safe cleanup of expired sessions, stories, verified orphaned files | PARTIAL: sessions FIXED AND VERIFIED (incl. live wiring); stories and orphan files OPEN | `src/lib/session-sweep.cjs` run from `socket-server.js` `runJobs()`; `tests/integration/session-sweep.test.cjs` (unit against db-runtime); `tests/integration/session-sweep-live.test.cjs` (starts the real socket server, waits for the 30 s tick, removes the expired row and keeps the live row; mutation check fails it) | Expired-story and orphaned-file cleanup are not implemented. |
+| 26 | Safe cleanup of expired sessions, stories, verified orphaned files | PARTIAL: sessions and expired stories FIXED AND VERIFIED; orphaned files OPEN | `src/lib/session-sweep.cjs` and `src/lib/story-sweep.cjs`, both run from `socket-server.js` `runJobs()`; `tests/integration/session-sweep.test.cjs`, `session-sweep-live.test.cjs` (starts the real socket server and waits for the 30 s tick; mutation-checked), `story-sweep.test.cjs` (boundary, highlight exemption, view cascade; mutation-checked) | Stories are removed 7 days after expiry (`STORY_RETENTION_DAYS`); highlights are kept. Orphaned-file cleanup is not implemented: deleting uploaded objects is destructive, so it needs a verified reference check and an owner decision on retention. |
 | 27 | Secure streaming, upload handling, HTTP Range | PARTIAL: Range FIXED AND VERIFIED; streaming OPEN | `src/lib/http-range.cjs`; `src/app/api/files/[id]/route.ts` returns 206/416 and `Accept-Ranges`; `tests/security/http-range.test.cjs` (5 tests, mutation-checked) | The route still reads the whole file into memory before responding. Streaming is not implemented. |
-| 28 | Rate limits across all API routes and socket events | OPEN | `rateLimit()` in `src/lib/cache.ts` is used by 20 of 143 route files (`grep -rl rateLimit src/app/api`) | Most mutating routes have no limit. Socket events have per-event limits from `socket-security.cjs`. |
+| 28 | Rate limits across all API routes and socket events | FIXED AND VERIFIED for state-changing HTTP routes (global floor); read endpoints and per-socket-event limits are not changed here | `src/proxy.ts` and `src/lib/write-limit.ts`: POST/PUT/PATCH/DELETE under `/api/` limited to 240 per 60 s per session (or per IP when anonymous); `tests/security/write-limit.test.ts` (8 tests on the real `proxy`, mutation-checked: disabling the refusal fails 6) | Stricter per-route limits remain (login, OTP, 2FA, AI chat). Anonymous buckets trust `X-Forwarded-For`, so the reverse proxy must strip client-supplied values. Integration 57/57 with the limit active. |
 | 29 | Stale ringing calls stay active | FIXED AND VERIFIED | **New** `src/lib/call-sweep.cjs`, run from `runJobs`; `tests/integration/call-sweep.test.cjs` (2 tests, real SQLite) | Stale `ringing` rows move to `missed` after `CALL_RING_TIMEOUT_SECONDS` (default 60). Both parties get `call:timeout`. The update is conditional, so an answer that lands mid-sweep wins. Mutation check: removing the status guard fails the race test. |
 | 30 | Verify story visibility, friendship, blocking, expiry, ownership before recording views | FIXED AND VERIFIED (decision level) | **New** `src/app/api/stories/[id]/view/route.ts` + `src/lib/story-access.ts`; `tests/security/story-access.test.ts` (7 tests) | Owners are not counted. Denials return 404 so story IDs cannot be probed. Mutation check: removing the friendship check fails 1 test. |
 
@@ -51,14 +51,14 @@
 
 | Classification | Findings |
 |---|---|
-| FIXED AND VERIFIED, or ALREADY FIXED AND VERIFIED (20) | 1, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 22, 23, 29, 30 |
+| FIXED AND VERIFIED, or ALREADY FIXED AND VERIFIED (21) | 1, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 22, 23, 28, 29, 30 |
 | FIXED AND VERIFIED for the part CI or a test exercised; the compose runtime part not run (2) | 2, 4 |
 | FIXED, verification partly BLOCKED locally (Prisma binaries; CI runs it) (1) | 25 |
-| PARTIAL (6) | 19 (OTP/2FA done; broad API-error tests not), 20 (messages done; other lists not), 21 (audit done; removal pending owner), 24 (owner input), 26 (sessions done; stories and orphans open), 27 (Range done; streaming open) |
-| OPEN (1) | 28 (rate limits: 15 of 143 route files use `rateLimit`) |
+| PARTIAL (6) | 19 (OTP/2FA done; broad API-error tests not), 20 (messages done; other lists not), 21 (audit done; removal pending owner), 24 (owner input), 26 (sessions and stories done; orphaned files open), 27 (Range done; streaming open: the route validates the whole object on each read, and changing that is a security trade-off) |
+| OPEN (0) | — |
 | BLOCKED WITH EXACT REASON (0 as a row; runtime parts of 2 and 4 are listed as not run) | — |
 
-Each row is in exactly one group: 20 + 2 + 1 + 6 + 1 = 30. Row 26's open parts (stories, orphan files) are described in its PARTIAL row.
+Each row is in exactly one group: 21 + 2 + 1 + 6 = 30.
 
 ## Source list
 
