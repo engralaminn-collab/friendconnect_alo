@@ -46,9 +46,9 @@ Exit codes are from the shell. Counts are from the TAP summary.
 | `node scripts/check-env.mjs --mode ci` | 0 | Env check PASSED |
 | `node --check socket-server.js` | 0 | Syntax OK |
 | `npx prisma validate --schema prisma/schema.sqlite.prisma` | — | **BLOCKED**: cannot fetch schema engine from `binaries.prisma.sh` |
-| `npm run test:e2e` (Playwright) | — | **NOT RUN**: browser binaries not downloaded in this session |
-| `docker build` / `docker compose config` | — | **BLOCKED**: no container runtime |
-| GitHub Actions run for this branch | — | See §9 |
+| `npm run test:e2e` (Playwright) | — | **NOT RUN locally** (browser binaries not downloaded in this session). Passed on the CI runner (§10). |
+| `docker build` / `docker compose config` | — | **BLOCKED locally**: no container runtime. Image build and container run passed on the CI runner (§10). `docker compose config` was not run by any job. |
+| GitHub Actions `FriendConnect CI` run `46159428630` on `a703a2c` (pull request #26) | 0 (`gh run watch --exit-status`) | **success**. All three jobs succeeded (see §10). |
 
 Each new test was run and then checked for failure under a temporary mutation of its fix. The mutated file was restored byte-for-byte afterwards.
 
@@ -109,33 +109,55 @@ These are **OPEN**. None is claimed as complete.
 - **External repository source review** (Phases 4, 8–16, 18–19). Metadata and licence checks only; see `docs/INTEGRATION_RESEARCH_MATRIX.md`.
 - **Findings 14, 18, 19, 20, 21, 26 (stories and orphan files), 27 (streaming), 28 (rate limits on 123 of 143 route files)** — see `docs/REMEDIATION_MATRIX.md`.
 - **Finding 4 and the MySQL path**: CI job exists; not executed here.
-- **Docker image build and runtime, Compose runtime, health check, graceful shutdown, restart recovery**: BLOCKED (no runtime).
+- **Compose runtime** (root and `deploy/`), coturn relay behaviour, and a cross-restart recovery test beyond the CI script: NOT RUN. Image build, boot, health, and graceful shutdown were verified in CI (§10).
 - **Playwright end-to-end suite**: not run.
 - **Staging and production**: not deployed. No target host was inspected. No authorization was given.
 
 ## 8. Remaining risks
 
-- The Docker image has never been built from this branch. Several fixes depend on static manifest checks and on `require()`-graph analysis.
+- The Docker image was built on the CI runner for the first time from this branch (run `46159428630`). Compose stacks, the coturn service, and sustained-load behaviour have not been run.
 - Rate limiting covers 20 of 143 route files.
 - Story and file cleanup is incomplete; orphaned files accumulate.
 - Redis is in `docker-compose.yml` as `redis:7-alpine`. Its licence for current versions must be verified (see `FREE_FIRST_ARCHITECTURE.md`).
 - The repository has **no licence file** and **no security contact**. Private vulnerability reporting is disabled. The owner must decide both.
 - `z-ai-web-dev-sdk` is an external-service SDK. Its use has not been reviewed.
 
-## 9. CI and pull request
+## 9. Risks from CI scope
 
-- GitHub Actions: the `FriendConnect CI` workflow runs on pull requests to `main`. Its result for this branch is recorded in §10. The local gate commands above are not a substitute for a runner result.
-- Pull request: recorded in §10.
+- The GitHub Actions run is the first Docker build of this branch. It is evidence, but no container was run long enough to observe sustained load, realtime call media, or restart recovery beyond the script's checks.
 
-## 10. Final status
+## 10. CI and pull request
+
+Pull request: `https://github.com/engralaminn-collab/friendconnect_alo/pull/26` (base `main`, head `arena/2b2a87d0-friendconnect-alo`). **Not merged.**
+
+GitHub Actions run `46159428630` (`https://github.com/engralaminn-collab/friendconnect_alo/actions/runs/46159428630`), commit `a703a2c24a67d3561afd30ea0cddc3f2e631df6f`, conclusion **success**.
+
+| Job | Conclusion | Steps that ran (all success unless noted) |
+|---|---|---|
+| Install, Prisma, Lint, Typecheck and Build | success | Verify runtime and lockfile; Install locked dependencies; Generate SQLite Prisma Client; Validate Prisma schema; Validate migration history; MySQL index/variant invariants; Lint; Typecheck; Security regression tests; Docker image manifest consistency; Production build; Verify standalone build output; Integration tests (isolated database per test); Install Playwright browsers; **Playwright end-to-end tests**; Upload production build artifact. "Upload Playwright report" was skipped (it runs on failure). |
+| MySQL 8 migration and CRUD | success | Install locked dependencies; **Apply migrations to a real MySQL 8 server and run CRUD**. The failure-annotation steps were skipped, as they run only on failure. |
+| Docker build and container runtime | success | Verify Docker is available; **Build image and verify the running container**. Failure-annotation steps were skipped. |
+
+What the Docker step covers, from `scripts/docker-verify.sh`: image build from the repository `Dockerfile`; required modules present in the image; `node --check` of both entrypoints; `better-sqlite3` load; realtime `/health`; application `/api/health` with database check; container-to-container socket reachability; user registration returning HTTP 201; uploaded file surviving a restart; graceful SIGTERM shutdown of both containers.
+
+What the MySQL step covers, from `scripts/mysql-verify.sh`: isolated MySQL 8 container; `prisma generate` and `validate` for the MySQL schema; `prisma migrate deploy` on an empty database; table checks and CRUD.
+
+Limits of this evidence:
+- The per-check `PASS:` lines inside those steps could not be downloaded from the sandbox (the log archive request failed), so they are not quoted here. The step conclusions are authoritative.
+- The root `docker-compose.yml` (including the coturn `turn` service) was not started by any job.
+- `deploy/docker-compose.yml` was not started by any job.
+- Staging and production were not touched.
+
+## 11. Final status
 
 | Item | Status |
 |---|---|
 | Original 30 findings | 18 fixed and verified; 2 fixed with static-only verification (Docker runtime BLOCKED); 25 fixed with local Prisma validation BLOCKED; 4 BLOCKED; 24 PARTIAL on owner input; 26 and 27 PARTIAL; 14, 18, 19, 20, 21, 28 OPEN. Full matrix: `docs/REMEDIATION_MATRIX.md`. |
-| Docker build and runtime | BLOCKED: no container runtime |
-| Database (MySQL and migration execution) | BLOCKED for MySQL; SQLite schema and runtime tested locally |
+| Docker image build and container run | VERIFIED by CI run `46159428630` (image build, boot, health, registration, upload persistence, graceful stop). Compose stacks not run. |
+| Database | MySQL 8 migrations and CRUD VERIFIED by CI run `46159428630`. SQLite schema and runtime verified locally and in CI. |
 | AI platform, calls, SMS, documents, workflows | NOT STARTED or PARTIAL (see §7) |
 | Production deployment | NOT DONE (not authorized) |
 | Merge | NOT DONE (not authorized) |
+| Pull request | #26 open, not merged |
 
 **PARTIAL — NOT COMPLETE.**

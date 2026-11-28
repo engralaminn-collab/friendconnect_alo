@@ -17,9 +17,9 @@
 | # | Finding | Classification | Evidence (path / test) | Notes |
 |---|---|---|---|---|
 | 1 | Block must stop new messages via REST, Socket.IO, existing and new conversations | ALREADY FIXED AND VERIFIED | `tests/security/conversation-block.test.cjs`, `tests/integration/messages-hardening.test.cjs` | Passing in `test:security` (101/101) and `test:integration` (30/30). |
-| 2 | Undeclared `node-turn` Docker dependency | FIXED AND VERIFIED (static); Docker runtime BLOCKED | `Dockerfile`, `deploy/Dockerfile.app`, `docker-compose.yml`, `scripts/check-docker-manifest.mjs`, `tests/security/docker-manifest.test.cjs` | **This session:** root `docker-compose.yml` `turn` service ran `scripts/turn-server.js` in the app image, where `node-turn` is absent, so it relayed nothing. It now uses the coturn image with required `TURN_EXTERNAL_IP`/`TURN_PASSWORD` (no dev fallback). The app service's TURN password fallback was removed too. Runtime: no container runtime here. |
+| 2 | Undeclared `node-turn` Docker dependency | FIXED AND VERIFIED (image build and boot in CI run 46159428630); compose `turn` (coturn) NOT runtime-verified | `Dockerfile`, `deploy/Dockerfile.app`, `docker-compose.yml`, `scripts/check-docker-manifest.mjs`, `tests/security/docker-manifest.test.cjs` | **This session:** root `docker-compose.yml` `turn` service ran `scripts/turn-server.js` in the app image, where `node-turn` is absent, so it relayed nothing. It now uses the coturn image with required `TURN_EXTERNAL_IP`/`TURN_PASSWORD` (no dev fallback). The app service's TURN password fallback was removed too. The image build and container run were verified by the GitHub runner: step "Build image and verify the running container" = success. The root compose `turn` service was not started by any run. |
 | 3 | Runtime image missing `src/lib/*.cjs` modules | ALREADY FIXED AND VERIFIED; extended this session | `scripts/check-docker-manifest.mjs` (traces `require()` graph), `docker-manifest.test.cjs` | **This session:** `call-sweep.cjs` and `session-sweep.cjs` are required by `socket-server.js` and were added to both Dockerfiles. The manifest check passes. |
-| 4 | Compose / database / package-manager mismatch | BLOCKED WITH EXACT REASON | `deploy/docker-compose.yml` (MySQL 8 + coturn + socket), `deploy/Dockerfile.app`, `package-lock.json` (npm only); CI job `mysql-runtime` | No PostgreSQL remains in the deploy stack. Runtime MySQL and Docker execution are impossible here: no container runtime and `binaries.prisma.sh` is unreachable. The CI job exists but was not run on this branch. |
+| 4 | Compose / database / package-manager mismatch | FIXED AND VERIFIED for MySQL migration and CRUD (CI run 46159428630, job "MySQL 8 migration and CRUD"); SQLite deploy compose not run | `deploy/docker-compose.yml` (MySQL 8 + coturn + socket), `deploy/Dockerfile.app`, `package-lock.json` (npm only); CI job `mysql-runtime` | No PostgreSQL remains in the deploy stack. Verified by the GitHub runner: step "Apply migrations to a real MySQL 8 server and run CRUD" = success. Local MySQL/Docker execution is impossible in this sandbox. The `deploy/` compose stack itself was not started. |
 | 5 | REST fallback message creation does not emit realtime event | ALREADY FIXED AND VERIFIED | `tests/integration/messages-hardening.test.cjs` ("must notify the realtime server") | Passing in integration 30/30. |
 | 6 | Inconsistent message-length validation | ALREADY FIXED AND VERIFIED | `conversation-block.test.cjs`, `messages-hardening.test.cjs` | One 10 000-character policy on REST and socket paths. |
 | 7 | Future-scheduled, expired, cancelled messages leak to recipients | ALREADY FIXED AND VERIFIED | `messages-hardening.test.cjs`; `runJobs` filters `status: 'SENT'` | Passing. |
@@ -52,13 +52,15 @@
 | Classification | Findings |
 |---|---|
 | FIXED AND VERIFIED, or ALREADY FIXED AND VERIFIED (18) | 1, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 22, 23, 29, 30 |
-| FIXED, verified statically only; runtime BLOCKED (1) | 2 |
-| FIXED, verification partly BLOCKED locally (Prisma binaries) (1) | 25 |
-| BLOCKED WITH EXACT REASON (1) | 4 |
+| FIXED AND VERIFIED for the part CI exercised; the compose runtime part not run (2) | 2, 4 |
+| FIXED, verification partly BLOCKED locally (Prisma binaries; CI runs it) (1) | 25 |
+| BLOCKED WITH EXACT REASON (0 in this list; the runtime part of 2 and 4 is listed under "not run") | — |
 | PARTIAL, waiting on owner input (1) | 24 |
 | PARTIAL, sessions done and streaming/cleanup open (2) | 26, 27 |
-| OPEN (8) | 14 (concurrency test), 18, 19, 20, 21, 28, plus the stories and orphan-file parts of 26 |
+| OPEN (6) | 14 (concurrency test), 18, 19, 20, 21, 28; plus the stories and orphan-file parts of 26 |
 
 Finding 14 is counted as OPEN because its race has no concurrency test. Finding 12 is counted as verified on the basis of config, lint, typecheck, and build, not a hook-by-hook review.
+
+Verification source for rows 2 and 4 is the GitHub Actions run `46159428630` on commit `a703a2c` (`https://github.com/engralaminn-collab/friendconnect_alo/actions/runs/46159428630`). The job-level and step-level conclusions were read from the GitHub API. The per-check `PASS:` lines inside those steps could not be downloaded from the sandbox, so they are not quoted here.
 
 Nothing is counted as fixed on a static text search alone. Where a fix is verified only statically, the matrix says so.
