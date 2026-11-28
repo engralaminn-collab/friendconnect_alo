@@ -63,16 +63,33 @@ export function generateTotp(secretBase32: string, window: number = 0): string {
   return hotp(secret, counter)
 }
 
-export function verifyTotp(token: string, secretBase32: string, windows: number = 1): boolean {
+/**
+ * Return the TOTP counter (30-second step) that `token` matches within `windows`
+ * steps either side of now, or null. Callers that must refuse a code already used
+ * need the counter, not a boolean.
+ */
+export function matchTotpCounter(
+  token: string,
+  secretBase32: string,
+  windows: number = 1,
+  nowMs: number = Date.now(),
+): number | null {
   const cleaned = token.replace(/\s/g, '')
-  if (!/^\d{6}$/.test(cleaned)) return false
+  if (!/^\d{6}$/.test(cleaned)) return null
+  const secret = base32Decode(secretBase32)
+  const base = Math.floor(nowMs / 30000)
   for (let w = -windows; w <= windows; w++) {
-    const expected = generateTotp(secretBase32, w)
+    const counter = base + w
+    const expected = hotp(secret, counter)
     const a = Buffer.from(cleaned)
     const b = Buffer.from(expected)
-    if (a.length === b.length && timingSafeEqual(a, b)) return true
+    if (a.length === b.length && timingSafeEqual(a, b)) return counter
   }
-  return false
+  return null
+}
+
+export function verifyTotp(token: string, secretBase32: string, windows: number = 1): boolean {
+  return matchTotpCounter(token, secretBase32, windows) !== null
 }
 
 export function generateBackupCodes(): string[] {

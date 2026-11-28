@@ -20,7 +20,8 @@
 
 import { randomBytes } from 'crypto'
 import { db } from '@/lib/db'
-import { verifyTotp } from '@/lib/totp'
+import { matchTotpCounter } from '@/lib/totp'
+import { rateLimit } from '@/lib/cache'
 import { generateBackupCodes, digestBackupCode, normalizeBackupCode } from '@/lib/one-time-code'
 
 /** Number of backup codes issued at enrolment. */
@@ -84,6 +85,24 @@ export async function consumeBackupCode(userId: string, stored: string | null, c
  * Verify the second factor for a user: a current TOTP code against the
  * confirmed secret, or an unused backup code.
  */
+/**
+ * Accept a TOTP code once per time step.
+ *
+ * Before this, a valid code stayed valid for its whole ±1-step window and could be
+ * replayed by anyone who observed it (shoulder-surfing, a logged request). The
+ * matched counter is claimed in the shared cache for longer than the window, so a
+ * second presentation is refused.
+ *
+ * Residual: without Redis the claim lives in process memory, so a multi-instance
+ * deployment needs Redis for the guarantee to hold across instances.
+ */
+export async function verifyTotpOnce(userId: string, code: string, secret: string): Promise<boolean> {
+  const counter = matchTotpCounter(code, secret, 1)
+  if (counter === null) return false
+  const claim = await rateLimit(`totp-used:${userId}:${counter}`, 1, 150)
+  return claim.allowed
+}
+
 export async function verifySecondFactor(
   user: { id: string; twoFactorConfirmedSecret?: string | null; twoFactorSecret?: string | null; twoFactorBackup?: string | null },
   code: string,
@@ -92,7 +111,7 @@ export async function verifySecondFactor(
   if (!trimmed) return { ok: false, method: 'none' }
 
   const secret = user.twoFactorConfirmedSecret || user.twoFactorSecret
-  if (secret && /^\d{6}$/.test(trimmed) && verifyTotp(trimmed, secret)) {
+  if (secret && /^\d{6}$/.test(trimmed) && (await verifyTotpOnce(user.id, trimmed, secret))) {
     return { ok: true, method: 'totp' }
   }
 

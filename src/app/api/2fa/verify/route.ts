@@ -1,7 +1,6 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
-import { verifyTotp } from '@/lib/totp'
 import { audit } from '@/lib/audit'
 import { json } from '@/lib/serialize'
 import { rateLimit } from '@/lib/cache'
@@ -10,6 +9,7 @@ import {
   BACKUP_CODE_COUNT,
   generateBackupCodes,
   serializeBackupCodes,
+  verifyTotpOnce,
 } from '@/lib/two-factor'
 
 /**
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
     const code = String((body as Record<string, unknown>).code ?? '').trim()
     if (!/^\d{6}$/.test(code)) throw invalid('Enter the 6-digit code from your app.')
 
-    if (!verifyTotp(code, user.twoFactorSecret)) {
+    if (!(await verifyTotpOnce(me.id, code, user.twoFactorSecret))) {
       throw invalid('That code is not correct. Check your authenticator and try again.')
     }
 
