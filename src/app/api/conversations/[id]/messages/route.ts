@@ -7,6 +7,7 @@ import { emitRealtimeToUsers } from "@/lib/realtime-emit"
 import { scheduleJaraReply } from "@/lib/jara-responder"
 import { canReadConversation, canSendInConversation, normalizeMessageContent, MAX_MESSAGE_LENGTH } from "@/lib/socket-security.cjs"
 import { JARA_ID } from "@/lib/jara"
+import { fetchMessagePage } from "@/lib/message-page"
 
 /** Member ids of a conversation, in one query. Used by every check below. */
 async function memberIds(conversationId: string): Promise<string[]> {
@@ -40,12 +41,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
   // A page containing any message deleted for me therefore ended the thread and
   // hid older history. Solving one extra row tells us whether another page exists
   // without guessing from the filtered count.
-  const pageSize = limit + 1
-  const page = await db.message.findMany({
-    where: { conversationId },
-    orderBy: { createdAt: "desc" },
-    take: pageSize,
-    ...(cursor ? { skip: 1, cursor: { id: cursor } } : {}),
+  const { page, nextCursor } = await fetchMessagePage(db, {
+    conversationId,
+    cursor,
+    limit,
     include: {
       sender: { select: { id: true, username: true, name: true, avatarUrl: true } },
       attachments: true,
@@ -53,14 +52,13 @@ export async function GET(req: Request, { params }: { params: Promise<{ id: stri
       replyTo: { select: { id: true, content: true, senderId: true, sender: { select: { username: true, name: true } } } },
     },
   })
-  // The cursor must come from the raw page, not from the filtered one: the next
-  // query resumes from the last row actually returned by the database.
-  const lastRaw = page.length > limit ? page[limit - 1] : null
-  const visible = filterMessagesVisibleToUser<any>(page.slice(0, limit), me.id).reverse()
+  // The cursor comes from the raw page, not the filtered one, so the next request
+  // resumes after the last row the database actually returned.
+  const visible = filterMessagesVisibleToUser<any>(page, me.id).reverse()
   return NextResponse.json({
     messages: visible,
     // Pagination cursor for the next (older) page, or null at the end.
-    nextCursor: lastRaw ? lastRaw.id : null,
+    nextCursor,
   })
 }
 
