@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { errorJson, json } from '@/lib/serialize'
+import { validationFailure } from '@/lib/jara-route-guards'
 import { requireSuperAdmin, writeJaraAudit, requestMeta } from '@/lib/jara-admin'
 
 function cleanProfileInput(body: any) {
@@ -44,7 +45,10 @@ export async function POST(req: NextRequest) {
   let body: any
   try { body = await req.json() } catch { return errorJson('Invalid JSON', 400) }
   let data: any
-  try { data = cleanProfileInput(body) } catch (e: any) { return errorJson(e.message, e.status || 400) }
+  try { data = cleanProfileInput(body) } catch (e) {
+    const failure = validationFailure(e, 'Invalid profile data')
+    return errorJson(failure.message, failure.status)
+  }
 
   if (data.isDefault) await (db as any).jaraAppearanceProfile.updateMany({ where: { isDefault: true }, data: { isDefault: false } }).catch(() => {})
   const profile = await (db as any).jaraAppearanceProfile.create({ data: { ...data, createdBy: me.id, updatedBy: me.id } })

@@ -28,6 +28,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     return json({ ok: true, job })
   } catch (e: any) {
     if (e instanceof JaraJobStoreError) return errorJson(e.message, 409)
-    return errorJson(e?.message || 'Cancel failed', 500)
+    return errorJson('Cancel failed', 500)
   }
 }

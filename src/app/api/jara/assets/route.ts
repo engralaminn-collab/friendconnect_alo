@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { errorJson, json } from '@/lib/serialize'
+import { validationFailure } from '@/lib/jara-route-guards'
 import { requireSuperAdmin, writeJaraAudit, requestMeta } from '@/lib/jara-admin'
 
 const ALLOWED_MIME = new Set(['image/png','image/jpeg','image/webp','image/svg+xml'])
@@ -36,7 +37,10 @@ export async function POST(req: NextRequest) {
   const fileSize = body.fileSize != null ? Number(body.fileSize) : null
   if (fileSize != null && (fileSize <= 0 || fileSize > MAX_SIZE)) return errorJson('Invalid fileSize', 400)
   let fileUrl: string | null = null
-  try { fileUrl = validateTrustedAssetUrl(body.fileUrl) } catch (e: any) { return errorJson(e.message, e.status || 400) }
+  try { fileUrl = validateTrustedAssetUrl(body.fileUrl) } catch (e) {
+    const failure = validationFailure(e, 'Invalid asset URL')
+    return errorJson(failure.message, failure.status)
+  }
   const asset = await (db as any).jaraAsset.create({ data: {
     kind, name, description: body.description ? String(body.description).slice(0, 500) : null,
     fileUrl, storageKey: body.storageKey ? String(body.storageKey).slice(0, 300) : null,

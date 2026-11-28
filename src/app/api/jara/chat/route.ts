@@ -185,8 +185,12 @@ export async function POST(req: NextRequest) {
       try { await (db as any).message.create({ data: { senderId: JARA_ID, receiverId: me.id, content: reply, type: 'text', status: 'SENT', metadata: JSON.stringify({ kind: 'config-applied', version: applied.version }) } }) } catch {}
       return json({ response: reply, kind: 'applied', config: applied.config, version: applied.version, changeSummary: summary })
     } catch (e: any) {
-      await writeJaraAudit({ action: 'config_change', actorId: me.id, actorRole: me.role, detail: `Direct apply failed: ${e?.message}`, authorizationResult: 'denied', changeReason: lastUserMsg.slice(0, 300), ...requestMeta(req) })
-      const errReply = `I understood your request (${summary.join(', ')}), but I could not apply it: ${e?.message || 'unknown error'}. No configuration was reported as applied.`
+      // The internal message goes to the audit log only. It used to be pasted into
+      // the chat reply, which is the one place a config error (validation rule,
+      // database constraint, version conflict) must not surface verbatim.
+      const internal = e instanceof Error ? e.message : String(e ?? 'unknown error')
+      await writeJaraAudit({ action: 'config_change', actorId: me.id, actorRole: me.role, detail: `Direct apply failed: ${internal}`, authorizationResult: 'denied', changeReason: lastUserMsg.slice(0, 300), ...requestMeta(req) })
+      const errReply = `I understood your request (${summary.join(', ')}), but I could not apply it. The change was rejected and no configuration was reported as applied. An administrator can see the reason in the audit log.`
       try { await (db as any).message.create({ data: { senderId: JARA_ID, receiverId: me.id, content: errReply, type: 'text', status: 'SENT' } }) } catch {}
       return json({ response: errReply, kind: 'error' }, 500)
     }
@@ -227,8 +231,13 @@ export async function POST(req: NextRequest) {
     aiResponse = await aiChat(serverContext, systemPrompt)
   } catch (e: any) {
     if (e instanceof AIInputRejectedError) {
-      try { await (db as any).message.create({ data: { senderId: JARA_ID, receiverId: me.id, content: '⚠️ ' + e.message, type: 'text', status: 'SENT' } }) } catch {}
-      return errorJson(e.message, 400)
+      // AIInputRejectedError's message is written for the user ("that attachment is
+      // too large"), so publishing it is the point of the type. Bound the length and
+      // keep the raw object out of the response so this cannot become a general
+      // exception-text escape hatch.
+      const rejectedReason = String(e.message || '').slice(0, 300)
+      try { await (db as any).message.create({ data: { senderId: JARA_ID, receiverId: me.id, content: '⚠️ ' + rejectedReason, type: 'text', status: 'SENT' } }) } catch {}
+      return errorJson(rejectedReason, 400, 'AI_INPUT_REJECTED')
     }
     return errorJson('Jara language model is temporarily unavailable', 502)
   }

@@ -227,7 +227,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         userAgent: ua,
       },
     })
-    return errorJson(`Failed to apply: ${e.message}`, 500)
+    // The reason belongs in the audit row above, not in a 500 body.
+    return errorJson('Failed to apply the approved configuration. The reason was recorded in the audit log.', 500)
   }
 }
 

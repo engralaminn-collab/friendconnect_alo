@@ -82,7 +82,7 @@ function Welcome() {
         <div className="mt-8 grid w-full max-w-sm gap-3">
           {[
             { icon: Users, title: 'Find friends', desc: 'Search by name or username' },
-            { icon: MessageCircle, title: 'Private chat', desc: 'End-to-end encrypted feel, realtime' },
+            { icon: MessageCircle, title: 'Private chat', desc: 'Private, realtime messaging' },
             { icon: Video, title: 'Voice & video calls', desc: 'Crystal-clear across networks' },
           ].map((f) => (
             <div key={f.title} className="flex items-center gap-3 rounded-2xl border border-border bg-card/60 p-3 text-left backdrop-blur">

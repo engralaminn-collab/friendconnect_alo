@@ -9,6 +9,18 @@ import {
 
 // Hook: manages the current user's E2EE key pair and provides
 // encrypt/decrypt functions for a specific peer.
+//
+// NOT WIRED INTO THE APP. `src/lib/e2ee.ts` is a complete, tested primitive, but
+// nothing calls this hook: no message is encrypted on send and no message is
+// decrypted on read. Audit finding — the product copy that claimed "end-to-end
+// encrypted" messaging has been corrected rather than shipping a half-built
+// encryption path that would give users a false guarantee.
+//
+// Do not mount this in a message path without doing the full job: key
+// verification (a server that hands out public keys is a server that can
+// man-in-the-middle), multi-device key sync, search/moderation/AI behaviour on
+// ciphertext, and a migration story for existing plaintext history. Until then,
+// treat message content as private-by-authorization, not end-to-end encrypted.
 export function useE2EE(userId: string | null) {
   const [keyPair, setKeyPair] = useState<E2EEKeyPair | null>(null)
   const [ready, setReady] = useState(false)

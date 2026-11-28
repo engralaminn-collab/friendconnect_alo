@@ -156,6 +156,20 @@ jobs:
       - name: Realtime server syntax check
         run: node --check socket-server.js
 
+      - name: Docker image manifest consistency
+        shell: bash
+        # There is no container runtime in this job, so the image cannot be built
+        # here. What *can* be checked is the class of bug that made the image
+        # unbootable twice: a COPY of a module that is not a dependency, and a
+        # missing COPY of a module the realtime server requires at runtime. The
+        # checker parses both Dockerfiles and follows their real require() graph;
+        # its own regression test lives in tests/security/docker-manifest.test.cjs
+        # and runs in the Security regression step above.
+        run: |
+          set -euo pipefail
+          node scripts/check-docker-manifest.mjs
+          node --test tests/security/docker-manifest.test.cjs
+
       - name: Production build
         env:
           NODE_ENV: production
