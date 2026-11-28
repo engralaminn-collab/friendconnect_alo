@@ -1,4 +1,5 @@
 import { json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 import { db } from '@/lib/db'
 import { isAIConfigured, getAIProvider, getAvailableModels } from '@/lib/ai'
 import { JARA_ID } from '@/lib/jara'
@@ -61,7 +62,11 @@ export async function GET() {
       })(),
       guardrails: { enabled: guardrailsEnabled() },
     })
-  } catch (e: any) {
-    return json({ status: 'error', error: e.message }, 500)
+  } catch (error) {
+    // Finding 15: this returned the raw exception message, which is exactly the
+    // SQLite/Prisma internals leak `@/lib/api-errors` exists to prevent.
+    // `handleRouteError` logs the detail server-side with a requestId and returns
+    // a generic body.
+    return handleRouteError(error, 'GET /api/jara/health')
   }
 }

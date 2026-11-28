@@ -2860,7 +2860,7 @@ function ChatRoom({
 
       <p className="flex items-center justify-center gap-1 border-t border-border/60 px-3 py-1 text-[10px] text-muted-foreground">
         <Lock size={10} />
-        Private chat — encrypted-feel realtime. Only people in this conversation can see these messages.
+        Private chat. Only people in this conversation can see these messages.
       </p>
       {/* input bar */}
       <div className="border-t-0 bg-background p-2 fc-safe-bottom">

@@ -30,6 +30,9 @@ const {
   isSessionActive,
   isMessageParticipant,
   canInteract,
+  canSendInConversation,
+  canReadConversation,
+  normalizeMessageContent,
   eventRateLimit,
   isJaraId,
   JARA_IDS,
@@ -418,9 +421,14 @@ io.on('connection', (socket) => {
       const fail = (error) => { if (typeof ack === 'function') ack({ ok: false, error }) }
       if (!senderId) return fail('Unauthorized')
       if (!(await requireMembership(conversationId, senderId))) return fail('Not a member')
-      const content = String(data.content || '')
-      if (content.length > 10000) return fail('Message too long')
-      if (!content.trim()) return fail('Empty message')
+      // Finding 1: the same block check the REST route applies. A
+      // `ConversationMember` row outlives a block, so membership is not enough.
+      const send = await canSendInConversation(prisma, senderId, await memberIdsOf(conversationId))
+      if (!send.allowed) return fail('You cannot send messages in this conversation')
+      // Finding 6: one length policy (see `normalizeMessageContent`).
+      const normalized = normalizeMessageContent(data.content || data.message || '')
+      if (!normalized.ok) return fail(normalized.error)
+      const content = normalized.content
       try {
         const peers = await conversationPeers(conversationId, senderId)
         const msg = await prisma.message.create({
@@ -463,11 +471,13 @@ io.on('connection', (socket) => {
       if (typeof ack === 'function') ack({ ok: false, error: 'Unauthorized' })
       return
     }
-    const content = String(data.content || data.message || '')
-    if (content.length > 10000) {
-      if (typeof ack === 'function') ack({ ok: false, error: 'Message too long' })
+    // Finding 6: the same length policy the conversation branch applies.
+    const legacyContent = normalizeMessageContent(data.content || data.message || '')
+    if (!legacyContent.ok) {
+      if (typeof ack === 'function') ack({ ok: false, error: legacyContent.error })
       return
     }
+    const content = legacyContent.content
     try {
       if (!(await canInteract(prisma, senderId, data.receiverId, 'messagePermission'))) {
         if (typeof ack === 'function') ack({ ok: false, error: 'Not permitted to message this user' })
@@ -653,6 +663,12 @@ io.on('connection', (socket) => {
       data: { lastReadAt: new Date() },
     }).catch(() => {})
     const members = await memberIdsOf(conversationId)
+    // Finding 8: `Profile.readReceipts === false` means this user's reads are not
+    // reported to anyone, not just "no per-message SEEN status". Before this check
+    // moved up, the aggregate `message:read` broadcast still told every member
+    // that the user had read the thread.
+    const profile = await prisma.profile.findUnique({ where: { userId: me }, select: { readReceipts: true } }).catch(() => null)
+    if (profile?.readReceipts === false) return
     for (const userId of members) {
       if (userId !== me) emitToUser(userId, 'message:read', { conversationId, userId: me })
     }
@@ -660,8 +676,6 @@ io.on('connection', (socket) => {
     // Direct conversations additionally carry a per-message delivery status.
     const peers = members.filter((id) => id !== me)
     if (peers.length !== 1) return
-    const profile = await prisma.profile.findUnique({ where: { userId: me }, select: { readReceipts: true } }).catch(() => null)
-    if (profile?.readReceipts === false) return
     const senderId = peers[0]
     const unread = await prisma.message.findMany({
       where: { conversationId, senderId, status: { not: 'SEEN' } },
@@ -979,6 +993,10 @@ async function runJobs() {
   const now = new Date()
   try {
     const due = await prisma.message.findMany({
+      // Finding 9: cancelling a scheduled message sets `status` to CANCELLED
+      // instead of deleting the row, so the audit trail survives. The `status:
+      // 'SENT'` filter is therefore load-bearing: a cancelled row must never be
+      // delivered by this job.
       where: { scheduledFor: { lte: now }, status: 'SENT', deletedFor: { not: 'everyone' } },
       take: 50,
     })

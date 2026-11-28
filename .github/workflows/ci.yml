@@ -156,6 +156,20 @@ jobs:
       - name: Realtime server syntax check
         run: node --check socket-server.js
 
+      - name: Docker image manifest consistency
+        shell: bash
+        # There is no container runtime in this job, so the image cannot be built
+        # here. What *can* be checked is the class of bug that made the image
+        # unbootable twice: a COPY of a module that is not a dependency, and a
+        # missing COPY of a module the realtime server requires at runtime. The
+        # checker parses both Dockerfiles and follows their real require() graph;
+        # its own regression test lives in tests/security/docker-manifest.test.cjs
+        # and runs in the Security regression step above.
+        run: |
+          set -euo pipefail
+          node scripts/check-docker-manifest.mjs
+          node --test tests/security/docker-manifest.test.cjs
+
       - name: Production build
         env:
           NODE_ENV: production
@@ -261,3 +275,109 @@ jobs:
           path: .next/standalone/
           if-no-files-found: error
           retention-days: 7
+
+  # ---------------------------------------------------------------------------
+  # Real Docker build + container runtime verification.
+  #
+  # Previously the Dockerfile was only checked statically, because the sandbox
+  # used for development has no container runtime. The GitHub runner does, so the
+  # image is genuinely built, started, health-checked, exercised with a real
+  # registration, restarted, and shut down here. Findings 2 and 3 shipped twice
+  # precisely because nobody ran this.
+  # ---------------------------------------------------------------------------
+  docker-runtime:
+    name: Docker build and container runtime
+    runs-on: ubuntu-22.04
+    timeout-minutes: 40
+    needs: quality
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      # The image build needs the lockfile-matching npm and the Prisma engine,
+      # which the quality job already proved. Only Docker matters here.
+      - name: Verify Docker is available
+        run: docker version
+
+      - name: Build image and verify the running container
+        id: dockerverify
+        # `continue-on-error` so the next step can publish the failing assertions as
+        # annotations before the job fails. Log artifacts are not reliably
+        # downloadable, so an annotation is the only dependable evidence channel.
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          bash scripts/docker-verify.sh 2>&1 | tee docker-verify.log
+
+      - name: Report Docker verification failures as annotations
+        if: steps.dockerverify.outcome == 'failure'
+        shell: bash
+        run: node scripts/report-verification-failures.mjs docker-verify.log "Docker runtime"
+
+      - name: Fail the job if Docker verification failed
+        if: steps.dockerverify.outcome == 'failure'
+        shell: bash
+        run: exit 1
+
+      - name: Collect container logs on failure
+        if: failure()
+        shell: bash
+        run: |
+          docker ps -a
+          for c in fc-verify-app fc-verify-socket; do
+            echo "--- $c ---"
+            docker logs "$c" 2>&1 | tail -80 || true
+          done
+
+  # ---------------------------------------------------------------------------
+  # Real MySQL execution.
+  #
+  # `prisma migrate diff` proves the schema renders to SQL; it does not prove the
+  # migrations apply to a server or that the generated client can read and write.
+  # This job starts MySQL 8, applies the migration history, and runs a real CRUD
+  # round trip through Prisma.
+  # ---------------------------------------------------------------------------
+  mysql-runtime:
+    name: MySQL 8 migration and CRUD
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+    needs: quality
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: "22.23.4"
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install locked dependencies
+        run: npm ci --include=dev --no-audit --no-fund
+
+      - name: Apply migrations to a real MySQL 8 server and run CRUD
+        id: mysqlverify
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -o pipefail
+          bash scripts/mysql-verify.sh 2>&1 | tee mysql-verify.log
+
+      - name: Report MySQL verification failures as annotations
+        if: steps.mysqlverify.outcome == 'failure'
+        shell: bash
+        run: node scripts/report-verification-failures.mjs mysql-verify.log "MySQL runtime"
+
+      - name: Fail the job if MySQL verification failed
+        if: steps.mysqlverify.outcome == 'failure'
+        shell: bash
+        run: exit 1
+
+      - name: Collect MySQL logs on failure
+        if: failure()
+        shell: bash
+        run: docker logs fc-verify-mysql 2>&1 | tail -80 || true

@@ -2,6 +2,28 @@ import { NextRequest } from 'next/server'
 import { db } from '@/lib/db'
 import { json, errorJson } from '@/lib/serialize'
 import { getSessionUser } from '@/lib/session'
+import { timingSafeEqual } from 'node:crypto'
+
+/**
+ * Compare two secrets without leaking their length or content through timing.
+ *
+ * The previous check was `provided.length === expected.length && provided ===
+ * expected`, which short-circuits on the first differing byte, so a caller could
+ * recover a token byte by byte from response timing. Every other secret
+ * comparison in this codebase (`socket-server.js`, `one-time-code.ts`,
+ * `jara-sms-signature.ts`) already used a constant-time compare; this one was the
+ * outlier.
+ */
+function secretsMatch(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided, 'utf8')
+  const b = Buffer.from(expected, 'utf8')
+  if (a.length !== b.length) {
+    // Still compare something of equal length so the mismatch is not free.
+    timingSafeEqual(a, a)
+    return false
+  }
+  return timingSafeEqual(a, b)
+}
 
 // Prometheus-style metrics endpoint.
 //
@@ -15,9 +37,8 @@ export async function GET(req: NextRequest) {
   const auth = req.headers.get('authorization') || ''
   let allowed = false
   if (expected) {
-    // Constant-time-ish comparison; tokens are short so this is sufficient.
     const provided = auth.startsWith('Bearer ') ? auth.slice(7) : ''
-    allowed = provided.length === expected.length && provided === expected
+    allowed = secretsMatch(provided, expected)
   }
   if (!allowed) {
     const me = await getSessionUser().catch(() => null)

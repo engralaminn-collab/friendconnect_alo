@@ -470,14 +470,53 @@ async function loadIncludes(name, rows, include) {
   return rows
 }
 
-function orderSql(orderBy) {
+/**
+ * Validate one `orderBy` entry against the model's scalar columns.
+ *
+ * Audit finding 10: `orderSql` interpolated `Object.keys(o)[0]` straight into the
+ * SQL string. Nothing passes user input here today, but every other identifier
+ * path in this file refuses unknown columns precisely because a silently wrong
+ * identifier is a security bug that reads as a passing test — `where` throws
+ * `Unknown filter field`, `orderBy` did not.
+ *
+ * Two outcomes, matching Prisma's own contract:
+ *   - a column this model does not have is a programming error and throws, so a
+ *     typo fails loudly instead of producing "no such column" 500s at runtime;
+ *   - a *relation* name (or nested `{ relation: { field: dir } }` shape) is a
+ *     sort Prisma supports but this runtime cannot express as a plain column, so
+ *     it falls back to no ordering rather than guessing.
+ */
+function orderColumn(model, field) {
+  if (typeof field !== 'string' || !field) {
+    throw new Error(`Invalid orderBy field on ${model.model} (db-runtime)`)
+  }
+  if (model.relations && model.relations[field]) return null
+  if (!scalarColumns(model).has(field)) {
+    throw new Error(`Unknown orderBy field ${model.model}.${field} (db-runtime)`)
+  }
+  return field
+}
+
+function orderSql(model, orderBy) {
   if (!orderBy) return ''
   const parts = Array.isArray(orderBy) ? orderBy : [orderBy]
   const bits = parts
     .map((o) => {
-      const k = Object.keys(o)[0]
-      const dir = String(o[k]).toUpperCase() === 'DESC' ? 'DESC' : 'ASC'
-      return `"${k}" ${dir}`
+      if (!o || typeof o !== 'object') {
+        throw new Error(`Invalid orderBy entry on ${model.model} (db-runtime)`)
+      }
+      const field = Object.keys(o)[0]
+      const column = orderColumn(model, field)
+      // Relation ordering is not expressible here; skip it rather than emit SQL.
+      if (!column) return ''
+      const requested = o[field]
+      // Prisma allows a direction string, or an object such as
+      // `{ createdAt: { sort: 'desc', nulls: 'last' } }` / `{ _count: 'desc' }`.
+      const sort = requested && typeof requested === 'object'
+        ? requested.sort ?? requested.order
+        : requested
+      const dir = String(sort).toUpperCase() === 'DESC' ? 'DESC' : 'ASC'
+      return `"${column}" ${dir}`
     })
     .filter(Boolean)
   return bits.length ? ` ORDER BY ${bits.join(', ')}` : ''
@@ -893,7 +932,7 @@ function delegate(name) {
   const runFind = (args = {}, many) => {
     const db = getSqlite()
     const w = cond(model, args.where)
-    let sql = `SELECT * FROM "${model.table}" WHERE ${w.sql}${orderSql(args.orderBy)}`
+    let sql = `SELECT * FROM "${model.table}" WHERE ${w.sql}${orderSql(model, args.orderBy)}`
     if (!many) sql += ' LIMIT 1'
     else {
       if (args.take) sql += ` LIMIT ${Number(args.take)}`
@@ -981,7 +1020,7 @@ function delegate(name) {
       }
       const sql =
         `SELECT ${select}${aggregates.length ? ', ' + aggregates.join(', ') : ''} ` +
-        `FROM "${model.table}" WHERE ${w.sql} GROUP BY ${select}${orderSql(args.orderBy)}`
+        `FROM "${model.table}" WHERE ${w.sql} GROUP BY ${select}${orderSql(model, args.orderBy)}`
       const rows = db.prepare(sql).all(...w.params)
 
       return rows.map((row) => {

@@ -105,6 +105,107 @@ function canMessage(prisma, fromId, toId) {
   return canInteract(prisma, fromId, toId, 'messagePermission')
 }
 
+/**
+ * Is a one-directional block in force between two users?
+ *
+ * `canInteract` answers "may A start a conversation with B", which includes the
+ * recipient's message permission. A block is a stronger, two-sided statement:
+ * neither party may put new content into a thread they share, even though the
+ * thread and its history stay readable. Blocking is checked here against the
+ * `Block` table *and* a legacy `Friendship.status === 'BLOCKED'` row, for the
+ * same reason `canInteract` checks both — an older release could leave one
+ * without the other.
+ *
+ * @returns {Promise<boolean>}
+ */
+async function isBlockedBetween(prisma, a, b) {
+  if (!a || !b) return false
+  if (a === b) return false
+  const block = await prisma.block.findFirst({
+    where: { OR: [{ fromId: a, toId: b }, { fromId: b, toId: a }] },
+    select: { id: true },
+  })
+  if (block) return true
+  const relationship = await prisma.friendship.findFirst({
+    where: {
+      OR: [{ requesterId: a, receiverId: b }, { requesterId: b, receiverId: a }],
+    },
+    select: { id: true, status: true },
+  })
+  return relationship?.status === 'BLOCKED'
+}
+
+/**
+ * May `senderId` create a new message in an existing conversation?
+ *
+ * Membership is necessary but not sufficient. `POST /api/blocks` removes the
+ * `Friendship` row and leaves `ConversationMember` intact so history survives,
+ * which means a member row can outlive the relationship that justified it. The
+ * socket and REST paths both call this before writing a message; without it a
+ * blocked user kept writing into the shared thread (audit finding 1).
+ *
+ * Blocking is the only rule applied here. Message permission is deliberately
+ * *not* re-checked: it gates whether a conversation may be started, not whether
+ * two people already talking may keep replying, and applying it mid-thread would
+ * silently break conversations whenever a profile switched to FRIENDS-only.
+ *
+ * @param {object} prisma
+ * @param {string} senderId
+ * @param {string[]} peerIds every other participant of the conversation
+ * @returns {Promise<{allowed: boolean, blockedPeerId: string|null}>}
+ */
+async function canSendInConversation(prisma, senderId, peerIds) {
+  if (!senderId) return { allowed: false, blockedPeerId: null }
+  const peers = Array.isArray(peerIds) ? peerIds.filter((id) => typeof id === 'string' && id && id !== senderId) : []
+  // A conversation with no other human participant (e.g. a thread with the
+  // assistant only) has nobody to block the sender.
+  for (const peerId of peers) {
+    if (isJaraId(peerId)) continue
+    if (await isBlockedBetween(prisma, senderId, peerId)) {
+      return { allowed: false, blockedPeerId: peerId }
+    }
+  }
+  return { allowed: true, blockedPeerId: null }
+}
+
+/**
+ * May `userId` read an existing conversation?
+ *
+ * Membership is necessary but not sufficient, for the same reason it is on the
+ * write path: `POST /api/blocks` leaves `ConversationMember` rows in place so
+ * history survives, which means a member row can outlive the relationship.
+ *
+ * A block hides the thread from **both** parties, not just the blocked one
+ * (audit finding 1). This is a deliberate product decision, recorded here because
+ * the alternative is also defensible:
+ *
+ *  - Hiding it symmetrically keeps a block a single fact rather than a fact plus a
+ *    directional rule, so no response can reveal *who* blocked whom. It also means
+ *    the other party cannot keep reading a thread the blocker has ended.
+ *  - It matches the write rule, which is already symmetric: neither side can post.
+ *    A thread nobody on either side may post to is not usefully half-visible.
+ *  - Nothing is deleted. Unblocking restores the thread on both sides, because the
+ *    rule is evaluated per request and no `ConversationMember` or `Message` row is
+ *    removed.
+ *
+ * Direct threads between two already-blocked users can no longer be created at
+ * all (see `POST /api/conversations`), so in practice this only affects threads
+ * that predate the block.
+ *
+ * @returns {Promise<{allowed: boolean, blockedPeerId: string|null}>}
+ */
+async function canReadConversation(prisma, userId, peerIds) {
+  if (!userId) return { allowed: false, blockedPeerId: null }
+  const peers = Array.isArray(peerIds) ? peerIds.filter((id) => typeof id === 'string' && id && id !== userId) : []
+  for (const peerId of peers) {
+    if (isJaraId(peerId)) continue
+    if (await isBlockedBetween(prisma, userId, peerId)) {
+      return { allowed: false, blockedPeerId: peerId }
+    }
+  }
+  return { allowed: true, blockedPeerId: null }
+}
+
 /** May `userId` call `toId`? */
 function canCall(prisma, fromId, toId) {
   return canInteract(prisma, fromId, toId, 'callPermission')
@@ -126,6 +227,29 @@ function eventRateLimit(event) {
   return null
 }
 
+/** Maximum length of a message body, in characters. One policy for every path. */
+const MAX_MESSAGE_LENGTH = 10_000
+
+/**
+ * Validate a message body for storage.
+ *
+ * The REST fallback in `POST /api/messages` previously accepted any length while
+ * the socket and conversation routes capped at 10 000 characters (audit finding
+ * 6), so a single request could store a multi-megabyte row that then broke list
+ * responses and the AI context builder.
+ *
+ * @param {unknown} raw
+ * @returns {{ok: true, content: string} | {ok: false, error: string}}
+ */
+function normalizeMessageContent(raw) {
+  if (raw === null || raw === undefined) return { ok: false, error: 'Empty message' }
+  if (typeof raw !== 'string' && typeof raw !== 'number') return { ok: false, error: 'Invalid message' }
+  const content = String(raw)
+  if (content.length > MAX_MESSAGE_LENGTH) return { ok: false, error: 'Message too long' }
+  if (!content.trim()) return { ok: false, error: 'Empty message' }
+  return { ok: true, content }
+}
+
 module.exports = {
   findActiveSession,
   createHandshakeMiddleware,
@@ -134,6 +258,11 @@ module.exports = {
   canInteract,
   canMessage,
   canCall,
+  isBlockedBetween,
+  canSendInConversation,
+  canReadConversation,
+  normalizeMessageContent,
+  MAX_MESSAGE_LENGTH,
   isJaraId,
   JARA_IDS,
   eventRateLimit,

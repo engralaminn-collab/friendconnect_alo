@@ -1,4 +1,24 @@
-// Socket.IO real-time chat service for FriendConnect
+// Socket.IO real-time chat service for FriendConnect — LEGACY / NOT THE
+// PRODUCTION REALTIME SERVER.
+//
+// The authoritative realtime server is `socket-server.js` at the repository
+// root. It authenticates with the persisted `Session.token`, revalidates the
+// session on every packet, and enforces per-event authorization (block checks,
+// conversation membership, call relationships) through `src/lib/socket-security.cjs`.
+//
+// This file predates that work and does none of it: it trusts an HMAC token
+// format that `/api/auth/ws-token` no longer issues, and it broadcasts presence
+// and conversation traffic to every member of a conversation without consulting
+// blocks or profile visibility. Audit finding 16 kept it in the tree only because
+// `scripts/run-chat-and-verify.sh` and `.zscripts/mini-services-*` still reference
+// it; do not deploy it.
+//
+// Hardening applied here so an accidental deployment cannot become an incident:
+//   * refuses to start when NODE_ENV=production (opt in with
+//     ALLOW_LEGACY_CHAT_SERVICE=true only for a controlled experiment),
+//   * never falls back to the repository's well-known development secret,
+//   * serves Socket.IO on the `/socket.io/` path clients actually use.
+//
 // Port: 3003 (must match the XTransformPort used by the frontend)
 //
 // Auth: client passes `token` in handshake.auth or query, which is a
@@ -10,7 +30,27 @@ import crypto from "crypto"
 import { PrismaClient } from "@prisma/client"
 
 const PORT = Number(process.env.CHAT_SERVICE_PORT) || 3003
-const SECRET = process.env.NEXTAUTH_SECRET || "friendconnect-dev-secret-change-in-production"
+const DEV_SECRET = "friendconnect-dev-secret-change-in-production"
+const SECRET = process.env.NEXTAUTH_SECRET || ""
+
+if (process.env.NODE_ENV === "production" && process.env.ALLOW_LEGACY_CHAT_SERVICE !== "true") {
+  console.error(
+    "[chat-service] REFUSING TO START in production.\n" +
+      "  The production realtime server is `node socket-server.js`.\n" +
+      "  This legacy service does not enforce block/profile authorization.\n" +
+      "  Set ALLOW_LEGACY_CHAT_SERVICE=true only for a deliberate, isolated experiment.",
+  )
+  process.exit(1)
+}
+if (!SECRET || SECRET === DEV_SECRET) {
+  console.error(
+    "[chat-service] REFUSING TO START: NEXTAUTH_SECRET must be set to a real value.\n" +
+      "  The repository's development fallback secret is public, so accepting it would\n" +
+      "  let anyone mint a token for any user.",
+  )
+  process.exit(1)
+}
+
 const db = new PrismaClient()
 
 interface DecodedToken {
@@ -42,8 +82,11 @@ function verifyToken(raw: string | undefined): DecodedToken | null {
 const io = new Server(
   createServer(),
   {
-    path: "/",
-    cors: { origin: "*", methods: ["GET", "POST"] },
+    // The app connects to `/socket.io/` (see src/lib/socket.ts). Serving on "/"
+    // made this service invisible to every real client, so it never received a
+    // single connection even when it was started.
+    path: "/socket.io/",
+    cors: { origin: process.env.APP_ORIGIN || false, methods: ["GET", "POST"] },
     pingTimeout: 60000,
     pingInterval: 25000,
   }

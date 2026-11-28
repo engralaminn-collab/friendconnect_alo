@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { featureGateFailure } from '@/lib/jara-route-guards'
 import { db } from '@/lib/db'
 import { aiChat, isAIConfigured } from '@/lib/ai'
 import { buildJaraConversationContext } from '@/lib/ai-input'
@@ -15,8 +16,8 @@ export async function POST(req: NextRequest) {
   if (!me) return errorJson('Unauthorized', 401)
   try {
     await assertJaraEnabled('voice')
-  } catch (e: any) {
-    return errorJson(e?.status === 503 ? 'Jara AI is currently disabled by a Super Admin.' : (e?.message || 'Jara unavailable'), e?.status || 403)
+  } catch (e) {
+    return featureGateFailure(e)
   }
 
   const limited = await rateLimit(`jara-voice:${me.id}`, 10, 60).catch(() => null)
