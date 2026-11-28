@@ -74,22 +74,36 @@ function parseSchema(source) {
 /** Collect the columns the migration history actually creates. */
 function parseMigrations(dir) {
   const tables = {}
+  const definitions = {}
   const ensure = (t) => (tables[t] ??= new Set())
   for (const entry of readdirSyncSafe(dir)) {
     const file = join(dir, entry, 'migration.sql')
     if (!existsSync(file)) continue
-    // Skip the migration this script generates.
+    // Skip the migration this script generates: it is the output being rebuilt.
     if (entry === MIGRATION_NAME) continue
     const sql = readFileSync(file, 'utf8')
     for (const create of sql.matchAll(/CREATE TABLE (?:IF NOT EXISTS )?`(\w+)`\s*\(([\s\S]*?)\n\)[^\n]*;/g)) {
-      ensure(create[1])
-      for (const col of create[2].matchAll(/^\s+`(\w+)`/gm)) tables[create[1]].add(col[1])
+      const table = create[1]
+      ensure(table)
+      for (const raw of create[2].split('\n')) {
+        const col = raw.trim().match(/^`(\w+)`\s+(.+?)(?:,)?$/)
+        if (!col) continue
+        tables[table].add(col[1])
+        definitions[`${table}.${col[1]}`] = col[2].replace(/,$/, '').trim()
+      }
     }
-    for (const alter of sql.matchAll(/ALTER TABLE `(\w+)`\s+ADD COLUMN `(\w+)`/g)) {
+    for (const alter of sql.matchAll(/ALTER TABLE `(\w+)`\s+ADD COLUMN `(\w+)`\s+([^;]+);/g)) {
       ensure(alter[1]).add(alter[2])
+      definitions[`${alter[1]}.${alter[2]}`] = alter[3].trim()
+    }
+    // A later compatibility repair may relax a legacy migration-only required
+    // column. Track the final definition, not only the CREATE TABLE shape.
+    for (const modify of sql.matchAll(/ALTER TABLE `(\w+)`\s+MODIFY COLUMN `(\w+)`\s+([^;]+);/g)) {
+      ensure(modify[1]).add(modify[2])
+      definitions[`${modify[1]}.${modify[2]}`] = modify[3].trim()
     }
   }
-  return tables
+  return { tables, definitions }
 }
 
 function readdirSyncSafe(dir) {
@@ -171,7 +185,7 @@ function mysqlDefault(info) {
  * recorded will fail loudly on the first duplicate column, which is the correct
  * outcome — silent divergence is the bug this migration exists to fix.
  */
-function buildSql(missing) {
+function buildSql(missing, blockingExtras) {
   const lines = [
     '-- FriendConnect parity repair: add columns the canonical schema declares but',
     '-- no earlier migration created.',
@@ -197,11 +211,26 @@ function buildSql(missing) {
     lines.push('')
   }
 
+  if (blockingExtras.length) {
+    lines.push('-- Legacy migration-only columns')
+    lines.push('-- Preserve their data, but make them nullable so canonical Prisma writes')
+    lines.push('-- that do not know about these fields cannot violate a NOT NULL constraint.')
+    for (const { table, column, definition } of blockingExtras) {
+      // Keep the MySQL type exactly as migrated; only remove the blocking
+      // nullability requirement. These columns are not in the canonical schema,
+      // so adding a synthetic application default would hide rather than repair
+      // the drift.
+      const type = definition.replace(/\s+NOT NULL(?:\s+DEFAULT\s+.+)?$/i, '').trim()
+      lines.push(`ALTER TABLE \`${table}\` MODIFY COLUMN \`${column}\` ${type} NULL;`)
+    }
+    lines.push('')
+  }
+
   return lines.join('\n')
 }
 
 const schema = parseSchema(readFileSync(join(ROOT, 'prisma/schema.prisma'), 'utf8'))
-const existing = parseMigrations(join(ROOT, 'prisma/migrations'))
+const { tables: existing, definitions } = parseMigrations(join(ROOT, 'prisma/migrations'))
 
 // Populate INDEXED_COLUMNS from the schema's @@index / @@unique declarations.
 for (const match of readFileSync(join(ROOT, 'prisma/schema.prisma'), 'utf8').matchAll(
@@ -226,7 +255,22 @@ for (const [model, fields] of Object.entries(schema)) {
   }
 }
 
-const sql = buildSql(missing)
+// Migration-only nullable columns are harmless legacy data. Migration-only
+// required columns without a database default are not: Prisma never sends them,
+// so every create fails (Profile.updatedAt was the first real MySQL CRUD failure).
+const blockingExtras = []
+for (const [table, columns] of Object.entries(existing)) {
+  const canonical = new Set(Object.values(schema[table] || {}).map((field) => field.column))
+  for (const column of columns) {
+    if (canonical.has(column)) continue
+    const definition = definitions[`${table}.${column}`] || ''
+    if (/\bNOT NULL\b/i.test(definition) && !/\bDEFAULT\b/i.test(definition)) {
+      blockingExtras.push({ table, column, definition })
+    }
+  }
+}
+
+const sql = buildSql(missing, blockingExtras)
 const check = process.argv.includes('--check')
 
 if (check) {
@@ -240,7 +284,7 @@ if (check) {
     process.exit(1)
   }
   console.log(
-    `provider parity repair: up to date (${Object.keys(missing).length} tables, ${Object.values(missing).reduce((n, c) => n + Object.keys(c).length, 0)} columns)`,
+    `provider parity repair: up to date (${Object.keys(missing).length} tables, ${Object.values(missing).reduce((n, c) => n + Object.keys(c).length, 0)} columns, ${blockingExtras.length} legacy constraints relaxed)`,
   )
   process.exit(0)
 }

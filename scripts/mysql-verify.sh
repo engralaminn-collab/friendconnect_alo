@@ -161,7 +161,22 @@ async function main() {
       passwordHash: 'not-a-real-hash',
     },
   })
+  // Profile used to be impossible to create because a legacy migration-only
+  // `updatedAt NOT NULL` column was not present in the Prisma schema.
   await prisma.profile.create({ data: { userId: user.id, readReceipts: false } })
+
+  // The same drift existed on BroadcastList.updatedAt and
+  // BroadcastMember.broadcastId. Exercise both without supplying those legacy
+  // fields; the canonical client must be sufficient to create a row.
+  const broadcast = await prisma.broadcastList.create({
+    data: { ownerId: user.id, name: 'MySQL verify list' },
+  })
+  const membership = await prisma.broadcastMember.create({
+    data: { broadcastListId: broadcast.id, recipientId: peer.id },
+  })
+  if (!membership || membership.broadcastListId !== broadcast.id) {
+    throw new Error('broadcast membership round trip failed')
+  }
 
   const message = await prisma.message.create({
     data: { senderId: user.id, receiverId: peer.id, content: 'hello from the mysql verify run' },
@@ -206,6 +221,8 @@ async function main() {
   // Clean up only what this run created.
   await prisma.jaraAuditLog.delete({ where: { id: audit.id } })
   await prisma.message.deleteMany({ where: { senderId: user.id } })
+  await prisma.broadcastMember.deleteMany({ where: { id: membership.id } })
+  await prisma.broadcastList.deleteMany({ where: { id: broadcast.id } })
   await prisma.profile.deleteMany({ where: { userId: user.id } })
   await prisma.user.deleteMany({ where: { id: { in: [user.id, peer.id] } } })
 

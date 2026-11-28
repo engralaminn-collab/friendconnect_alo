@@ -84,3 +84,10 @@ ALTER TABLE `JaraAuditLog` ADD COLUMN `authorizationResult` VARCHAR(191) NULL;
 ALTER TABLE `JaraAuditLog` ADD COLUMN `changeReason` TEXT NULL;
 ALTER TABLE `JaraAuditLog` ADD COLUMN `requestId` VARCHAR(191) NULL;
 ALTER TABLE `JaraAuditLog` ADD COLUMN `sessionId` VARCHAR(191) NULL;
+
+-- Legacy migration-only columns
+-- Preserve their data, but make them nullable so canonical Prisma writes
+-- that do not know about these fields cannot violate a NOT NULL constraint.
+ALTER TABLE `Profile` MODIFY COLUMN `updatedAt` DATETIME(3) NULL;
+ALTER TABLE `BroadcastList` MODIFY COLUMN `updatedAt` DATETIME(3) NULL;
+ALTER TABLE `BroadcastMember` MODIFY COLUMN `broadcastId` VARCHAR(191) NULL;

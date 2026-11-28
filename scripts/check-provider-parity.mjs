@@ -72,6 +72,7 @@ function parseSchema(source) {
  */
 function parseMigrations(dir) {
   const tables = {}
+  const definitions = {}
   const ensure = (t) => (tables[t] ??= new Set())
   const dirs = readdirSync(dir, { withFileTypes: true })
     .filter((e) => e.isDirectory())
@@ -94,24 +95,28 @@ function parseMigrations(dir) {
       const [, table, body] = create
       ensure(table)
       for (const line of body.split('\n')) {
-        const column = line.trim().match(/^`(\w+)`\s+/)
-        if (column) tables[table].add(column[1])
+        const column = line.trim().match(/^`(\w+)`\s+(.+?)(?:,)?$/)
+        if (column) {
+          tables[table].add(column[1])
+          definitions[`${table}.${column[1]}`] = column[2].replace(/,$/, '').trim()
+        }
         // Named table-level constraints are not columns.
       }
     }
 
     // ALTER TABLE `X` ADD COLUMN `y` ...
-    for (const alter of sql.matchAll(/ALTER TABLE `(\w+)`\s+ADD COLUMN `(\w+)`/g)) {
+    for (const alter of sql.matchAll(/ALTER TABLE `(\w+)`\s+ADD COLUMN `(\w+)`\s+([^;]+);/g)) {
       ensure(alter[1]).add(alter[2])
+      definitions[`${alter[1]}.${alter[2]}`] = alter[3].trim()
     }
 
-    // The generated parity-repair migration is idempotent, so it adds columns via a
-    // guarded helper: CALL fc_add_column('Table', 'column', '<ddl>').
-    for (const call of sql.matchAll(/CALL fc_add_column\('(\w+)', '(\w+)',/g)) {
-      ensure(call[1]).add(call[2])
+    // Track the final shape after compatibility repairs.
+    for (const modify of sql.matchAll(/ALTER TABLE `(\w+)`\s+MODIFY COLUMN `(\w+)`\s+([^;]+);/g)) {
+      ensure(modify[1]).add(modify[2])
+      definitions[`${modify[1]}.${modify[2]}`] = modify[3].trim()
     }
   }
-  return tables
+  return { tables, definitions }
 }
 
 const problems = []
@@ -122,7 +127,7 @@ if (!existsSync(SCHEMA) || !existsSync(MIGRATIONS)) {
 }
 
 const models = parseSchema(readFileSync(SCHEMA, 'utf8'))
-const tables = parseMigrations(MIGRATIONS)
+const { tables, definitions } = parseMigrations(MIGRATIONS)
 
 let comparedColumns = 0
 for (const [model, fields] of Object.entries(models)) {
@@ -141,6 +146,23 @@ for (const [model, fields] of Object.entries(models)) {
   }
 }
 
+// Extra nullable columns preserve legacy data and do not block canonical writes.
+// Extra NOT NULL columns without a database default do: Prisma does not know to
+// send them, so every create fails. This caught Profile.updatedAt after the first
+// real MySQL CRUD reached profile.create().
+for (const [table, columns] of Object.entries(tables)) {
+  const canonical = new Set(Object.values(models[table] || {}).map((field) => field.column))
+  for (const column of columns) {
+    if (canonical.has(column)) continue
+    const definition = definitions[`${table}.${column}`] || ''
+    if (/\bNOT NULL\b/i.test(definition) && !/\bDEFAULT\b/i.test(definition)) {
+      problems.push(
+        `table ${table}: migration-only column "${column}" is NOT NULL without a default and blocks canonical Prisma creates`,
+      )
+    }
+  }
+}
+
 if (problems.length) {
   console.error(`Provider parity FAILED (${problems.length} problem(s)):`)
   for (const p of problems.slice(0, 40)) console.error(`  - ${p}`)
@@ -153,5 +175,5 @@ if (problems.length) {
 }
 
 console.log(
-  `Provider parity PASSED: ${Object.keys(models).length} models, ${comparedColumns} columns agree between schema.prisma and the MySQL migration history.`,
+  `Provider parity PASSED: ${Object.keys(models).length} models, ${comparedColumns} canonical columns, and no blocking migration-only constraints.`,
 )

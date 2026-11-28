@@ -84,7 +84,29 @@ function check(name, condition, detail) {
   }
 }
 
-// --- 3. the generated migration uses portable MySQL 8 syntax ----------------
+// --- 3. migration-only required columns are also drift ----------------------
+{
+  const tmp = scratchTree()
+  try {
+    const repair = join(tmp, 'prisma/migrations', REPAIR, 'migration.sql')
+    const withoutRelaxations = readFileSync(repair, 'utf8')
+      .split('\n')
+      .filter((line) => !/MODIFY COLUMN `(updatedAt|broadcastId)`/.test(line))
+      .join('\n')
+    require('node:fs').writeFileSync(repair, withoutRelaxations)
+    const result = runChecker(tmp)
+    check('required migration-only columns make the check fail', result.code === 1, result.out.trim())
+    check(
+      'failure names Profile.updatedAt as a create blocker',
+      /Profile.*updatedAt.*blocks canonical Prisma creates/.test(result.out),
+      result.out.trim(),
+    )
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+}
+
+// --- 4. the generated migration uses portable MySQL 8 syntax ----------------
 {
   const onDisk = readFileSync(join(ROOT, 'prisma/migrations', REPAIR, 'migration.sql'), 'utf8')
   check('the repair migration is generated, not hand-written', onDisk.includes('do not hand-edit'))
@@ -103,6 +125,14 @@ function check(name, condition, detail) {
     'DELIMITER is a client directive and breaks `prisma migrate deploy`',
   )
   check('no stored procedure is required', !/CREATE PROCEDURE/i.test(onDisk))
+  check(
+    'legacy Profile.updatedAt is preserved but made nullable',
+    onDisk.includes('ALTER TABLE `Profile` MODIFY COLUMN `updatedAt` DATETIME(3) NULL;'),
+  )
+  check(
+    'legacy BroadcastMember.broadcastId is preserved but made nullable',
+    onDisk.includes('ALTER TABLE `BroadcastMember` MODIFY COLUMN `broadcastId` VARCHAR(191) NULL;'),
+  )
 
   // It must still do the job.
   const alters = onDisk.split('\n').filter((line) => /^ALTER TABLE `\w+` ADD COLUMN `\w+`/.test(line.trim()))
