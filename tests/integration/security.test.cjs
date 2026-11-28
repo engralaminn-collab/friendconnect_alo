@@ -418,13 +418,29 @@ test('security: block enforcement, reactions, reset flow, 2FA and file access', 
     'a rejected 2FA login must not set a session cookie',
   )
 
-  // With the correct code the same login succeeds.
+  // The enrolment code was just accepted, so it is spent for its 30-second step.
+  // Presenting it again at login must be refused (RFC 6238 §5.2: no second use).
+  const replayJar = new Map()
+  const replayed = await login(
+    base,
+    replayJar,
+    { username: carol.credentials.username, password: 'BrandNewPassw0rd!' },
+    { totp: totp(secret) },
+  )
+  assert.equal(replayed.status, 401, 'a TOTP code must not work twice')
+  assert.ok(
+    !Array.from(replayJar.keys()).some((key) => key.includes('session-token')),
+    'a replayed second factor must not set a session cookie',
+  )
+
+  // With a code from the next time step the same login succeeds. This is a distinct
+  // code, accepted by the ±1-step window, so the replay protection is not bypassed.
   const withCodeJar = new Map()
   const withCode = await login(
     base,
     withCodeJar,
     { username: carol.credentials.username, password: 'BrandNewPassw0rd!' },
-    { totp: totp(secret) },
+    { totp: totp(secret, 1) },
   )
   assert.ok([200, 302].includes(withCode.status), `2FA login with a code failed: ${withCode.status}`)
   assert.ok(

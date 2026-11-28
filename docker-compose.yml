@@ -25,7 +25,7 @@ services:
       SOCKET_INTERNAL_URL: http://socket:3003
       TURN_SERVERS: ${TURN_PUBLIC:-turn:127.0.0.1:3478}
       TURN_USERNAME: ${TURN_USERNAME:-friendconnect}
-      TURN_PASSWORD: ${TURN_PASSWORD:-fc-turn-dev-local}
+      TURN_PASSWORD: ${TURN_PASSWORD:?set TURN_PASSWORD}
       TURN_REALM: friendconnect
     ports:
       - "3000:3000"
@@ -50,21 +50,28 @@ services:
       - sqlite_data:/app/db
       - uploads:/app/upload
 
+  # Finding 2: the app image does not contain `node-turn` (it is not a declared
+  # dependency), so `scripts/turn-server.js` would start and relay nothing. TURN
+  # is served by coturn, the same server used in deploy/docker-compose.yml.
+  # Credentials and the public IP are required; there is no development fallback.
   turn:
-    build: .
+    # Pinned to a published tag AND its index digest. `latest` moved without notice.
+    # Tag verified on Docker Hub (coturn/coturn 4.19.2-r0, pushed 2026-11-19), matching
+    # the upstream GitHub release docker/4.19.2-r0. Runtime not yet exercised here.
+    image: coturn/coturn:4.19.2-r0@sha256:ccdbc51e6f072130b0fc9eebda21f8d026d0a25581746c52557e887818011a3f
     restart: unless-stopped
-    command: ["node", "scripts/turn-server.js"]
-    env_file:
-      - .env
-    environment:
-      NODE_ENV: production
-      TURN_PORT: 3478
-      TURN_USERNAME: ${TURN_USERNAME:-friendconnect}
-      TURN_PASSWORD: ${TURN_PASSWORD:-fc-turn-dev-local}
-      TURN_REALM: friendconnect
+    command: >-
+      -n --log-file=stdout
+      --listening-port=3478
+      --min-port=49160
+      --max-port=49200
+      --realm=${TURN_REALM:-friendconnect}
+      --external-ip=${TURN_EXTERNAL_IP:?set TURN_EXTERNAL_IP to this host public IP}
+      --user=${TURN_USERNAME:-friendconnect}:${TURN_PASSWORD:?set TURN_PASSWORD}
     ports:
       - "3478:3478/udp"
       - "3478:3478/tcp"
+      - "49160-49200:49160-49200/udp"
 
   caddy:
     image: caddy:2-alpine

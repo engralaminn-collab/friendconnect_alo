@@ -1,5 +1,13 @@
 import { NextResponse } from 'next/server'
 import type { NextRequest } from 'next/server'
+import { rateLimit } from '@/lib/cache'
+import {
+  isInternalCallback,
+  isMutatingApiRequest,
+  WRITE_LIMIT_MAX,
+  WRITE_LIMIT_WINDOW_SECONDS,
+  writeLimitKey,
+} from '@/lib/write-limit'
 
 /**
  * Response security headers.
@@ -44,9 +52,7 @@ const CONTENT_SECURITY_POLICY = [
   ALLOW_FRAME_PREVIEW ? "frame-ancestors *" : "frame-ancestors 'none'",
 ].join('; ')
 
-export function proxy(request: NextRequest) {
-  const res = NextResponse.next()
-
+function applySecurityHeaders(res: NextResponse, pathname: string) {
   res.headers.set('X-Content-Type-Options', 'nosniff')
   res.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
   res.headers.set('Content-Security-Policy', CONTENT_SECURITY_POLICY)
@@ -59,15 +65,41 @@ export function proxy(request: NextRequest) {
   if (!ALLOW_FRAME_PREVIEW) {
     res.headers.set('X-Frame-Options', 'DENY')
   }
-
   // API responses carry user-specific data and must never be stored by a shared
   // cache. Route handlers can still override this for callers that need
   // something narrower (e.g. `/api/files/[id]` sends its own `no-store`).
-  if (request.nextUrl.pathname.startsWith('/api/')) {
+  if (pathname.startsWith('/api/')) {
     res.headers.set('Cache-Control', 'no-store')
   }
-
   return res
+}
+
+export async function proxy(request: NextRequest) {
+  const pathname = request.nextUrl.pathname
+
+  // Finding 28: a floor on every state-changing API call, keyed per session.
+  if (isMutatingApiRequest(request.method, pathname)) {
+    const internal = isInternalCallback(pathname, request.headers.get('x-internal-secret'))
+    if (!internal) {
+      const key = writeLimitKey(
+        request.headers.get('cookie'),
+        request.headers.get('x-forwarded-for'),
+        request.headers.get('x-real-ip'),
+      )
+      const verdict = await rateLimit(key, WRITE_LIMIT_MAX, WRITE_LIMIT_WINDOW_SECONDS)
+      if (!verdict.allowed) {
+        const limited = new NextResponse(JSON.stringify({ error: 'Too many requests. Try again shortly.' }), {
+          status: 429,
+          headers: { 'Content-Type': 'application/json', 'Retry-After': String(WRITE_LIMIT_WINDOW_SECONDS) },
+        })
+        return applySecurityHeaders(limited, pathname)
+      }
+    }
+  }
+
+  const res = NextResponse.next()
+
+  return applySecurityHeaders(res, pathname)
 }
 
 export const config = {
