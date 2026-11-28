@@ -3,10 +3,33 @@ import { db } from '@/lib/db'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
 import { filterMessagesVisibleToUser } from '@/lib/ai-input'
-import { canInteract, isJaraId } from '@/lib/socket-security.cjs'
+import { canInteract, isJaraId, normalizeMessageContent } from '@/lib/socket-security.cjs'
 import { grantMessageFileAccess } from '@/lib/file-access'
+import { emitRealtimeToUsers } from '@/lib/realtime-emit'
 import { scheduleJaraReply } from '@/lib/jara-responder'
 import { handleRouteError } from '@/lib/api-errors'
+
+/**
+ * Recipients who should receive `message:new` for a stored message.
+ *
+ * A group message goes to every current member; a direct message goes to both
+ * participants. Shared by the emit below so the REST fallback delivers exactly
+ * what the socket path delivers.
+ */
+async function messageAudience(msg: {
+  senderId: string
+  receiverId: string | null
+  groupId: string | null
+}): Promise<string[]> {
+  if (msg.groupId) {
+    const members = await db.groupMember.findMany({
+      where: { groupId: msg.groupId },
+      select: { userId: true },
+    })
+    return [msg.senderId, ...members.map((m: { userId: string }) => m.userId)]
+  }
+  return [msg.senderId, msg.receiverId].filter((id): id is string => typeof id === 'string' && !!id)
+}
 
 /** Reject an attachment URL the caller does not own (finding #3). */
 async function assertOwnsAttachment(userId: string, fileUrl: unknown) {
@@ -142,12 +165,21 @@ export async function GET(req: NextRequest) {
     // filter out expired disappearing messages + not-yet-due scheduled messages in JS
     const filtered = filterMessagesVisibleToUser<any>(messages, me.id)
       .filter((m) => (!m.expiresAt || m.expiresAt > now) && (!m.scheduledFor || m.scheduledFor <= now))
-    // mark incoming as seen (only when not searching)
+    // Mark incoming as seen (only when not searching), and only if this user has
+    // read receipts enabled. Finding 8: the socket path already honoured
+    // `Profile.readReceipts`, but this REST path marked every thread SEEN
+    // unconditionally, so a user who turned receipts off still sent "seen" to
+    // their peers the moment they opened the thread over REST.
     if (!q) {
-      await db.message.updateMany({
-        where: { senderId: userId, receiverId: me.id, status: { not: 'SEEN' } },
-        data: { status: 'SEEN', seenAt: new Date() },
-      })
+      const profile = await db.profile
+        .findUnique({ where: { userId: me.id }, select: { readReceipts: true } })
+        .catch(() => null)
+      if (profile?.readReceipts !== false) {
+        await db.message.updateMany({
+          where: { senderId: userId, receiverId: me.id, status: { not: 'SEEN' } },
+          data: { status: 'SEEN', seenAt: new Date() },
+        })
+      }
     }
     return json({
       messages: filtered.reverse().map((m) => ({
@@ -185,9 +217,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const receiverId = body.receiverId ? String(body.receiverId) : null
     const groupId = body.groupId ? String(body.groupId) : null
-    const content = String(body.content || body.message || '')
     if (!receiverId && !groupId) return errorJson('receiverId or groupId required', 400)
-    if (!content && !body.fileUrl) return errorJson('content required', 400)
     if (groupId) {
       const membership = await db.groupMember.findUnique({
         where: { groupId_userId: { groupId, userId: me.id } },
@@ -200,6 +230,17 @@ export async function POST(req: NextRequest) {
       if (!isJara && !(await canInteract(db, me.id, receiverId, 'messagePermission'))) {
         return errorJson('Not permitted to message this user', 403)
       }
+    }
+
+    // Finding 6: the same 10 000-character policy the socket and conversation
+    // routes already enforced. Without it a single request could store a
+    // multi-megabyte row that broke list responses and the AI context builder.
+    // An attachment-only message has no text and is still valid.
+    const normalized = normalizeMessageContent(body.content ?? body.message ?? '')
+    const content = normalized.ok ? normalized.content : ''
+    if (!normalized.ok && !body.fileUrl) {
+      const status = normalized.error === 'Message too long' ? 413 : 400
+      return errorJson(normalized.error, status, 'VALIDATION_FAILED')
     }
 
     // Attachments must belong to the sender, or a caller could attach any
@@ -225,6 +266,26 @@ export async function POST(req: NextRequest) {
     // Finding #10: participants get an indexed download grant instead of the
     // download endpoint scanning Message for a matching fileUrl.
     await grantMessageFileAccess(msg)
+
+    // Finding 5: this route stores without emitting, so the REST fallback the
+    // chat UI uses when the socket is down delivered nothing until the recipient
+    // reloaded. Emitting to the same audience the socket path uses closes that
+    // gap; `emitRealtimeToUsers` is best-effort and never fails the request.
+    await emitRealtimeToUsers(await messageAudience(msg), 'message:new', {
+      id: msg.id,
+      senderId: msg.senderId,
+      receiverId: msg.receiverId,
+      groupId: msg.groupId,
+      content: msg.content,
+      type: msg.type,
+      fileUrl: msg.fileUrl,
+      fileName: msg.fileName,
+      fileSize: msg.fileSize,
+      mimeType: msg.mimeType,
+      replyToId: msg.replyToId,
+      status: msg.status,
+      createdAt: msg.createdAt instanceof Date ? msg.createdAt.toISOString() : msg.createdAt,
+    })
 
     // Jara is a user, not a chatbot page: a message addressed to it is answered
     // through this same store by the AI gateway, and the reply reaches the sender

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import { getCurrentUser } from "@/lib/session"
 import { db } from "@/lib/db"
 import { filterMessagesVisibleToUser } from "@/lib/ai-input"
+import { canSendInConversation } from "@/lib/socket-security.cjs"
 import { z } from "zod"
 
 // List conversations for the current user, with last message preview + unread counts
@@ -96,6 +97,19 @@ export async function POST(req: Request) {
 
   const { type, title, description, memberIds } = parsed.data
   const uniqueMembers = Array.from(new Set([me.id, ...memberIds]))
+
+  // Finding 1: a block must not be bypassed by creating a fresh conversation.
+  // `canSendInConversation`/`canReadConversation` hide and freeze existing
+  // threads; without this check the same two users could simply start a new one
+  // and keep talking. Every requested member is checked, for both kinds of
+  // conversation, because a group thread delivers messages between all of them.
+  const sendCheck = await canSendInConversation(db, me.id, uniqueMembers)
+  if (!sendCheck.allowed) {
+    return NextResponse.json(
+      { error: "Not permitted to start a conversation with this user" },
+      { status: 403 },
+    )
+  }
 
   if (type === "direct") {
     // For direct, exactly 2 members; reuse existing if any
