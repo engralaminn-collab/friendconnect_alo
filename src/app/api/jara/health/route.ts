@@ -5,6 +5,8 @@ import { JARA_ID } from '@/lib/jara'
 import { getVoiceCapability } from '@/lib/jara-voice'
 import { getRendererCapability, probeRendererHealth } from '@/lib/jara-renderer'
 import { getSmsCapability } from '@/lib/jara-sms'
+import { listTools } from '@/lib/jara-tools'
+import { guardrailsEnabled } from '@/lib/jara-guardrails'
 
 export async function GET() {
   try {
@@ -48,6 +50,16 @@ export async function GET() {
       voice,
       renderer: { ...renderer, health: rendererHealth },
       sms,
+      tools: (() => {
+        const tools = listTools()
+        return {
+          registered: tools.length,
+          configured: tools.filter((t) => t.configured).length,
+          egress: tools.filter((t) => t.egress).map((t) => t.name),
+          consequential: [],
+        }
+      })(),
+      guardrails: { enabled: guardrailsEnabled() },
     })
   } catch (e: any) {
     return json({ status: 'error', error: e.message }, 500)

@@ -318,3 +318,27 @@ CREATE TABLE IF NOT EXISTS `JaraMeetingProfile` (
 CREATE INDEX `JaraMeetingProfile_status_idx` ON `JaraMeetingProfile`(`status`);
 CREATE INDEX `JaraMeetingProfile_scheduledAt_idx` ON `JaraMeetingProfile`(`scheduledAt`);
 CREATE INDEX `JaraMeetingProfile_createdBy_idx` ON `JaraMeetingProfile`(`createdBy`);
+
+-- CreateTable JaraJob
+CREATE TABLE IF NOT EXISTS `JaraJob` (
+  `id` VARCHAR(191) NOT NULL PRIMARY KEY,
+  `type` VARCHAR(191) NOT NULL,
+  `status` VARCHAR(191) NOT NULL DEFAULT 'pending',
+  `payload` TEXT,
+  `result` VARCHAR(191),
+  `error` VARCHAR(191),
+  `attempts` INTEGER NOT NULL DEFAULT 0,
+  `maxAttempts` INTEGER NOT NULL DEFAULT 3,
+  `idempotencyKey` VARCHAR(191),
+  `runAfter` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `startedAt` DATETIME(3),
+  `completedAt` DATETIME(3),
+  `createdBy` VARCHAR(191),
+  `createdAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  `updatedAt` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE INDEX `JaraJob_idempotencyKey_key`(`idempotencyKey`)
+) DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+
+-- Indexes for JaraJob
+CREATE INDEX `JaraJob_status_runAfter_idx` ON `JaraJob`(`status`, `runAfter`);
+CREATE INDEX `JaraJob_type_idx` ON `JaraJob`(`type`);

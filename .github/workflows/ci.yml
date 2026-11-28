@@ -35,7 +35,8 @@ jobs:
       # these at the production panel made the workflow depend on a live host
       # that CI must never contact.
       DATABASE_URL: "file:./prisma/ci.db"
-      NEXTAUTH_SECRET: "ci-only-not-a-production-secret"
+      # CI-only throwaway value (must satisfy the >=32-char production shape check).
+      NEXTAUTH_SECRET: "ci-only-throwaway-secret-not-for-any-production-use-000"
       APP_PORT: "3012"
       PORT: "3012"
       APP_URL: "http://127.0.0.1:3012"
@@ -76,6 +77,11 @@ jobs:
           test -f package-lock.json
           test -f prisma/schema.sqlite.prisma
           test -f next.config.ts
+
+      - name: Environment validation (CI mode)
+        # Fails early (secret-free) if the CI job's own env loses a required
+        # variable or gains an invalid URL/port. Validates names/shapes only.
+        run: node scripts/check-env.mjs --mode ci
 
       - name: Install locked dependencies
         run: npm ci --include=dev --no-audit --no-fund

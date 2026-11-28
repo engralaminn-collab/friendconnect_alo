@@ -2,7 +2,7 @@ import { NextRequest } from 'next/server'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
 import { db } from '@/lib/db'
-import { aiChat, isAIConfigured } from '@/lib/ai'
+import { aiChat, isAIConfigured, AIInputRejectedError } from '@/lib/ai'
 import { normalizeChatInput, buildJaraConversationContext } from '@/lib/ai-input'
 import { buildJaraSystemPrompt } from '@/lib/jara-prompt'
 import { rateLimit } from '@/lib/cache'
@@ -225,7 +225,11 @@ export async function POST(req: NextRequest) {
     // The browser history is never forwarded to the provider; context comes
     // from this authenticated user's persisted Jara direct-message thread.
     aiResponse = await aiChat(serverContext, systemPrompt)
-  } catch {
+  } catch (e: any) {
+    if (e instanceof AIInputRejectedError) {
+      try { await (db as any).message.create({ data: { senderId: JARA_ID, receiverId: me.id, content: '⚠️ ' + e.message, type: 'text', status: 'SENT' } }) } catch {}
+      return errorJson(e.message, 400)
+    }
     return errorJson('Jara language model is temporarily unavailable', 502)
   }
 
