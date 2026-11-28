@@ -723,6 +723,22 @@ const MODELS = {
       updatedAt: new Date(),
     }),
   },
+  "jaraJob": {
+    model: "JaraJob",
+    table: "JaraJob",
+    dates: ["runAfter","startedAt","completedAt","createdAt","updatedAt"],
+    bools: [],
+    uniques: {},
+    defaults: () => ({
+      id: cuid(),
+      status: "pending",
+      attempts: 0,
+      maxAttempts: 3,
+      runAfter: new Date(),
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    }),
+  },
 }
 
 /** Flat `{ table, columns[] }` view used to verify a live SQLite schema. */
@@ -779,6 +795,7 @@ EXPECTED_COLUMNS["jaraMeetingIntegration"] = { table: "JaraMeetingIntegration", 
 EXPECTED_COLUMNS["jaraKnowledgeSource"] = { table: "JaraKnowledgeSource", columns: ["id","title","sourceType","content","sourceUrl","language","tags","isApproved","approvedBy","approvedAt","status","createdBy","updatedBy","createdAt","updatedAt"] }
 EXPECTED_COLUMNS["jaraAsset"] = { table: "JaraAsset", columns: ["id","kind","name","description","fileUrl","storageKey","mimeType","fileSize","width","height","sha256","isApproved","approvedBy","approvedAt","status","source","ownerId","metadata","createdBy","updatedBy","createdAt","updatedAt"] }
 EXPECTED_COLUMNS["jaraMeetingProfile"] = { table: "JaraMeetingProfile", columns: ["id","title","purpose","meetingType","scheduledAt","durationMinutes","platform","participants","appearanceProfileId","clothing","background","backgroundUrl","avatarStyle","presentationStyle","voiceLanguage","voiceProfile","speakingStyle","script","talkingPoints","instructions","referenceImageAssetId","referenceVideoAssetId","voiceSampleAssetId","referenceImageUrl","referenceVideoUrl","voiceSampleUrl","status","scope","approvedBy","approvedAt","cancelledAt","startedAt","endedAt","configVersion","configSnapshot","rendererStatus","createdBy","updatedBy","createdAt","updatedAt"] }
+EXPECTED_COLUMNS["jaraJob"] = { table: "JaraJob", columns: ["id","type","status","payload","result","error","attempts","maxAttempts","idempotencyKey","runAfter","startedAt","completedAt","createdBy","createdAt","updatedAt"] }
 
 
 // Join metadata: { kind, model, from, to } per relation field.
@@ -1560,6 +1577,7 @@ const RELATIONS = {
   "jaraKnowledgeSource": {},
   "jaraAsset": {},
   "jaraMeetingProfile": {},
+  "jaraJob": {},
 }
 
 for (const [key, rels] of Object.entries(RELATIONS)) {

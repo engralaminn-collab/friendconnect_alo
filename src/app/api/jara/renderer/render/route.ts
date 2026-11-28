@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { errorJson, json } from '@/lib/serialize'
 import { requireSuperAdmin, writeJaraAudit, requestMeta } from '@/lib/jara-admin'
 import { getAvatarRenderJobStatus, getRendererCapability, submitAvatarRenderJob } from '@/lib/jara-renderer'
+import { enqueueJob } from '@/lib/jara-jobs'
 
 export async function GET(req: NextRequest) {
   try { await requireSuperAdmin() } catch (e: any) { return errorJson(e.message === 'UNAUTHORIZED' ? 'Unauthorized' : 'Forbidden — Super Admin only', e.status || 403) }
@@ -45,6 +46,23 @@ export async function POST(req: NextRequest) {
     clothing: body.clothing ?? meeting?.clothing ?? undefined,
     workflowPayload: body.workflowPayload && typeof body.workflowPayload === 'object' ? body.workflowPayload : undefined,
   })
+
+  // Durable job record (Temporal-inspired registry) so Super Admins can see and cancel
+  // external render dispatches even if the worker's own job id is lost. Best effort —
+  // never blocks the render path.
+  if (res.ok && res.jobId) {
+    try {
+      await enqueueJob({
+        type: 'avatar_render',
+        idempotencyKey: `avatar_render:${res.backend}:${res.jobId}`,
+        payload: { backend: res.backend, workerJobId: res.jobId, meetingProfileId: meeting?.id ?? null, createdBy: me.id },
+        createdBy: me.id,
+        maxAttempts: 1,
+      })
+    } catch (e: any) {
+      console.warn(`[jara-jobs] enqueue avatar_render failed: ${e?.message || e}`)
+    }
+  }
 
   if (meeting?.id) {
     await (db as any).jaraMeetingProfile.update({

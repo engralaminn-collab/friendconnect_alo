@@ -8,29 +8,46 @@
 //    Install: curl -fsSL https://ollama.com/install.sh | sh
 //    Pull model: ollama pull llama3.2
 //
-// 2. z-ai-web-dev-sdk (Z.ai — already in package.json)
+// 2. LiteLLM proxy (BerriAI — self-hosted AI gateway, cost tracking, guardrails,
+//    load balancing across 100+ providers; OpenAI-compatible)
+//    Set LITELLM_URL (e.g. http://localhost:4000) + optional LITELLM_API_KEY / LITELLM_MODEL
+//    Run it yourself with an open-source model backend to keep data on-prem.
+//
+// 3. z-ai-web-dev-sdk (Z.ai — already in package.json)
 //    Set ZAI_API_KEY (free tier available)
 //
-// 3. OpenRouter (free models available)
+// 4. OpenRouter (free models available)
 //    Set OPENROUTER_API_KEY
 //    Free models: meta-llama/llama-3.2-3b-instruct:free, etc.
 //
-// 4. Hugging Face Inference API (free tier)
+// 5. Hugging Face Inference API (free tier)
 //    Set HUGGINGFACE_API_KEY
 //    Models: mistralai/Mistral-7B-Instruct, etc.
 //
-// 5. OpenAI-compatible API (any provider)
+// 6. OpenAI-compatible API (any provider)
 //    Set OPENAI_API_KEY + OPENAI_BASE_URL + AI_MODEL
 //
-// 6. No provider configured → throws AIProviderError; API routes report an unavailable/configuration error
+// 7. No provider configured → throws AIProviderError; API routes report an unavailable/configuration error
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string }
+
+import { guardrailsEnabled, inspectAIInput } from './jara-guardrails'
 
 export class AIProviderError extends Error {
   readonly code = 'AI_PROVIDER_UNAVAILABLE'
   constructor(message: string) {
     super(message)
     this.name = 'AIProviderError'
+  }
+}
+
+export class AIInputRejectedError extends Error {
+  readonly code = 'AI_INPUT_REJECTED'
+  readonly findings: string[]
+  constructor(message: string, findings: string[]) {
+    super(message)
+    this.name = 'AIInputRejectedError'
+    this.findings = findings
   }
 }
 
@@ -44,6 +61,7 @@ function providerSignal(): AbortSignal {
 export function isAIConfigured(): boolean {
   return !!(
     process.env.OLLAMA_URL ||
+    process.env.LITELLM_URL ||
     process.env.ZAI_API_KEY ||
     process.env.OPENROUTER_API_KEY ||
     process.env.HUGGINGFACE_API_KEY ||
@@ -54,6 +72,7 @@ export function isAIConfigured(): boolean {
 
 export function getAIProvider(): string {
   if (process.env.OLLAMA_URL) return "ollama"
+  if (process.env.LITELLM_URL) return "litellm"
   if (process.env.ZAI_API_KEY) return "zai"
   if (process.env.OPENROUTER_API_KEY) return "openrouter"
   if (process.env.HUGGINGFACE_API_KEY) return "huggingface"
@@ -66,6 +85,8 @@ export function getAvailableModels(): string[] {
   switch (provider) {
     case "ollama":
       return ["llama3.2", "qwen2.5", "mistral", "phi3", "gemma2", "deepseek-r1"]
+    case "litellm":
+      return [process.env.LITELLM_MODEL || "gpt-4o-mini"]
     case "zai":
       return ["glm-4.6", "glm-4-flash"]
     case "openrouter":
@@ -130,6 +151,30 @@ async function zaiChat(messages: ChatMessage[], systemPrompt?: string): Promise<
     max_tokens: 1000,
   })
   return completion.choices[0]?.message?.content || ""
+}
+
+// ---------- LiteLLM proxy (BerriAI — OpenAI-compatible self-hosted gateway) ----------
+
+async function litellmChat(messages: ChatMessage[], systemPrompt?: string): Promise<string> {
+  const baseUrl = (process.env.LITELLM_URL || "").trim().replace(/\/+$/, "")
+  if (!baseUrl) throw new Error("LITELLM_URL is not set")
+  const apiKey = (process.env.LITELLM_API_KEY || "").trim()
+  const model = process.env.LITELLM_MODEL || "gpt-4o-mini"
+  const fullMessages = systemPrompt
+    ? [{ role: "system", content: systemPrompt }, ...messages]
+    : messages
+
+  const headers: Record<string, string> = { "Content-Type": "application/json" }
+  if (apiKey) headers.Authorization = `Bearer ${apiKey}`
+  const res = await fetch(`${baseUrl}/chat/completions`, {
+    method: "POST",
+    headers,
+    signal: providerSignal(),
+    body: JSON.stringify({ model, messages: fullMessages, max_tokens: 1000 }),
+  })
+  if (!res.ok) throw new Error(`LiteLLM HTTP ${res.status}`)
+  const data = await res.json()
+  return data.choices?.[0]?.message?.content || ""
 }
 
 // ---------- OpenRouter (free models) ----------
@@ -209,11 +254,30 @@ export async function aiChat(messages: ChatMessage[], systemPrompt?: string): Pr
   const provider = getAIProvider()
   if (provider === 'none') throw new AIProviderError('No AI provider is configured.')
 
+  // LiteLLM-style input guardrails: secrets must never reach a provider.
+  if (guardrailsEnabled()) {
+    const transcript = [
+      ...(systemPrompt ? [systemPrompt] : []),
+      ...messages.map((m) => m.content),
+    ].join('\n')
+    const verdict = inspectAIInput(transcript)
+    if (!verdict.allowed) {
+      const blocked = verdict.findings.filter((f) => f.blocking).map((f) => f.detail)
+      throw new AIInputRejectedError(
+        'Your message appears to contain a credential or secret. It was not sent to any AI provider. Remove the secret and try again.',
+        blocked,
+      )
+    }
+  }
+
   try {
     let result: string
     switch (provider) {
       case 'ollama':
         result = await ollamaChat(messages, systemPrompt)
+        break
+      case 'litellm':
+        result = await litellmChat(messages, systemPrompt)
         break
       case 'zai':
         result = await zaiChat(messages, systemPrompt)
@@ -289,6 +353,14 @@ export function getAIStatus() {
         openSource: true,
         selfHosted: true,
       },
+      litellm: {
+        available: !!process.env.LITELLM_URL,
+        url: process.env.LITELLM_URL || null,
+        model: process.env.LITELLM_MODEL || null,
+        gateway: true,
+        openSource: true,
+        selfHosted: true,
+      },
       zai: {
         available: !!process.env.ZAI_API_KEY,
         free: true,
@@ -313,5 +385,6 @@ export function getAIStatus() {
         free: false,
       },
     },
+    guardrails: { enabled: guardrailsEnabled(), blocksSecretFindings: true },
   }
 }
