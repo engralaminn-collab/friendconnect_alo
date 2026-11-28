@@ -112,12 +112,28 @@ export function isLeakyMessage(message: string): boolean {
 export function handleRouteError(error: unknown, context: string) {
   const requestId = randomUUID()
 
-  // Deliberate, already-safe errors pass straight through.
+  // Deliberate, already-safe errors pass straight through — unless the message a
+  // route chose to publish trips a leak pattern. Finding 15: `isLeakyMessage()`
+  // was exported and never called, so nothing enforced its documented
+  // "second line of defence" contract. A route that built a public message out of
+  // an exception string ("LiveKit token generation failed: <sdk error>") leaked
+  // internals even though it went through this handler.
   if (error instanceof RouteError) {
-    if (error.status >= 500) {
+    const publishable = !isLeakyMessage(error.publicMessage)
+    if (error.status >= 500 || !publishable) {
       logger.error('route error', { context, requestId, code: error.code, error: error.message })
     } else {
       logger.warn('route rejected', { context, requestId, code: error.code, error: error.message })
+    }
+    if (!publishable) {
+      return json(
+        {
+          error: DEFAULT_MESSAGE[error.code] ?? DEFAULT_MESSAGE.INTERNAL_ERROR,
+          code: error.code,
+          requestId,
+        },
+        error.status,
+      )
     }
     return json({ error: error.publicMessage, code: error.code, requestId }, error.status)
   }

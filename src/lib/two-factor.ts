@@ -46,8 +46,14 @@ export function parseStoredCodes(stored: string | null | undefined): string[] {
 /**
  * Check a backup code and, on success, persist the removal of that code.
  *
- * Returns true only once per code: the stored list is rewritten without the
- * matching digest, so replaying the same code fails.
+ * Audit finding 14: this was read-then-write — `parseStoredCodes()` → filter →
+ * `update()` — so two concurrent logins presenting the same backup code could
+ * both pass the `includes()` check before either write landed, and the code was
+ * replayable. The counter update was a second round trip on top of that.
+ *
+ * It is now a single conditional UPDATE: the row only changes if the stored list
+ * still contains this exact digest. The database decides the winner, so a
+ * concurrent replay finds zero rows affected and fails.
  */
 export async function consumeBackupCode(userId: string, stored: string | null, code: string): Promise<boolean> {
   const digest = digestBackupCode(code)
@@ -55,13 +61,22 @@ export async function consumeBackupCode(userId: string, stored: string | null, c
   if (!codes.includes(digest)) return false
 
   const remaining = codes.filter((entry) => entry !== digest)
-  await db.user.update({
-    where: { id: userId },
+  const updated = await db.user.updateMany({
+    // `twoFactorBackup` is the value we read; requiring it to be unchanged makes
+    // the write a compare-and-swap rather than a blind overwrite.
+    where: { id: userId, twoFactorBackup: stored },
     data: {
       twoFactorBackup: remaining.length ? remaining.join('\n') : null,
-      twoFactorBackupUsed: Number((await db.user.findUnique({ where: { id: userId } }))?.twoFactorBackupUsed ?? 0) + 1,
+      twoFactorBackupUsed: { increment: 1 },
     },
   })
+
+  if (!updated || updated.count === 0) {
+    // Someone else consumed a code between our read and this write. Do not retry
+    // with the stale list: the caller must re-read the user and try again, which
+    // is what a second login attempt does.
+    return false
+  }
   return true
 }
 

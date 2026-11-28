@@ -99,6 +99,38 @@ function checkPort(name) {
 }
 for (const name of ['PORT', 'SOCKET_PORT', 'TURN_PORT', 'CHAT_SERVICE_PORT', 'APP_PORT']) checkPort(name)
 
+// ---------- duplicate key detection in env files ----------
+//
+// Audit finding 13: `.env.example` declared DATABASE_URL twice, and dotenv keeps
+// the LAST assignment, so the documented SQLite quick start actually configured
+// MySQL. Nothing caught it because every check below reads `process.env`, which
+// shows only the winning value. Reading the files directly is the only way to
+// see the shadowed definition.
+import { readFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
+
+for (const file of ['.env.example', '.env']) {
+  const path = join(process.cwd(), file)
+  if (!existsSync(path)) continue
+  const seen = new Map()
+  for (const rawLine of readFileSync(path, 'utf8').split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line || line.startsWith('#')) continue
+    const eq = line.indexOf('=')
+    if (eq < 1) continue
+    const key = line.slice(0, eq).trim()
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(key)) continue
+    const count = (seen.get(key) || 0) + 1
+    seen.set(key, count)
+    if (count === 2) {
+      const target = file === '.env.example' ? problems : warnings
+      target.push(
+        `${file} declares ${key} more than once — the last definition wins and the earlier one is silently ignored`,
+      )
+    }
+  }
+}
+
 // ---------- informational completeness (never blocks) ----------
 
 if (get('DATABASE_URL')?.startsWith('file:')) {

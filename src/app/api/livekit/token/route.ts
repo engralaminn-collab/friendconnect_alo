@@ -1,6 +1,7 @@
 import { NextRequest } from 'next/server'
 import { getSessionUser } from '@/lib/session'
 import { errorJson, json } from '@/lib/serialize'
+import { handleRouteError } from '@/lib/api-errors'
 import { db } from '@/lib/db'
 
 export async function GET(req: NextRequest) {
@@ -31,7 +32,10 @@ export async function GET(req: NextRequest) {
     at.addGrant({ roomJoin: true, room, canPublish: true, canSubscribe: true, canPublishData: true })
     const token = await at.toJwt()
     return json({ token, url: wsUrl, room, identity: me.id })
-  } catch (e: any) {
-    return errorJson(`LiveKit token generation failed: ${e?.message || 'unknown error'}`, 500)
+  } catch (error) {
+    // Finding 15: the SDK message was concatenated into the response. It can
+    // contain the LiveKit host, key prefix or the underlying fetch error.
+    // `handleRouteError` keeps the detail in the server log only.
+    return handleRouteError(error, 'GET /api/livekit/token')
   }
 }
