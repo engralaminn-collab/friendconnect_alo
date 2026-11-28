@@ -55,7 +55,10 @@ services:
   # is served by coturn, the same server used in deploy/docker-compose.yml.
   # Credentials and the public IP are required; there is no development fallback.
   turn:
-    image: coturn/coturn:latest
+    # Pinned to a published tag AND its index digest. `latest` moved without notice.
+    # Tag verified on Docker Hub (coturn/coturn 4.19.2-r0, pushed 2026-11-19), matching
+    # the upstream GitHub release docker/4.19.2-r0. Runtime not yet exercised here.
+    image: coturn/coturn:4.19.2-r0@sha256:ccdbc51e6f072130b0fc9eebda21f8d026d0a25581746c52557e887818011a3f
     restart: unless-stopped
     command: >-
       -n --log-file=stdout
