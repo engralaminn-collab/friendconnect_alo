@@ -132,6 +132,34 @@ async function assertUserExists(otherId: string) {
  * re-renders from server state immediately after every action, so a benign
  * double-click must not surface an error.
  */
+/**
+ * Finding 20 (concurrent insertion): two opposite requests read "no relationship"
+ * at the same moment and both inserted a row, leaving the pair with two
+ * relationships. Actions on the same pair are now serialised in this process.
+ *
+ * Residual: this lock is per process. Several app instances need a database
+ * uniqueness constraint on the unordered pair before the guarantee holds across
+ * processes. That schema change is not part of this change.
+ */
+const pairLocks = new Map<string, Promise<unknown>>()
+
+export function pairKey(a: string, b: string): string {
+  return a < b ? `${a}|${b}` : `${b}|${a}`
+}
+
+async function withPairLock<T>(a: string, b: string, work: () => Promise<T>): Promise<T> {
+  const key = pairKey(a, b)
+  const previous = pairLocks.get(key) ?? Promise.resolve()
+  const run = previous.catch(() => undefined).then(work)
+  const tail = run.catch(() => undefined)
+  pairLocks.set(key, tail)
+  try {
+    return await run
+  } finally {
+    if (pairLocks.get(key) === tail) pairLocks.delete(key)
+  }
+}
+
 export async function applyFriendAction(
   userId: string,
   targetId: string,
@@ -139,6 +167,14 @@ export async function applyFriendAction(
 ): Promise<ActionResult> {
   assertNotSelf(userId, targetId)
   await assertUserExists(targetId)
+  return withPairLock(userId, targetId, () => applyFriendActionLocked(userId, targetId, action))
+}
+
+async function applyFriendActionLocked(
+  userId: string,
+  targetId: string,
+  action: FriendAction,
+): Promise<ActionResult> {
 
   const existing = await findRelationship(userId, targetId)
 
@@ -262,13 +298,32 @@ export async function applyFriendAction(
     }
 
     case 'unblock': {
-      await db.block.deleteMany({ where: { fromId: userId, toId: targetId } })
+      // Only the party who placed a block may lift it. The shared relationship row
+      // is removed only when this caller was the blocker AND the other party has
+      // no block of their own. Before this check, the blocked party could call
+      // unblock and erase the blocker's BLOCKED row.
+      const lifted = await db.block.deleteMany({ where: { fromId: userId, toId: targetId } })
+      const otherSideBlocks = await db.block.findFirst({
+        where: { fromId: targetId, toId: userId },
+        select: { id: true },
+      })
       if (existing && existing.status === 'BLOCKED') {
-        // Revert to no relationship; a new request starts from scratch.
-        await db.friendship.delete({ where: { id: existing.id } })
-        return { ok: true, status: 'NONE', changed: true, friendshipId: existing.id }
+        if (existing.blockerId === userId || existing.blockerId == null) {
+          if (!otherSideBlocks) {
+            await db.friendship.delete({ where: { id: existing.id } })
+            return { ok: true, status: 'NONE', changed: true, friendshipId: existing.id }
+          }
+          // The other party still blocks. Keep the row; hand the blocker role over.
+          await db.friendship.update({
+            where: { id: existing.id },
+            data: { blockerId: targetId },
+          })
+          return { ok: true, status: 'BLOCKED', changed: Boolean(lifted.count), friendshipId: existing.id }
+        }
+        // Blocked by the other party: the caller cannot lift it.
+        return { ok: true, status: 'BLOCKED', changed: false, friendshipId: existing.id }
       }
-      return { ok: true, status: existing?.status ?? 'NONE', changed: false }
+      return { ok: true, status: existing?.status ?? 'NONE', changed: Boolean(lifted.count) }
     }
 
     default:

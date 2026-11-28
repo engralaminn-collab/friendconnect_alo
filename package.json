@@ -18,7 +18,7 @@
     "test:unit": "tsx --test tests/ai/*.test.ts tests/jara/*.test.ts",
     "test:ai:evaluation-schema": "tsx --test tests/ai/evaluation-scenarios.test.ts",
     "ai:evaluate": "tsx scripts/ai-evaluate.ts",
-    "test:integration": "node --test tests/integration/*.test.cjs",
+    "test:integration": "tsx --test tests/integration/*.test.cjs tests/integration/*.test.ts",
     "schema:variants": "node scripts/generate-schema-variants.mjs",
     "schema:metadata": "node scripts/generate-schema-metadata.mjs",
     "schema:ddl": "node scripts/generate-sqlite-ddl.mjs",
