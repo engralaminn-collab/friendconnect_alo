@@ -40,6 +40,7 @@ const {
 const fileAccess = require('./src/lib/file-access.cjs')
 const { expireStaleRingingCalls } = require('./src/lib/call-sweep.cjs')
 const { deleteExpiredSessions } = require('./src/lib/session-sweep.cjs')
+const { deleteExpiredStories, resolveRetentionDays } = require('./src/lib/story-sweep.cjs')
 
 // Finding #10: socket-sent attachments must create the same `FileAccess`
 // grants the REST route creates, otherwise the attachment the recipient just
@@ -998,6 +999,12 @@ async function runJobs() {
     await deleteExpiredSessions(prisma, now)
   } catch (e) {
     console.warn('[jobs] expired sessions', e.message)
+  }
+  // Finding 26: stories expired beyond the retention window (highlights are kept).
+  try {
+    await deleteExpiredStories(prisma, now, resolveRetentionDays(process.env.STORY_RETENTION_DAYS))
+  } catch (e) {
+    console.warn('[jobs] expired stories', e.message)
   }
   // Finding 29: a call that rang without an answer is marked missed. Otherwise a
   // stale `ringing` row keeps both participants "busy" indefinitely.
