@@ -7,12 +7,12 @@ import assert from 'node:assert/strict'
 import { NextRequest } from 'next/server'
 import { proxy } from '../../src/proxy'
 
-function run(url: string) {
-  return proxy(new NextRequest(url))
+async function run(url: string) {
+  return await proxy(new NextRequest(url))
 }
 
-test('every response carries the application security headers', () => {
-  const res = run('http://localhost:3000/dashboard')
+test('every response carries the application security headers', async () => {
+  const res = await run('http://localhost:3000/dashboard')
   assert.equal(res.headers.get('x-content-type-options'), 'nosniff')
   assert.equal(res.headers.get('x-frame-options'), 'DENY')
   assert.equal(res.headers.get('referrer-policy'), 'strict-origin-when-cross-origin')
@@ -20,12 +20,12 @@ test('every response carries the application security headers', () => {
   assert.match(res.headers.get('permissions-policy') || '', /camera=\(self\)/)
 })
 
-test('a preview-style host ending in .e2b.app is not trusted for framing', () => {
-  const res = run('https://3000-abc123.e2b.app/dashboard')
+test('a preview-style host ending in .e2b.app is not trusted for framing', async () => {
+  const res = await run('https://3000-abc123.e2b.app/dashboard')
   assert.equal(res.headers.get('x-frame-options'), 'DENY')
   assert.match(res.headers.get('content-security-policy') || '', /frame-ancestors 'none'/)
 })
 
-test('API responses are not stored by shared caches', () => {
-  assert.equal(run('http://localhost:3000/api/me').headers.get('cache-control'), 'no-store')
+test('API responses are not stored by shared caches', async () => {
+  assert.equal((await run('http://localhost:3000/api/me')).headers.get('cache-control'), 'no-store')
 })
