@@ -1,42 +1,54 @@
-# FriendConnect — Free self-hosted communication stack
-# Brings up every component needed to replace MirrorFly (which is paid/enterprise).
-# All components are open-source and free to self-host.
+# FriendConnect — self-hosted deployment stack
+#
+# Reproducible, and internally consistent with the application's *actual*
+# supported database providers. Audit findings 4 and 16 rewrote this file:
+#
+#   * it used to provision `postgres:16-alpine` and set `DATABASE_URL` to a
+#     `postgresql://` URL, but there is no PostgreSQL variant of the Prisma
+#     schema (`prisma/schema.prisma` is SQLite, `prisma/schema.mysql.prisma` is
+#     MySQL). The documented `docker compose up -d` could never work.
+#     MySQL 8 is the supported non-SQLite provider, so it is what this stack runs.
+#   * it started `mini-services/chat-service` (the legacy realtime server that
+#     trusts a token format nothing issues and does not enforce blocks). The
+#     authoritative server is `socket-server.js`, which shares its
+#     authorization logic with the REST API via `src/lib/socket-security.cjs`.
+#   * the app image expected `bun.lock`, which does not exist. This repository is
+#     an npm project with a committed `package-lock.json`.
 #
 # Usage:
 #   cd deploy
-#   cp .env.example .env  # then edit .env to set your secrets
-#   docker compose up -d
-#   # Apply Prisma migrations: docker compose run --rm app bun run db:push
-#   # App is at http://localhost:3000 (or behind your reverse proxy at https://your.domain)
+#   cp .env.example .env      # then edit .env: NEXTAUTH_SECRET, MYSQL_* passwords
+#   docker compose up -d --build
+#   docker compose run --rm app npx prisma migrate deploy --schema prisma/schema.mysql.prisma
+#   # App: http://localhost:3000
 #
-# What you get:
-#   - app         : Next.js FriendConnect app (port 3000)
-#   - chat-service: Socket.IO realtime server (port 3003)
-#   - postgres    : Production database (replaces SQLite)
-#   - redis       : Session cache + Socket.IO adapter + rate limiting
-#   - minio       : S3-compatible object storage for attachments
-#   - mailpit     : SMTP testing/catching (swap for real SMTP in production)
-#   - coturn      : TURN/STUN server for WebRTC (for future voice/video calls)
-
-version: "3.9"
+# SQLite-only evaluation (no MySQL): use the root `docker-compose.yml`, which
+# targets the zero-dependency SQLite runtime instead.
 
 services:
-  postgres:
-    image: postgres:16-alpine
+  mysql:
+    image: mysql:8.0
     restart: unless-stopped
+    command: >-
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
     environment:
-      POSTGRES_DB: friendconnect
-      POSTGRES_USER: ${POSTGRES_USER:-fc}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_in_production}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-friendconnect}
+      MYSQL_USER: ${MYSQL_USER:-fc}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-change_me_in_production}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-change_me_in_production}
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - mysql_data:/var/lib/mysql
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fc} -d friendconnect"]
+      # `mysqladmin ping` succeeds before the server accepts user connections, so
+      # actually run a query as the application user.
+      test: ["CMD-SHELL", "mysql -u${MYSQL_USER:-fc} -p${MYSQL_PASSWORD:-change_me_in_production} -e 'SELECT 1' ${MYSQL_DATABASE:-friendconnect}"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 12
+      start_period: 30s
     ports:
-      - "5432:5432"
+      - "3306:3306"
 
   redis:
     image: redis:7-alpine
@@ -52,39 +64,18 @@ services:
     ports:
       - "6379:6379"
 
-  minio:
-    image: minio/minio:latest
-    restart: unless-stopped
-    command: server /data --console-address ":9001"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-fc_admin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-change_me_in_production}
-    volumes:
-      - minio_data:/data
-    ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # Web console
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-
   mailpit:
     image: axllent/mailpit:latest
     restart: unless-stopped
     ports:
       - "1025:1025"   # SMTP
       - "8025:8025"   # Web UI (view caught emails)
-    environment:
-      MP_SMTP_AUTH_ACCEPT_ANY: 1
-      MP_SMTP_AUTH_ALLOW_INSECURE: 1
 
   coturn:
     image: coturn/coturn:latest
     restart: unless-stopped
-    # For production, you must set the external IP and realm
-    command: >
+    # For production, set TURN_EXTERNAL_IP to the public address of this host.
+    command: >-
       -n --log-file=stdout
       --listening-port=3478
       --min-port=49160
@@ -99,23 +90,39 @@ services:
     volumes:
       - turn_data:/var/lib/coturn
 
-  chat-service:
+  # Authoritative Socket.IO realtime server. Same image as the app: it imports
+  # `src/lib/socket-security.cjs` and `src/lib/db-runtime.js` from the repo root,
+  # which is exactly what the image copies.
+  socket:
     build:
       context: ..
-      dockerfile: deploy/Dockerfile.chat-service
+      dockerfile: deploy/Dockerfile.app
     restart: unless-stopped
+    command: ["node", "socket-server.js"]
     depends_on:
-      postgres:
+      mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-fc}:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/friendconnect?schema=public
+      NODE_ENV: production
+      DATABASE_URL: mysql://${MYSQL_USER:-fc}:${MYSQL_PASSWORD:-change_me_in_production}@mysql:3306/${MYSQL_DATABASE:-friendconnect}
       REDIS_URL: redis://redis:6379
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set this in .env}
-      CHAT_SERVICE_PORT: 3003
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set NEXTAUTH_SECRET in deploy/.env}
+      SOCKET_PORT: 3003
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
+      APP_INTERNAL_URL: http://app:3000
+      UPLOAD_DIR: /data/upload
+    volumes:
+      - uploads:/data/upload
     ports:
       - "3003:3003"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3003/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   app:
     build:
@@ -123,47 +130,40 @@ services:
       dockerfile: deploy/Dockerfile.app
     restart: unless-stopped
     depends_on:
-      postgres:
+      mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
-      minio:
-        condition: service_healthy
-      chat-service:
+      socket:
         condition: service_started
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-fc}:${POSTGRES_PASSWORD:-change_me_in_production}@postgres:5432/friendconnect?schema=public
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      DATABASE_URL: mysql://${MYSQL_USER:-fc}:${MYSQL_PASSWORD:-change_me_in_production}@mysql:3306/${MYSQL_DATABASE:-friendconnect}
       REDIS_URL: redis://redis:6379
-      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set this in .env}
+      NEXTAUTH_SECRET: ${NEXTAUTH_SECRET:?set NEXTAUTH_SECRET in deploy/.env}
       NEXTAUTH_URL: ${NEXTAUTH_URL:-http://localhost:3000}
-      S3_ENDPOINT: http://minio:9000
-      S3_REGION: us-east-1
-      S3_BUCKET: ${S3_BUCKET:-friendconnect-attachments}
-      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-fc_admin}
-      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-change_me_in_production}
+      APP_ORIGIN: ${APP_ORIGIN:-http://localhost:3000}
+      SOCKET_INTERNAL_URL: http://socket:3003
+      APP_INTERNAL_URL: http://app:3000
+      # Served from the shared volume by both the app and the socket server.
+      UPLOAD_DIR: /data/upload
       SMTP_HOST: mailpit
       SMTP_PORT: 1025
-      SMTP_FROM: ${SMTP_FROM:-no-reply@friendconnect.local}
-      TURN_URL: turn:${TURN_USER:-fc}:${TURN_PASSWORD:-change_me}@coturn:3478
+    volumes:
+      - uploads:/data/upload
     ports:
       - "3000:3000"
-
-  livekit:
-    image: livekit/livekit-server:latest
-    restart: unless-stopped
-    command: --config /etc/livekit.yaml
-    ports:
-      - "7880:7880"    # TCP
-      - "7881:7881"    # TCP/TLS
-      - "7882:7882/udp" # WebRTC UDP
-    volumes:
-      - ./livekit.yaml:/etc/livekit.yaml:ro
-    environment:
-      LIVEKIT_KEYS: ${LIVEKIT_API_KEY:-devkey}: ${LIVEKIT_API_SECRET:-secret}
-
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
 volumes:
-  postgres_data:
+  mysql_data:
   redis_data:
-  minio_data:
   turn_data:
+  uploads:
