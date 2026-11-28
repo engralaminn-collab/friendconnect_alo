@@ -1,14 +1,13 @@
 # FriendConnect production image (Next.js standalone + socket server)
 #
 # This image runs two processes from one build: the Next.js app (`server.js`) and
-# the realtime/call server (`socket-server.js`). Keep the runtime COPY list below
-# in sync with the `require()` calls in `socket-server.js` and
-# `scripts/turn-server.js` — Next's standalone file tracer does not follow plain
-# CommonJS requires made from files outside the app graph.
+# the realtime/call server (`socket-server.js`). Next's standalone tracer does
+# not follow CommonJS files outside the app graph, so the image copies the complete
+# npm production dependency tree plus the local realtime modules.
 FROM node:22-bookworm AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci --omit=dev
+RUN npm ci
 
 FROM node:22-bookworm AS builder
 WORKDIR /app
@@ -28,8 +27,27 @@ ENV DATABASE_URL="file:./db/custom.db"
 # intentionally a fixed string so the layer stays reproducible; it is unusable as
 # a real secret because it never reaches a running container.
 ENV NEXTAUTH_SECRET="build-only-not-a-runtime-secret-000000000000"
-RUN npm ci
+# The runtime uses the hand-rolled SQLite runtime by default, but `db-runtime.js`
+# also supports the Prisma path (`@prisma/client` + the MariaDB/knex adapters), and
+# the standalone build resolves `@prisma/client` at runtime for the MySQL
+# deployment. The generated client lives in `node_modules/.prisma`, which only
+# exists after this step — without it the runner stage's COPY fails and the MySQL
+# path throws "did not initialize yet".
+RUN npx prisma generate --schema prisma/schema.sqlite.prisma
 RUN npm run build
+
+# A separate production dependency tree for the runner. Next's standalone tracer
+# only follows imports from the Next application graph; it cannot see the plain
+# CommonJS realtime entrypoint or lazy requires such as `sharp`. A hand-picked
+# COPY list failed repeatedly as transitive packages (`accepts` was the first real
+# crash) were omitted. Copying the complete *production* tree is deterministic,
+# uses npm's production dependency graph and cannot lose transitive dependencies.
+FROM node:22-bookworm AS prod-deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY prisma ./prisma
+RUN npm ci --omit=dev \
+  && npx prisma generate --schema prisma/schema.sqlite.prisma
 
 FROM node:22-bookworm-slim AS runner
 WORKDIR /app
@@ -74,20 +92,11 @@ COPY --from=builder /app/src/lib/upload-security.cjs ./src/lib/upload-security.c
 COPY --from=builder /app/src/lib/session-registry.cjs ./src/lib/session-registry.cjs
 COPY --from=builder /app/scripts/load-env.cjs ./scripts/load-env.cjs
 
-# --- Packages the standalone tracer cannot see ---------------------------------
-COPY --from=builder /app/node_modules/better-sqlite3 ./node_modules/better-sqlite3
-COPY --from=builder /app/node_modules/bindings ./node_modules/bindings
-COPY --from=builder /app/node_modules/file-uri-to-path ./node_modules/file-uri-to-path
-COPY --from=builder /app/node_modules/socket.io ./node_modules/socket.io
-COPY --from=builder /app/node_modules/socket.io-adapter ./node_modules/socket.io-adapter
-COPY --from=builder /app/node_modules/socket.io-parser ./node_modules/socket.io-parser
-COPY --from=builder /app/node_modules/engine.io ./node_modules/engine.io
-COPY --from=builder /app/node_modules/engine.io-parser ./node_modules/engine.io-parser
-COPY --from=builder /app/node_modules/@socket.io ./node_modules/@socket.io
-COPY --from=builder /app/node_modules/cookie ./node_modules/cookie
-COPY --from=builder /app/node_modules/cors ./node_modules/cors
-COPY --from=builder /app/node_modules/ioredis ./node_modules/ioredis
-COPY --from=builder /app/node_modules/web-push ./node_modules/web-push
+# --- Runtime dependency tree ---------------------------------------------------
+# Complete production dependencies, including every transitive dependency needed
+# by `socket-server.js`, `db-runtime.js`, Prisma, sharp, and web-push. This overlays
+# the smaller standalone node_modules tree without copying development packages.
+COPY --from=prod-deps /app/node_modules ./node_modules
 
 RUN mkdir -p upload logs db && chown -R fc:fc /app
 USER fc

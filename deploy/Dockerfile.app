@@ -12,7 +12,7 @@ COPY package.json package-lock.json ./
 # `--ignore-scripts` is not used: better-sqlite3 and sharp both need their
 # install scripts. `prisma` postinstall only downloads engines, which this image
 # does need for `prisma migrate deploy`.
-RUN npm ci --omit=dev --no-audit --no-fund
+RUN npm ci --no-audit --no-fund
 
 FROM node:22-bookworm AS builder
 WORKDIR /app
@@ -28,6 +28,17 @@ ENV DATABASE_URL="file:./build-only.db"
 ENV NEXTAUTH_SECRET="build-only-not-a-runtime-secret-000000000000"
 # The MySQL variant is what this stack deploys, so generate that client.
 RUN npx prisma generate --schema prisma/schema.mysql.prisma && npm run build
+
+# Build a separate runtime-only dependency tree. The app and realtime server use
+# modules outside Next's trace (Prisma CLI/adapters, socket.io, sharp), so the
+# complete `npm ci --omit=dev` tree is safer than a hand-maintained package list
+# and cannot silently omit a transitive runtime module.
+FROM node:22-bookworm AS prod-deps
+WORKDIR /app
+COPY package.json package-lock.json ./
+COPY prisma ./prisma
+RUN npm ci --omit=dev --no-audit --no-fund \
+  && npx prisma generate --schema prisma/schema.mysql.prisma
 
 FROM node:22-bookworm-slim AS runner
 WORKDIR /app
@@ -71,7 +82,7 @@ COPY --from=builder /app/src/lib/session-registry.cjs ./src/lib/session-registry
 
 # --- Prisma CLI, schema and migrations (for `prisma migrate deploy`) ------------
 COPY --from=builder /app/prisma ./prisma
-COPY --from=builder /app/node_modules ./node_modules
+COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=builder /app/package.json ./package.json
 
 RUN mkdir -p /data/upload /app/db /app/logs && chown -R fc:fc /app /data

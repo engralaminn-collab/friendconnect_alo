@@ -253,10 +253,15 @@ if docker run --rm --entrypoint sh "$IMAGE" -c 'test ! -f /app/.env && test ! -f
 else
   fail "image contains an .env file (secret leak risk)"
 fi
-if docker run --rm --entrypoint sh "$IMAGE" -c 'test ! -d /app/src/app'; then
-  pass "image ships the standalone output, not the source tree"
+# Next 16's own standalone trace includes selected `src/app` files, so asserting
+# that `/app/src/app` is absent is wrong: it rejects the framework's canonical
+# output and says nothing about leaked development material. Assert on the actual
+# dev-only surfaces instead.
+if docker run --rm --entrypoint sh "$IMAGE" -c \
+  'test ! -d /app/tests && test ! -d /app/.git && test ! -d /app/docs && test ! -f /app/playwright.config.ts'; then
+  pass "image excludes tests, docs, Playwright config and VCS metadata"
 else
-  fail "image ships app source it does not need"
+  fail "image contains development-only repository material"
 fi
 
 echo

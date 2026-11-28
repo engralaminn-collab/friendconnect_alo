@@ -84,14 +84,34 @@ function check(name, condition, detail) {
   }
 }
 
-// --- 3. the generated migration is reproducible ----------------------------
+// --- 3. the generated migration uses portable MySQL 8 syntax ----------------
 {
   const onDisk = readFileSync(join(ROOT, 'prisma/migrations', REPAIR, 'migration.sql'), 'utf8')
-  check('the repair migration is idempotent by construction', onDisk.includes('information_schema.COLUMNS'))
   check('the repair migration is generated, not hand-written', onDisk.includes('do not hand-edit'))
-  // Every added column is wrapped in the guard; a bare ALTER would not be re-runnable.
-  const bareAlters = onDisk.split('\n').filter((line) => /^ALTER TABLE .* ADD COLUMN/.test(line.trim()))
-  check('no bare ALTER statements outside the guard', bareAlters.length === 0, bareAlters.join('\n'))
+
+  // MySQL 8 has no `ADD COLUMN IF NOT EXISTS` (MariaDB only).
+  check(
+    'no MariaDB-only IF NOT EXISTS syntax',
+    !/ADD COLUMN IF NOT EXISTS/i.test(onDisk),
+    'ADD COLUMN IF NOT EXISTS is rejected by MySQL 8',
+  )
+  // `DELIMITER` is a mysql-CLI directive, not SQL: Prisma sends the file as a
+  // statement list and fails with a syntax error. This actually happened in CI.
+  check(
+    'no client-only DELIMITER directive',
+    !/^\s*DELIMITER\b/im.test(onDisk),
+    'DELIMITER is a client directive and breaks `prisma migrate deploy`',
+  )
+  check('no stored procedure is required', !/CREATE PROCEDURE/i.test(onDisk))
+
+  // It must still do the job.
+  const alters = onDisk.split('\n').filter((line) => /^ALTER TABLE `\w+` ADD COLUMN `\w+`/.test(line.trim()))
+  check('every repair is a plain ALTER TABLE ... ADD COLUMN', alters.length > 0, `found ${alters.length}`)
+  check(
+    'NOT NULL columns carry a default so they can be added to a populated table',
+    alters.every((line) => !/NOT NULL/.test(line) || /DEFAULT/.test(line)),
+    alters.filter((l) => /NOT NULL/.test(l) && !/DEFAULT/.test(l)).join('\n'),
+  )
 }
 
 if (failures) {

@@ -84,12 +84,56 @@ COPY --from=builder /app/node_modules/node-turn ./node_modules/node-turn
   }
 }
 
-// --- 3. the fix is what makes it pass ---------------------------------------
+
+// --- 3. a broad COPY in the builder must not mask a broken runner ------------
+{
+  const tmp = mkdtempSync(join(tmpdir(), 'fc-docker-stages-'))
+  try {
+    for (const p of ['scripts', 'src/lib', 'socket-server.js', 'package.json', 'Dockerfile', 'deploy']) {
+      cpSync(join(ROOT, p), join(tmp, p), { recursive: true })
+    }
+    mkdirSync(join(tmp, 'deploy'), { recursive: true })
+
+    // This is the parser defect that briefly made the new dependency check a
+    // no-op: the checker saw this builder-stage COPY and incorrectly credited it
+    // to the runner, even though Docker stages are isolated.
+    const stagedButMissingAtRuntime = `FROM node:22 AS deps
+WORKDIR /app
+FROM node:22 AS builder
+COPY --from=deps /app/node_modules ./node_modules
+FROM node:22-slim AS runner
+WORKDIR /app
+COPY --from=builder /app/socket-server.js ./socket-server.js
+COPY --from=builder /app/scripts/turn-server.js ./scripts/turn-server.js
+COPY --from=builder /app/scripts/load-env.cjs ./scripts/load-env.cjs
+COPY --from=builder /app/src/lib/db-runtime.js ./src/lib/db-runtime.js
+COPY --from=builder /app/src/lib/schema-metadata.cjs ./src/lib/schema-metadata.cjs
+COPY --from=builder /app/src/lib/sqlite-ddl.cjs ./src/lib/sqlite-ddl.cjs
+COPY --from=builder /app/src/lib/db-migrations.cjs ./src/lib/db-migrations.cjs
+COPY --from=builder /app/src/lib/socket-security.cjs ./src/lib/socket-security.cjs
+COPY --from=builder /app/src/lib/file-access.cjs ./src/lib/file-access.cjs
+`
+    writeFileSync(join(tmp, 'Dockerfile'), stagedButMissingAtRuntime)
+    writeFileSync(join(tmp, 'deploy/Dockerfile.app'), stagedButMissingAtRuntime)
+
+    const r = run(tmp)
+    check('builder-only node_modules COPY does not satisfy the runner', r.code === 1, r.out.trim())
+    check('rejection names a missing runtime package', /socket.io|better-sqlite3|ioredis/.test(r.out), r.out.trim())
+  } finally {
+    rmSync(tmp, { recursive: true, force: true })
+  }
+}
+
+// --- 4. the fix is what makes it pass ---------------------------------------
 {
   const dockerfile = readFileSync(join(ROOT, 'Dockerfile'), 'utf8')
   check(
     'Dockerfile no longer copies the undeclared node-turn module',
     !/COPY[^\n]*node_modules\/node-turn/.test(dockerfile),
+  )
+  check(
+    'Dockerfile copies the complete production dependency tree into the runner',
+    /COPY --from=prod-deps \/app\/node_modules \.\/node_modules/.test(dockerfile),
   )
   for (const mod of [
     'socket-security.cjs',

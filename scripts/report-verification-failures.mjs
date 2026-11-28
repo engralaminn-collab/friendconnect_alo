@@ -76,7 +76,9 @@ for (const failure of failures.slice(0, 20)) {
 // by design and the lines before it usually hold the cause.
 const firstFailureIndex = lines.findIndex((l) => /^FAIL:/.test(l))
 if (firstFailureIndex > 0) {
-  const context = lines.slice(Math.max(0, firstFailureIndex - 12), firstFailureIndex + 3).join('\n')
+  // Include output *after* the FAIL line as well: container logs are printed
+  // there, and that is where MODULE_NOT_FOUND / SQL syntax errors live.
+  const context = lines.slice(Math.max(0, firstFailureIndex - 12), firstFailureIndex + 45).join('\n')
   annotate('notice', `${label}: context around the first failure:\n${context}`, logPath)
 }
 
