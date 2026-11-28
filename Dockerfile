@@ -16,6 +16,18 @@ COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV DATABASE_URL="file:./db/custom.db"
+# `src/lib/auth.ts` throws at module scope when NODE_ENV=production and no secret
+# is set, and Next collects page data during the build, which imports that module
+# through `src/lib/session.ts`. Without this the build dies with
+# "NEXTAUTH_SECRET is required in production" — a real failure found by running
+# the build, not by reading the Dockerfile.
+#
+# This value exists only in this build stage. It is NOT copied to the runner
+# stage, it is not baked into the client bundle (it is a server-only variable), and
+# the runtime refuses to start if the operator does not supply a real one. It is
+# intentionally a fixed string so the layer stays reproducible; it is unusable as
+# a real secret because it never reaches a running container.
+ENV NEXTAUTH_SECRET="build-only-not-a-runtime-secret-000000000000"
 RUN npm ci
 RUN npm run build
 

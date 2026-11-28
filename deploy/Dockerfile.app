@@ -22,6 +22,10 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # `next build` must not need a reachable database: the client is lazily created
 # (src/lib/db-backend.ts). A throwaway SQLite URL satisfies Prisma's URL parsing.
 ENV DATABASE_URL="file:./build-only.db"
+# `src/lib/auth.ts` throws at module scope in production when no secret is set, and
+# Next collects page data during the build. Same reasoning as the root Dockerfile:
+# this value lives only in this stage and is never copied to the runner.
+ENV NEXTAUTH_SECRET="build-only-not-a-runtime-secret-000000000000"
 # The MySQL variant is what this stack deploys, so generate that client.
 RUN npx prisma generate --schema prisma/schema.mysql.prisma && npm run build
 

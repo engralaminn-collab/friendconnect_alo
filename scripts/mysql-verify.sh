@@ -118,7 +118,20 @@ for table in User Session Profile Message Conversation Group Story File Call \
 done
 
 echo
-echo "=== 6. Real CRUD through the generated client ==="
+echo "=== 6. User table shape (provider parity) ==="
+# The SQLite canonical schema and the MySQL migration history must agree about the
+# user table. If they disagree, an application built for one cannot talk to the
+# other, and no CRUD test lower down can succeed.
+USER_COLS="$(docker exec "$CONTAINER" mysql -N -B -u"$USER_NAME" -p"$USER_PASS" -e 'SHOW COLUMNS FROM User' "$DB" 2>/dev/null | awk '{print $1}')"
+if printf '%s\n' "$USER_COLS" | grep -qx "passwordHash"; then
+  pass "User.passwordHash exists (matches prisma/schema.prisma)"
+else
+  fail "User table has no passwordHash column; the MySQL migration and the canonical schema disagree"
+  echo "  columns: $(printf '%s' "$USER_COLS" | tr '\n' ' ')"
+fi
+
+echo
+echo "=== 7. Real CRUD through the generated client ==="
 # This is the part a "migration step" in CI does not prove: that the generated
 # client can actually read and write against this provider.
 cat > /tmp/mysql-verify-crud.cjs <<'CRUD'
@@ -133,7 +146,7 @@ async function main() {
       username: `verify_${suffix}`,
       email: `verify_${suffix}@verify.invalid`,
       name: 'Verify User',
-      password: 'not-a-real-hash',
+      passwordHash: 'not-a-real-hash',
     },
   })
   const peer = await prisma.user.create({
@@ -142,7 +155,7 @@ async function main() {
       username: `peer_${suffix}`,
       email: `peer_${suffix}@verify.invalid`,
       name: 'Verify Peer',
-      password: 'not-a-real-hash',
+      passwordHash: 'not-a-real-hash',
     },
   })
   await prisma.profile.create({ data: { userId: user.id, readReceipts: false } })
@@ -169,7 +182,7 @@ async function main() {
   let uniqueEnforced = false
   try {
     await prisma.user.create({
-      data: { username: user.username, email: `other_${suffix}@verify.invalid`, name: 'Dup', password: 'x' },
+      data: { username: user.username, email: `other_${suffix}@verify.invalid`, name: 'Dup', passwordHash: 'x' },
     })
   } catch {
     uniqueEnforced = true
@@ -213,7 +226,7 @@ else
 fi
 
 echo
-echo "=== 7. Rollback readiness ==="
+echo "=== 8. Rollback readiness ==="
 # A migration that cannot be rolled back leaves a deploy unrecoverable. `migrate
 # resolve --rolled-back` is the documented recovery path for a failed migration;
 # check the command accepts our history rather than guessing.
